@@ -160,6 +160,7 @@ function switchView(v) {
   else if (v === 'collect') renderCollect();
   else if (v === 'live') renderLive();
   else if (v === 'keep') renderKeep();
+  else if (v === 'probe') renderProbe();
   else if (v === 'video') { /* 由 openDetail 渲染 */ }
 }
 $('#siteName').onclick = openSiteDialog;
@@ -205,6 +206,65 @@ const PRESETS = [
 const ADULT_KEYWORDS = ['伦理片','福利','倫理片','福利片','日本伦理','日本福利','日本福利片','日本伦理片','擦边短剧','擦边','韩国伦理','里番动漫','门事件','萝莉少女','制服诱惑','国产传媒','cosplay','黑丝诱惑','无码','日本无码','有码','日本有码','SWAG','网红主播','色情片','同性片','福利视频','无码高清','有码高清','91视频','自拍偷拍','mini传媒'];
 const isAdultType = t => !!t && ADULT_KEYWORDS.some(k => t.includes(k));
 const normUrl = norm;
+/* 搜索相关性过滤：从完整调试台 app.js 原样移植（对应 CmsParser.isRelevant） */
+const normalizeTitle = s => s.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+function includesKeyword(title, kw) {
+  if (!title || !kw) return false;
+  const sd = kw[0] >= '0' && kw[0] <= '9', ed = kw[kw.length - 1] >= '0' && kw[kw.length - 1] <= '9';
+  let i = title.indexOf(kw);
+  while (i >= 0) {
+    const before = i > 0 ? title[i - 1] : ' ';
+    const after = i + kw.length < title.length ? title[i + kw.length] : ' ';
+    if ((!sd || !(before >= '0' && before <= '9')) && (!ed || !(after >= '0' && after <= '9'))) return true;
+    i = title.indexOf(kw, i + 1);
+  }
+  return false;
+}
+function cnNum(v) {
+  const digits = '零一二三四五六七八九';
+  const c = v.replace(/两/g, '二');
+  if (c.length === 1 && digits.indexOf(c) > 0) return digits.indexOf(c);
+  const m = /^([一二三四五六七八九]?)十([一二三四五六七八九]?)$/.exec(c);
+  if (m) return (m[1] ? digits.indexOf(m[1]) : 1) * 10 + (m[2] ? digits.indexOf(m[2]) : 0);
+  return null;
+}
+function parseSeasonSuffix(text, allowAnnotations, bareNeedsSpace) {
+  const t = text.trim();
+  const explicit = new RegExp(allowAnnotations
+    ? '^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季.*$'
+    : '^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季$').exec(t);
+  const bare = new RegExp(bareNeedsSpace ? '^(.*?)\\s+([1-9]\\d?)$' : '^(.*?)\\s*([1-9]\\d?)$').exec(t);
+  const m = explicit ? [t, explicit[1], explicit[2]] : bare ? [t, bare[1], bare[2]] : null;
+  if (!m) return null;
+  if (!normalizeTitle(m[1])) return null;
+  const season = /^\d+$/.test(m[2]) ? parseInt(m[2], 10) : cnNum(m[2]);
+  if (season == null) return null;
+  return { base: m[1], season, explicit: !!explicit };
+}
+function prepareQuery(wd) {
+  const n = normalizeTitle(wd);
+  if (!n) return null;
+  return { n, season: parseSeasonSuffix(wd, false, false), tokens: wd.trim().split(/\s+/).map(normalizeTitle).filter(Boolean) };
+}
+function matchesPrepared(nn, q) {
+  if (includesKeyword(nn, q.n)) return true;
+  return q.tokens.length > 1 && q.tokens.every(t => includesKeyword(nn, t));
+}
+function isRelevant(name, wd) {
+  const q = prepareQuery(wd);
+  if (!q) return true;
+  const nn = normalizeTitle(name);
+  if (!nn) return false;
+  const ts = parseSeasonSuffix(name, true, true);
+  if (q.season && ts) {
+    if (q.season.season !== ts.season) return false;
+    if (q.season.explicit || ts.explicit) {
+      const bq = prepareQuery(q.season.base);
+      if (bq) return matchesPrepared(normalizeTitle(ts.base), bq);
+    }
+  }
+  return matchesPrepared(nn, q);
+}
 const isCmsApi = u => /\/api\.php\/provide\/vod(?![^?#]*\/at\/xml)(?:[\/?#]|$)/i.test(String(u || '').trim());
 function jsonLoose(text) {
   let t = text.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -345,6 +405,7 @@ async function doImport(url) {
   }
 }
 function refreshAfterSourceChange() {
+  Probe.rows = null;
   $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
   if (App.view === 'vod') { Home.tab = null; Vod.tab = null; renderVod(); }
   else if (App.view === 'home') renderHome();
@@ -378,8 +439,10 @@ function renderHome() {
       <div class="func" data-focus data-nav="live"><b>直播</b><i>LiveActivity</i></div>
       <div class="func" data-focus data-nav="search"><b>搜索</b><i>SearchActivity</i></div>
       <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${LS('fongmi_keep', []).length} 部</i></div>
-      <div class="func" data-focus data-nav="sources"><b>源管理</b><i>源设置</i></div>
-      <div class="func" data-focus data-nav="server"><b>服务器模式</b><i>打开调试台</i></div>
+      <div class="func" data-focus data-nav="probe"><b>连接</b><i>源测速探活</i></div>
+      <div class="func" data-focus data-nav="sources"><b>源管理</b><i>导入订阅/源设置</i></div>
+      <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
+      <div class="func" data-focus data-nav="server" style="display:none"><b>服务器模式</b><i>打开调试台</i></div>
     </div>
     ${hist.length ? `<div class="rowhead">最近观看 <small>焦点按 ×(Enter) 删除</small></div><div class="grid" id="histGrid">${hist.map((h, i) => cardHtml(h, i, { del: true })).join('')}</div>` : ''}
     <div class="rowhead">更新推荐 <small>来自源「${esc(SRC.vod[Home.srcIdx]?.name || '无')}」无参请求，滚动到底自动加载</small></div>
@@ -503,7 +566,7 @@ function renderCollect() {
     (async () => {
       try {
         const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
-        const list = parseList(t, s).filter(v => v.name.toLowerCase().includes(Collect.kw.toLowerCase()));
+        const list = parseList(t, s).filter(v => isRelevant(v.name, Collect.kw));
         if (Collect.stop || !list.length || App.view !== 'collect') return;
         Collect.bySite[si] = list;
         const tab = document.createElement('button');
@@ -604,6 +667,45 @@ async function doChangeSource() {
   if (!found.length) return toast(`其它源未找到「${title}」`);
   $('#vrows').insertAdjacentHTML('afterbegin', `<div class="eprow"><span class="slabel">换源</span><div class="hrow" id="chRow" style="flex:1">${found.map((f, i) => `<button class="btn" data-focus data-c="${i}">${esc(f.source.name)} ${esc(f.remarks || '')}</button>`).join('')}</div></div>`);
   $('#chRow').onclick = e => { const b = e.target.closest('[data-c]'); if (b) openDetail(found[+b.dataset.c]); };
+}
+
+/* ================= 连接：点播源测速探活（原完整调试台 probeAll/probeTable 移植） ================= */
+const Probe = { rows: null, running: false, reqId: 0 };
+function renderProbe() {
+  body.innerHTML = `<div class="colhead">连接 · 点播源测速 <small class="muted" style="font-size:13px;font-weight:400">逐源请求 ac=list + 首分类列表</small></div>
+    <main style="flex:1;overflow-y:auto;padding:6px 28px"><div class="hrow" style="margin-bottom:8px"><button class="btn" data-focus id="probeGo">重新检测</button></div><div id="probeTable"></div></main>`;
+  $('#probeGo').onclick = () => probeAll();
+  drawProbeRows();
+  if (!Probe.rows) probeAll();
+}
+const probeCls = st => /^OK/.test(st) ? 'ok' : /失败|失效|为空/.test(st) ? 'err' : 'muted';
+function drawProbeRows() {
+  const el = $('#probeTable'); if (!el) return;
+  if (!Probe.rows) { el.innerHTML = SRC.vod.length ? '' : '<p class="muted">无点播源，请先在「源管理」导入</p>'; return; }
+  el.innerHTML = Probe.rows.map(p => `<div class="srcrow"><span class="n">${esc(p.name)}</span><span class="url">${esc(p.url)}</span><span class="${probeCls(p.state)}" style="flex:0 0 auto">${p.ms != null ? p.ms + 'ms' : '—'}</span><span class="${probeCls(p.state)}" style="flex:1 1 30%">${esc(p.state)}</span></div>`).join('') || '<p class="muted">无点播源</p>';
+}
+async function probeAll() {
+  const rid = ++Probe.reqId;
+  const sources = SRC.vod;
+  if (!sources.length) { Probe.rows = []; drawProbeRows(); return; }
+  Probe.running = true;
+  Probe.rows = sources.map(s => ({ name: s.name, url: s.url, state: '检测中…' }));
+  drawProbeRows();
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i];
+    if (rid !== Probe.reqId || App.view !== 'probe') break;
+    const t0 = performance.now();
+    try {
+      const types = parseTypes(await httpGet(listUrl(s.url, 'ac=list'), 12000));
+      let list = [];
+      if (types.length) list = parseList(await httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(types[0].id)}&pg=1`), 12000), s);
+      Probe.rows[i] = { name: s.name, url: s.url, ms: Math.round(performance.now() - t0), state: list.length ? `OK：${types.length} 分类 / 列表 ${list.length} 条` : (types.length ? '仅分类可用，列表为空' : 'ac=list 与列表均无数据 → 源可能已失效') };
+    } catch (e) {
+      Probe.rows[i] = { name: s.name, url: s.url, ms: Math.round(performance.now() - t0), state: '失败：' + (e.message || e) };
+    }
+    drawProbeRows();
+  }
+  Probe.running = false;
 }
 
 /* ================= 收藏页（KeepActivity） ================= */
