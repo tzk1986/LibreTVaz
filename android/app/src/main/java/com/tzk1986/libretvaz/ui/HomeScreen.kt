@@ -15,6 +15,7 @@ import com.tzk1986.libretvaz.data.SourceStore
 fun HomeScreen(
     sourceStore: SourceStore,
     onSearch: () -> Unit,
+    onLive: () -> Unit,
     onSources: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -42,6 +43,9 @@ fun HomeScreen(
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = onSearch, modifier = Modifier.width(280.dp)) {
                 Text("搜索观影")
+            }
+            Button(onClick = onLive, modifier = Modifier.width(280.dp)) {
+                Text("看电视")
             }
             OutlinedButton(onClick = onSources, modifier = Modifier.width(280.dp)) {
                 Text("源管理（点播 / 直播 / 订阅导入）")

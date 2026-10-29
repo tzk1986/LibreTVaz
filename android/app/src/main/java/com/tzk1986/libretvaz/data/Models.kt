@@ -40,6 +40,21 @@ data class VideoDetail(
     val episodes: List<String>,
 )
 
+data class LiveChannel(
+    val id: String,
+    val name: String,
+    val url: String,
+    val logo: String? = null,
+    val group: String? = null,
+    val tvgId: String? = null,
+)
+
+data class LivePlaylist(
+    val name: String?,
+    val channels: List<LiveChannel>,
+    val groups: List<String>,
+)
+
 data class SearchProgress(
     val done: Int,
     val total: Int,
