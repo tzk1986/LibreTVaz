@@ -47,6 +47,50 @@ function parseTypes(text) {
   const j = JSON.parse(text);
   return (j.class || []).filter(c => c && c.type_id != null).map(c => ({ id: String(c.type_id), name: c.type_name || '' }));
 }
+/* ac=videolist 的 class[].type_extend 携带 area/year/lang 可选值（影视仓二级筛选数据源） */
+const parseExtend = v => {
+  if (!v) return {};
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch { const o = {}; String(v).split(';').forEach(kv => { const i = kv.indexOf(','); if (i > 0) o[kv.slice(0, i)] = kv.slice(i + 1); }); return o; }
+};
+function parseFilterMeta(text) {
+  try {
+    for (const c of (JSON.parse(text).class || [])) {
+      const e = parseExtend(c.type_extend);
+      if (e.area || e.year || e.lang) return {
+        area: String(e.area || '').split(',').filter(Boolean),
+        year: String(e.year || '').split(',').filter(Boolean),
+        lang: String(e.lang || '').split(',').filter(Boolean),
+      };
+    }
+    return null;
+  } catch { return null; }
+}
+/* 拼音首字母：用 ICU 拼音排序与 22 个声母锚点字比较（Chrome/Edge 支持；不可用时联想退化为子串匹配） */
+const PIN_ANCHORS = [['A', '阿'], ['B', '八'], ['C', '嚓'], ['D', '多'], ['E', '讹'], ['F', '发'], ['G', '噶'], ['H', '哈'], ['J', '击'], ['K', '喀'], ['L', '垃'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '期'], ['R', '然'], ['S', '撒'], ['T', '塌'], ['X', '昔'], ['Y', '压'], ['Z', '匝']];
+let pinCollator = null;
+try { pinCollator = new Intl.Collator('zh-Hans-CN-u-co-pinyin'); } catch { /* 退化 */ }
+const _iniCache = {};
+function initialOf(ch) {
+  if (/[0-9a-z]/i.test(ch)) return ch.toLowerCase();
+  if (pinCollator && /[㐀-䶿一-鿿]/.test(ch)) {
+    if (_iniCache[ch]) return _iniCache[ch];
+    let res = '';
+    for (const [init, anchor] of PIN_ANCHORS) { if (pinCollator.compare(ch, anchor) >= 0) res = init; else break; }
+    _iniCache[ch] = res;
+    return res;
+  }
+  return '';
+}
+const initialsOf = s => Array.from(String(s)).map(initialOf).join('');
+/* 词库：浏览/搜索中见过的片名滚动持久化，供拼音首字母联想 */
+let VOCAB = LS('fongmi_words', []);
+const addWords = names => {
+  const set = new Set(VOCAB); let dirty = false;
+  for (const n of names) { if (n && !set.has(n)) { set.add(n); VOCAB.push(n); dirty = true; } }
+  if (VOCAB.length > 800) VOCAB = VOCAB.slice(-800);
+  if (dirty) { try { localStorage.setItem('fongmi_words', JSON.stringify(VOCAB)); } catch { /* 满 */ } }
+};
 function splitPlayUrl(url) {
   return String(url || '').split('#').map(seg => {
     const i = seg.indexOf('$'); if (i < 0) return null;
@@ -604,6 +648,7 @@ async function loadRec(pg = 1) {
   try { items = parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s); } catch (e) { err = e.message; }
   if (App.view !== 'home' || !$('#recGrid')) return;
   Home.loading = false; Home.page = pg;
+  addWords(items.map(it => it.name));
   Home.items = pg === 1 ? items : Home.items.concat(items);
   Home.more = items.length > 0;
   grid.innerHTML = (err && pg === 1 ? `<p class="err">${esc(err)}</p>` : '') + Home.items.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
@@ -611,9 +656,10 @@ async function loadRec(pg = 1) {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0 };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, area: '', year: '', lang: '' };
 function renderVod() {
   body.innerHTML = `<div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
+    <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
     <main id="scroller"><div class="grid" id="vodGrid"></div></main>`;
   $('#scroller').addEventListener('scroll', onScroll);
   loadTypes();
@@ -631,6 +677,8 @@ async function loadTypes() {
   $('#typeRow').onclick = e => {
     const b = e.target.closest('[data-tid]'); if (!b) return;
     Vod.tab = b.dataset.tid === '' ? null : Vod.types.find(t => t.id === b.dataset.tid);
+    Vod.filters = null; Vod.area = ''; Vod.year = ''; Vod.lang = '';
+    const sr = $('#subRow'); if (sr) sr.innerHTML = '';
     document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
     loadVod(1);
   };
@@ -642,23 +690,75 @@ async function loadVod(pg = 1) {
   const grid = $('#vodGrid'); if (!grid) return;
   Vod.loading = true;
   if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
-  const q = Vod.tab ? `ac=videolist&t=${encodeURIComponent(Vod.tab.id)}&pg=${pg}` : `ac=videolist&pg=${pg}`;
-  let items = [], err = null;
-  try { items = parseList(await httpGet(listUrl(s.url, q)), s); } catch (e) { err = e.message; }
+  const t = Vod.tab;
+  let q = t ? `ac=videolist&t=${encodeURIComponent(t.id)}` : 'ac=videolist';
+  if (t && Vod.area) q += `&area=${encodeURIComponent(Vod.area)}`;
+  if (t && Vod.year) q += `&year=${encodeURIComponent(Vod.year)}`;
+  if (t && Vod.lang) q += `&lang=${encodeURIComponent(Vod.lang)}`;
+  q += `&pg=${pg}`;
+  let items = [], err = null, raw = '';
+  try { raw = await httpGet(listUrl(s.url, q)); items = parseList(raw, s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
   Vod.loading = false; Vod.page = pg;
+  if (pg === 1 && t) { Vod.filters = parseFilterMeta(raw); drawSubRow(); }
+  addWords(items.map(it => it.name));
   Vod.items = pg === 1 ? items : Vod.items.concat(items);
   Vod.more = items.length > 0;
-  grid.innerHTML = (err && pg === 1 ? `<p class="err">${esc(err)}</p>` : '') + Vod.items.map((it, i) => cardHtml(it, i)).join('');
-  bindGrid(grid, Vod.items, it => openDetail(it));
+  drawVodGrid();
+}
+function drawVodGrid() {
+  const grid = $('#vodGrid'); if (!grid) return;
+  const t = Vod.tab;
+  let shown = Vod.items, html = '';
+  const yr = String(new Date().getFullYear());
+  const canPin = !!t && !Vod.area && !Vod.year && !Vod.lang;
+  if (canPin) {
+    const fresh = Vod.items.filter(it => it.year === yr);
+    const rest = Vod.items.filter(it => it.year !== yr);
+    if (fresh.length) {
+      shown = [...fresh, ...rest];
+      html = `<div class="secthead">🆕 ${yr} 最新 · 直接看</div>${fresh.map((it, i) => cardHtml(it, i)).join('')}<div class="secthead">全部 · 按更新排序</div>${rest.map((it, i) => cardHtml(it, i + fresh.length)).join('')}`;
+    }
+  }
+  if (!html) html = shown.map((it, i) => cardHtml(it, i)).join('');
+  grid.innerHTML = html || (Vod.items.length ? '' : '<p class="muted">该分类暂无数据</p>');
+  bindGrid(grid, shown, it => openDetail(it));
+}
+function drawSubRow() {
+  const el = $('#subRow'); if (!el) return;
+  const f = Vod.filters;
+  if (!Vod.tab || !f) { el.innerHTML = ''; return; }
+  const yr = String(new Date().getFullYear());
+  const groups = [];
+  if (f.area.length) groups.push(['area', '地区', f.area]);
+  if (f.year.length) groups.push(['year', '年份', [...new Set([yr, ...f.year])]]);
+  if (f.lang.length) groups.push(['lang', '语言', f.lang]);
+  el.innerHTML = groups.map(([k, label, vals]) =>
+    `<span class="muted" style="font-size:12px;white-space:nowrap">${label}</span>` +
+    `<button class="chip${!Vod[k] ? ' on' : ''}" data-focus data-f="${k}" data-v="">全部</button>` +
+    vals.slice(0, 24).map(v => `<button class="chip${Vod[k] === v ? ' on' : ''}" data-focus data-f="${k}" data-v="${esc(v)}">${v === yr ? `本年(${yr})` : esc(v)}</button>`).join('')
+  ).join('<span style="width:12px"></span>');
+  el.onclick = e => {
+    const b = e.target.closest('[data-f]'); if (!b) return;
+    Vod[b.dataset.f] = b.dataset.v;
+    drawSubRow();
+    loadVod(1);
+  };
 }
 
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入关键词，回车搜索（真实版此处是 7 列虚拟键盘）" data-focus></div>
+  const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入或点选下方键盘字母，回车搜索" data-focus></div>
+    <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
+      ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
+      <button class="btn" data-focus data-kb="⌫">退格</button>
+      <button class="btn" data-focus data-kb="C">清空</button>
+    </div>
+    <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
     <main id="scroller">
       ${LS('fongmi_kw', []).length ? `<div class="rowhead">搜索历史</div><div class="hrow">${LS('fongmi_kw', []).map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}
-      <div class="rowhead">说明</div><p class="muted">FongMi 在此页左侧是麦克风+输入框+虚拟键盘，右侧为历史/热门/联想词；提交后进入「结果页」，一个源一个 Tab，源陆续返回、Tab 陆续追加。</p>
+      <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方会实时联想浏览过的片名，遥控选中即填入。词库来自你浏览/搜索积累的资源名${pinCollator ? '' : '（当前浏览器不支持拼音排序，联想退化为子串匹配）'}。</p>
     </main>`;
   const run = () => {
     const kw = $('#kw').value.trim(); if (!kw) return;
@@ -667,8 +767,35 @@ function renderSearch() {
     Collect.kw = kw; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
     switchView('collect'); renderCollect();
   };
+  const drawSug = () => {
+    const q = $('#kw').value.trim().toLowerCase();
+    const row = $('#sugRow'); if (!row) return;
+    if (!q) { row.innerHTML = ''; return; }
+    let hits = [];
+    if (/^[a-z]+$/.test(q) && pinCollator) {
+      hits = VOCAB.filter(w => initialsOf(w).toLowerCase().startsWith(q));
+    }
+    if (!hits.length) hits = VOCAB.filter(w => w.toLowerCase().includes(q));
+    hits = [...new Set(hits)].slice(0, 14);
+    row.innerHTML = hits.length
+      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join('')
+      : (VOCAB.length ? '<span class="muted" style="font-size:12px">没有匹配的已收录片名</span>' : '<span class="muted" style="font-size:12px">词库为空：先去首页/分类浏览一些资源再回来联想</span>');
+  };
   $('#kw').onkeydown = e => { if (e.key === 'Enter') run(); };
-  body.onclick = e => { const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); } };
+  $('#kw').oninput = drawSug;
+  body.onclick = e => {
+    const kb = e.target.closest('[data-kb]');
+    if (kb) {
+      const inp = $('#kw'); const v = inp.value;
+      if (kb.dataset.kb === '⌫') inp.value = v.slice(0, -1);
+      else if (kb.dataset.kb === 'C') inp.value = '';
+      else inp.value = v + kb.dataset.kb;
+      drawSug(); return;
+    }
+    const w = e.target.closest('[data-w]');
+    if (w) { $('#kw').value = w.dataset.w; drawSug(); return; }
+    const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); }
+  };
   setTimeout(() => $('#kw').focus(), 50);
 }
 
@@ -692,6 +819,7 @@ function renderCollect() {
         const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
         const list = parseList(t, s).filter(v => isRelevant(v.name, Collect.kw));
         if (Collect.stop || !list.length || App.view !== 'collect') return;
+        addWords(list.map(v => v.name));
         Collect.bySite[si] = list;
         const tab = document.createElement('button');
         tab.className = 'chip'; tab.dataset.focus = ''; tab.dataset.t = si; tab.textContent = `${s.name}(${list.length})`;

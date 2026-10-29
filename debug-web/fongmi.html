@@ -47,6 +47,10 @@
   .card .del { position: absolute; left: 2px; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,.7); color: #fff; display: none; align-items: center; justify-content: center; z-index: 2; }
   .card.focus .del { display: flex; }
 
+  /* 分类内分节标题（今年最新置顶 / 全部） */
+  .secthead { grid-column: 1 / -1; margin: 12px 0 2px; font-size: 15px; font-weight: 600; color: var(--accent); }
+  .kb { width: 40px; text-align: center; padding: 6px 0; }
+
   .hrow { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px; scrollbar-width: none; align-items: center; }
   .hrow::-webkit-scrollbar { display: none; }
   .chip { background: var(--bg2); border: 2px solid transparent; border-radius: 4px; padding: 7px 16px; cursor: pointer; white-space: nowrap; color: var(--dim); }
