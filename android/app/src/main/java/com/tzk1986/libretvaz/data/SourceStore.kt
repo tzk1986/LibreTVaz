@@ -38,18 +38,28 @@ class SourceStore(context: Context) {
     fun removeLiveAt(index: Int) = mutateLive { list -> list.removeAt(index); true }
 
     /** 拉取订阅链接并合并入库；返回导入结果。失败抛异常由调用方展示 */
-    data class ImportResult(val vodAdded: Int, val liveAdded: Int, val skipped: Int, val format: String, val name: String?)
+    data class ImportResult(
+        val vodAdded: Int,
+        val liveAdded: Int,
+        val skipped: Int,
+        val format: String,
+        val name: String?,
+        val repos: Int = 0,
+        val reposFailed: Int = 0,
+    )
 
     suspend fun importFromUrl(url: String): ImportResult {
         val trimmed = url.trim().removeSuffix("/")
         require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) { "请输入 http(s) 配置链接" }
         val text = withContext(Dispatchers.IO) { Http.get(trimmed, timeoutMs = 15000) }
-        val parsed = SubscriptionParser.parse(text)
+        val parsed = SubscriptionParser.parseExpanded(text) { repoUrl ->
+            withContext(Dispatchers.IO) { Http.get(repoUrl, timeoutMs = 15000) }
+        }
         var vodAdded = 0
         var liveAdded = 0
         mutateVod { list -> vodAdded = mergeVod(list, parsed.vod); true }
         mutateLive { list -> liveAdded = mergeLive(list, parsed.live); true }
-        return ImportResult(vodAdded, liveAdded, parsed.skipped, parsed.format, parsed.name)
+        return ImportResult(vodAdded, liveAdded, parsed.skipped, parsed.format, parsed.name, parsed.repos, parsed.reposFailed)
     }
 
     private fun mergeVod(target: MutableList<VodSource>, incoming: List<VodSource>): Int {

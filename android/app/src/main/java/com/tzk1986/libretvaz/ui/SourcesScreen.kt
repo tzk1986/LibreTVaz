@@ -58,6 +58,7 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
                             val r = store.importFromUrl(importUrl)
                             refresh()
                             "已导入（${r.format}）：点播 +${r.vodAdded} · 直播 +${r.liveAdded}" +
+                                (if (r.repos > 0) " · 仓库 ${r.repos - r.reposFailed}/${r.repos}" else "") +
                                 if (r.skipped > 0) "，跳过 ${r.skipped} 个不支持条目（Spider/XML 等）" else ""
                         }.getOrElse { e -> "导入失败：${e.message}" }
                         busy = false

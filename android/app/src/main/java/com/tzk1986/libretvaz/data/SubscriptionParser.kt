@@ -1,5 +1,8 @@
 package com.tzk1986.libretvaz.data
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -15,11 +18,15 @@ data class ParsedSubscription(
     val live: List<LiveSource>,
     val skipped: Int,
     val format: String,
+    /** 多仓展开时的仓库总数与失败数；非多仓为 0 */
+    val repos: Int = 0,
+    val reposFailed: Int = 0,
 )
 
 object SubscriptionParser {
     private const val MAX_VOD = 100
     private const val MAX_LIVE = 50
+    private const val MAX_REPOS = 20
     private val SPIDER_PATTERN = Pattern.compile("^csp_|\\.(?:jar|js|py)(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)
     private val CMS_API_PATTERN =
         Pattern.compile("/api\\.php/provide/vod(?![^?#]*/at/xml)(?:[/?#]|$)", Pattern.CASE_INSENSITIVE)
@@ -27,21 +34,75 @@ object SubscriptionParser {
     private val TXT_PATTERN = Pattern.compile("\\.txt(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)
     private val HTTP_PREFIX = Pattern.compile("^https?://", Pattern.CASE_INSENSITIVE)
 
-    fun parse(text: String): ParsedSubscription {
+    fun parse(text: String): ParsedSubscription = parseRoot(rootOf(text))
+
+    private fun rootOf(text: String): Any {
         val cleaned = sanitizeJson(text.removePrefix("﻿"))
-        val root = try {
+        return try {
             JSONTokener(cleaned).nextValue()
         } catch (e: Exception) {
             throw IllegalArgumentException("订阅内容不是合法的 JSON")
         }
-        return when {
-            root is JSONObject && (root.optJSONArray("sites") != null || root.optJSONArray("lives") != null) ->
-                parseTvbox(root)
-            root is JSONArray && root.length() > 0 && allCatalogEntries(root) -> parseCatalog(root)
-            root is JSONArray && root.length() > 0 && someCatalogEntries(root) ->
-                throw IllegalArgumentException("混用了 baseUrl 与 url 两种条目，请统一格式")
-            else -> parseSourceList(root)
+    }
+
+    private fun parseRoot(root: Any): ParsedSubscription = when {
+        root is JSONObject && (root.optJSONArray("sites") != null || root.optJSONArray("lives") != null) ->
+            parseTvbox(root)
+        root is JSONArray && root.length() > 0 && allCatalogEntries(root) -> parseCatalog(root)
+        root is JSONArray && root.length() > 0 && someCatalogEntries(root) ->
+            throw IllegalArgumentException("混用了 baseUrl 与 url 两种条目，请统一格式")
+        else -> parseSourceList(root)
+    }
+
+    /** 多仓配置：顶层含 urls 数组且无 sites（影视仓/TVBox 多仓首页） */
+    private fun isMultiRepo(root: Any): Boolean =
+        root is JSONObject && root.optJSONArray("sites") == null && root.optJSONArray("urls") != null
+
+    /**
+     * 多仓展开导入：并行拉取各仓库配置（上限 MAX_REPOS）并逐个解析合并。
+     * 单仓失败不影响其余仓库；全部失败时抛异常。fetcher 由调用方提供（网络实现留在 Store 层）。
+     */
+    suspend fun parseExpanded(
+        text: String,
+        fetcher: suspend (url: String) -> String,
+    ): ParsedSubscription {
+        val root = rootOf(text)
+        if (!isMultiRepo(root)) return parseRoot(root)
+        val arr = (root as JSONObject).optJSONArray("urls")!!
+        val entries = (0 until arr.length())
+            .mapNotNull { arr.optJSONObject(it) }
+            .filter { it.opt("enabled") != false }
+            .take(MAX_REPOS)
+        val results = coroutineScope {
+            entries.map { entry ->
+                async {
+                    runCatching {
+                        val url = normalizeUrl(entry.opt("url"), false)
+                            ?: error("仓库地址无效")
+                        parse(fetcher(url))
+                    }
+                }
+            }.awaitAll()
         }
+        val vod = ArrayList<VodSource>()
+        val live = ArrayList<LiveSource>()
+        var skipped = 0
+        var failed = 0
+        for (r in results) {
+            val parsed = r.getOrNull()
+            if (parsed == null) { failed++; continue }
+            for (s in parsed.vod) if (vod.size < MAX_VOD && vod.none { it.url == s.url }) vod.add(s)
+            for (s in parsed.live) if (live.size < MAX_LIVE && live.none { it.url == s.url }) live.add(s)
+            skipped += parsed.skipped
+        }
+        if (vod.isEmpty() && live.isEmpty()) {
+            throw IllegalArgumentException("多仓展开失败：${failed}/${entries.size} 个仓库均不可用或无可导入源")
+        }
+        return ParsedSubscription(
+            name = optionalString(root.opt("name")),
+            vod = vod, live = live, skipped = skipped,
+            format = "multi-repo", repos = entries.size, reposFailed = failed,
+        )
     }
 
     /** 剥离字符串外的行注释与块注释、删除尾随逗号、转义字符串内裸控制字符 */

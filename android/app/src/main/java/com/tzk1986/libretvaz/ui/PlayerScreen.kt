@@ -1,10 +1,16 @@
 package com.tzk1986.libretvaz.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -40,13 +46,20 @@ fun PlayerScreen(
         onDispose { player.release() }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                this.player = player
-                useController = true
-            }
-        },
-        modifier = modifier.fillMaxSize(),
-    )
+    Box(modifier = modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    this.player = player
+                    useController = true
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // PlayerView 自带控制器无返回键，触屏/遥控器无返回键的设备需要可见出口
+        Button(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
+        ) { Text("返回") }
+    }
 }
