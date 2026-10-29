@@ -67,6 +67,14 @@
   .siteitem { background: var(--card); border: 2px solid transparent; border-radius: 8px; padding: 14px; cursor: pointer; text-align: center; }
   .siteitem.on { border-color: var(--accent); }
 
+  /* 源管理弹窗 */
+  .srcmgr { padding: 56px 48px; max-height: 100vh; overflow: auto; }
+  .srcmgr h3 { margin: 14px 0 8px; }
+  .srcrow { display: flex; align-items: center; gap: 10px; background: var(--card); border: 2px solid transparent; border-radius: 6px; padding: 8px 14px; margin-bottom: 6px; }
+  .srcrow .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srcrow .url { color: var(--dim); font-size: 11px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srcrow .rm { color: #f28b82; cursor: pointer; padding: 2px 10px; border: 2px solid transparent; border-radius: 4px; }
+
   /* 直播：全屏播放器 + 叠加层 + 右侧三列面板 */
   .livewrap { position: relative; flex: 1; min-height: 0; margin: 0 28px 12px; background: #000; border-radius: 8px; overflow: hidden; }
   .livewrap video { width: 100%; height: 100%; outline: none; }
@@ -113,6 +121,7 @@
   <div class="hint">遥控器模拟：方向键移动焦点 · Enter 确认 · Esc 返回 · 数字键换台(直播) · 也可直接鼠标点击</div>
 </div>
 <div class="modal" id="siteModal"><div class="sitegrid" id="siteGrid"></div></div>
+<div class="modal" id="srcModal"><div class="srcmgr" id="srcMgr"></div></div>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="fongmi.js"></script>

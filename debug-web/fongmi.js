@@ -60,8 +60,9 @@ const Focus = {
     if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   },
   items() {
-    const scope = $('#siteModal').classList.contains('open') ? '#siteModal' : '#app';
-    return [...document.querySelectorAll(`${scope} [data-focus], #modalPlayer [data-focus]`)].filter(e => e.offsetParent !== null);
+    const scope = $('#siteModal').classList.contains('open') ? '#siteModal'
+      : $('#srcModal').classList.contains('open') ? '#srcModal' : '#app';
+    return [...document.querySelectorAll(`${scope} [data-focus]`)].filter(e => e.offsetParent !== null);
   },
   move(dir) {
     const items = this.items(); if (!items.length) return;
@@ -106,6 +107,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('click', e => { const t = e.target.closest('[data-focus]'); if (t) Focus.set(t); });
 function onEsc() {
+  if ($('#srcModal').classList.contains('open')) return closeSrcMgr();
   if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
   if (App.view === 'live' && Live.panelOpen) return togglePanel(false);
   if (App.view === 'video') return switchView(App.videoBack || 'vod');
@@ -163,6 +165,61 @@ function openSiteDialog() {
 }
 function closeSiteDialog() { $('#siteModal').classList.remove('open'); }
 
+/* ================= 源管理（对应功能行「源管理」按钮，Android 端即 SourcesScreen） ================= */
+const BUILTIN_SOURCES = [
+  { name: '非凡资源', url: 'https://cj.ffzyapi.com/api.php/provide/vod' },
+  { name: '量子资源', url: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { name: '360采集', url: 'https://360zy.com/api.php/provide/vod' },
+  { name: '索尼采集', url: 'https://suoniapi.com/api.php/provide/vod' },
+  { name: '天天采集', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod' },
+  { name: '茅台采集', url: 'https://mtzy.me/api.php/provide/vod' },
+  { name: '火狐采集', url: 'https://hhzyapi.com/api.php/provide/vod' },
+  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod?ac=list' },
+  { name: '速播采集', url: 'https://subocaiji.com/api.php/provide/vod' },
+];
+const saveSrc = () => localStorage.setItem('libretvaz_sources', JSON.stringify(SRC));
+function openSrcMgr() {
+  $('#srcModal').classList.add('open');
+  drawSrcMgr();
+  Focus.set($('#srcMgr').querySelector('[data-focus]'));
+}
+function closeSrcMgr() { $('#srcModal').classList.remove('open'); }
+function drawSrcMgr() {
+  $('#srcMgr').innerHTML = `
+    <div class="hrow" style="margin-bottom:10px">
+      <button class="btn" data-focus id="smAdd">＋ 添加内置已测源</button>
+      <button class="btn" data-focus id="smClear">清除所有点播源</button>
+      <button class="btn" data-focus id="smSub">导入订阅 → 完整调试台</button>
+      <button class="btn" data-focus id="smClose">关闭(Esc)</button>
+    </div>
+    <h3>点播源（${SRC.vod.length}）</h3>
+    ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span><span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
+    <h3>直播源（${SRC.live.length}）</h3>
+    ${SRC.live.map((l, i) => `<div class="srcrow"><span class="n">${esc(l.name)}</span><span class="url">${esc(l.url)}</span><button class="rm" data-focus data-rml="${i}">删除</button></div>`).join('') || '<p class="muted">无直播源</p>'}`;
+  $('#smAdd').onclick = () => {
+    const has = new Set(SRC.vod.map(v => norm(v.url)));
+    const add = BUILTIN_SOURCES.filter(s => !has.has(norm(s.url)));
+    if (!add.length) return toast('内置源已全部添加');
+    SRC.vod = [...SRC.vod, ...add].slice(0, 100);
+    saveSrc(); toast(`已添加 ${add.length} 个已测源`); drawSrcMgr(); refreshAfterSourceChange();
+  };
+  $('#smClear').onclick = () => {
+    if (!confirm('确认清除所有点播源？')) return;
+    SRC.vod = []; saveSrc(); Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange();
+  };
+  $('#smSub').onclick = () => window.open('/', '_blank');
+  $('#smClose').onclick = closeSrcMgr;
+  $('#srcMgr').onclick = e => {
+    const rv = e.target.closest('[data-rmv]'); if (rv) { SRC.vod.splice(+rv.dataset.rmv, 1); saveSrc(); if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange(); }
+    const rl = e.target.closest('[data-rml]'); if (rl) { SRC.live.splice(+rl.dataset.rml, 1); saveSrc(); if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0; drawSrcMgr(); }
+  };
+}
+function refreshAfterSourceChange() {
+  $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
+  if (App.view === 'vod') { Home.tab = null; Vod.tab = null; renderVod(); }
+  else if (App.view === 'home') renderHome();
+}
+
 /* ================= 卡片渲染（adapter_vod_rect 同款） ================= */
 function cardHtml(it, i, opts = {}) {
   return `<div class="card" data-focus data-i="${i}">
@@ -191,16 +248,18 @@ function renderHome() {
       <div class="func" data-focus data-nav="live"><b>直播</b><i>LiveActivity</i></div>
       <div class="func" data-focus data-nav="search"><b>搜索</b><i>SearchActivity</i></div>
       <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${LS('fongmi_keep', []).length} 部</i></div>
-      <div class="func" data-focus data-dim="连接"><b>连接</b><i>手机扫码(模拟无)</i></div>
-      <div class="func" data-focus data-dim="设置"><b>设置</b><i>SettingActivity(模拟无)</i></div>
+      <div class="func" data-focus data-nav="sources"><b>源管理</b><i>源设置</i></div>
+      <div class="func" data-focus data-nav="server"><b>服务器模式</b><i>打开调试台</i></div>
     </div>
     ${hist.length ? `<div class="rowhead">最近观看 <small>焦点按 ×(Enter) 删除</small></div><div class="grid" id="histGrid">${hist.map((h, i) => cardHtml(h, i, { del: true })).join('')}</div>` : ''}
     <div class="rowhead">更新推荐 <small>来自源「${esc(SRC.vod[Home.srcIdx]?.name || '无')}」无参请求，滚动到底自动加载</small></div>
     <div class="grid" id="recGrid"><p class="muted">加载中…</p></div></main>`;
   $('#funcs').onclick = e => {
     const f = e.target.closest('[data-focus]'); if (!f) return;
-    if (f.dataset.nav) switchView(f.dataset.nav);
-    else toast(`「${f.dataset.dim}」真实版在 FongMi 里是 ${f.dataset.dim === '连接' ? '手机网页遥控' : '配置偏好页'}，模拟版未含`);
+    const nav = f.dataset.nav;
+    if (nav === 'sources') return openSrcMgr();
+    if (nav === 'server') return void window.open('/', '_blank');
+    if (nav) switchView(nav);
   };
   const hg = $('#histGrid');
   if (hg) bindGrid(hg, hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
