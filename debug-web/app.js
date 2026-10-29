@@ -435,19 +435,20 @@ function viewDetail() {
 
 /* ---- 预置订阅（实测可达）---- */
 const PRESETS = [
-  { name: 'Qist 综合（点播+直播）', url: 'https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
+  { name: 'Qist 综合（点播+直播）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
   { name: 'Liucn 单仓', url: 'https://raw.liucn.cc/box/m.json' },
   { name: 'noimank 多仓', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
   { name: '多多快速仓库', url: 'https://jihulab.com/duomv/apps/-/raw/main/fast.json' },
 ];
-window.quickImport = url => { $('#impUrl').value = url; doImport(); };
+// 在源管理或首页空态都可点击：后台导入，成功后自动切回影视首页
+window.quickImport = url => { state._afterImport = true; runImport(url, $('#impMsg') || null); };
 
 /* ---- 源管理 ---- */
 window.addSourceUrl = null;
-window.doImport = async () => {
-  const url = $('#impUrl').value.trim();
+async function runImport(url, msg) {
+  url = (url || '').trim();
   if (!url) return;
-  const msg = $('#impMsg'); msg.textContent = '拉取中…';
+  if (msg) msg.textContent = '拉取中…';
   try {
     const text = await httpGet(url, 15000);
     const p = await parseExpanded(text, u => httpGet(u, 15000));
@@ -457,10 +458,15 @@ window.doImport = async () => {
     const nl = p.live.filter(l => !oldLive.has(normUrl(l.url)));
     SRC = { vod: [...SRC.vod, ...nv].slice(0, 100), live: [...SRC.live, ...nl].slice(0, 50) };
     store.save(SRC);
-    msg.innerHTML = `<span class="ok">已导入（${p.format}）：点播 +${nv.length} · 直播 +${nl.length}${p.repos ? ` · 仓库 ${p.repos - p.reposFailed}/${p.repos}` : ''}${p.skipped ? ` · 跳过 ${p.skipped}` : ''}</span>`;
+    if (msg) msg.innerHTML = `<span class="ok">已导入（${p.format}）：点播 +${nv.length} · 直播 +${nl.length}${p.repos ? ` · 仓库 ${p.repos - p.reposFailed}/${p.repos}` : ''}${p.skipped ? ` · 跳过 ${p.skipped}` : ''}</span>`;
+    if (state._afterImport) { state._afterImport = false; switchTab('browse'); return; }
     render();
-  } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message || String(e))}</span>`; }
-};
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="err">${esc(e.message || String(e))}</span>`;
+    else alert('导入失败：' + (e.message || e));
+  }
+}
+window.doImport = () => runImport($('#impUrl').value, $('#impMsg'));
 window.delVod = i => { SRC.vod.splice(i, 1); store.save(SRC); render(); };
 window.delLive = i => { SRC.live.splice(i, 1); store.save(SRC); render(); };
 window.clearInput = () => { const el = $('#impUrl'); if (el) el.value = ''; };
