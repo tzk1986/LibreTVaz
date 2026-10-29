@@ -12,7 +12,6 @@ import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.ui.BrowseScreen
 import com.tzk1986.libretvaz.ui.DetailScreen
-import com.tzk1986.libretvaz.ui.HomeScreen
 import com.tzk1986.libretvaz.ui.LiveScreen
 import com.tzk1986.libretvaz.ui.PlayerScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
@@ -21,7 +20,6 @@ import com.tzk1986.libretvaz.ui.SourcesScreen
 import com.tzk1986.libretvaz.ui.theme.LibreTVazTheme
 
 sealed class Screen {
-    data object Home : Screen()
     data object Live : Screen()
     data object Sources : Screen()
     data object Settings : Screen()
@@ -39,31 +37,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             LibreTVazTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var screen by remember { mutableStateOf<Screen>(Screen.Home) }
+                    var screen by remember { mutableStateOf<Screen>(Screen.Browse) }
                     when (val current = screen) {
-                        Screen.Home -> HomeScreen(
-                            sourceStore = sourceStore,
-                            onSearch = { screen = Screen.Search },
-                            onBrowse = { screen = Screen.Browse },
-                            onLive = { screen = Screen.Live },
-                            onSources = { screen = Screen.Sources },
-                            onSettings = { screen = Screen.Settings },
-                        )
                         Screen.Live -> LiveScreen(
                             store = sourceStore,
-                            onBack = { screen = Screen.Home },
+                            onBack = { screen = Screen.Browse },
                             onPlay = { url -> screen = Screen.Player(url, Screen.Live) },
                         )
-                        Screen.Sources -> SourcesScreen(store = sourceStore, onBack = { screen = Screen.Home })
-                        Screen.Settings -> SettingsScreen(store = settingsStore, onBack = { screen = Screen.Home })
+                        Screen.Sources -> SourcesScreen(store = sourceStore, onBack = { screen = Screen.Browse })
+                        Screen.Settings -> SettingsScreen(store = settingsStore, onBack = { screen = Screen.Browse })
                         Screen.Search -> SearchScreen(
                             store = sourceStore,
-                            onBack = { screen = Screen.Home },
+                            onBack = { screen = Screen.Browse },
                             onPick = { screen = Screen.Detail(it, Screen.Search) },
                         )
                         Screen.Browse -> BrowseScreen(
                             store = sourceStore,
-                            onBack = { screen = Screen.Home },
+                            onSearch = { screen = Screen.Search },
+                            onLive = { screen = Screen.Live },
+                            onSources = { screen = Screen.Sources },
+                            onSettings = { screen = Screen.Settings },
                             onPick = { screen = Screen.Detail(it, Screen.Browse) },
                         )
                         is Screen.Detail -> DetailScreen(

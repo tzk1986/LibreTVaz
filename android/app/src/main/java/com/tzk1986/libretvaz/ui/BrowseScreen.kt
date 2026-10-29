@@ -1,12 +1,12 @@
 package com.tzk1986.libretvaz.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,16 +25,19 @@ import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
 
-/** 影视首页：按源展示分类导航 + 海报墙（TVBox 风格，直连各 CMS 源自身数据） */
+/** TVBox 风格根页面：顶栏功能入口 + 源/分类导航 + 海报墙 */
 @Composable
 fun BrowseScreen(
     store: SourceStore,
-    onBack: () -> Unit,
+    onSearch: () -> Unit,
+    onLive: () -> Unit,
+    onSources: () -> Unit,
+    onSettings: () -> Unit,
     onPick: (VodSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val repo = remember { CmsRepository() }
-    val sources = remember { store.vodSources() }
+    var sources by remember { mutableStateOf(store.vodSources()) }
     var sourceIdx by remember { mutableStateOf(0) }
     var types by remember { mutableStateOf<List<VodType>>(emptyList()) }
     var type by remember { mutableStateOf<VodType?>(null) }
@@ -44,7 +47,9 @@ fun BrowseScreen(
     var canLoadMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    BackHandler { onBack() }
+    // 从源管理返回时刷新源列表
+    LaunchedEffect(Unit) { sources = store.vodSources() }
+    if (sourceIdx >= sources.size) sourceIdx = 0
     val source: VodSource? = sources.getOrNull(sourceIdx)
 
     LaunchedEffect(source) {
@@ -65,29 +70,43 @@ fun BrowseScreen(
         loading = false
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack) { Text("返回") }
-            Text("影视首页", style = MaterialTheme.typography.headlineSmall)
-            if (source != null) {
-                Text(source.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-            }
+    Column(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "LibreTVaz",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onSearch) { Text("搜索观影") }
+            Button(onClick = onLive) { Text("看电视") }
+            OutlinedButton(onClick = onSources) { Text("源管理") }
+            OutlinedButton(onClick = onSettings) { Text("服务器模式") }
         }
 
         if (sources.isEmpty()) {
-            Text("尚未添加点播源，请先到「源管理」添加或导入", color = MaterialTheme.colorScheme.error)
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("尚未配置点播源，导入后即可在此浏览海报墙", style = MaterialTheme.typography.bodyLarge)
+                Button(onClick = onSources) { Text("进入源管理") }
+            }
             return@Column
         }
 
-        if (sources.size > 1) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(sources.size) { i ->
-                    FilterChip(
-                        selected = i == sourceIdx,
-                        onClick = { sourceIdx = i; targetPage = 1 },
-                        label = { Text(sources[i].name) },
-                    )
-                }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(sources.size) { i ->
+                FilterChip(
+                    selected = i == sourceIdx,
+                    onClick = { sourceIdx = i; targetPage = 1 },
+                    label = { Text(sources[i].name) },
+                )
             }
         }
 
@@ -119,7 +138,7 @@ fun BrowseScreen(
                 PosterCard(item = item, onClick = { onPick(item) })
             }
             if (canLoadMore && !loading) {
-                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
                     OutlinedButton(onClick = { targetPage++ }, modifier = Modifier.fillMaxWidth()) {
                         Text("加载更多")
                     }
