@@ -45,7 +45,8 @@ function parseList(text, source) {
 }
 function parseTypes(text) {
   const j = JSON.parse(text);
-  return (j.class || []).filter(c => c && c.type_id != null).map(c => ({ id: String(c.type_id), name: c.type_name || '' }));
+  return (j.class || []).filter(c => c && c.type_id != null)
+    .map(c => ({ id: String(c.type_id), name: c.type_name || '', pid: String(c.type_pid ?? '0'), extend: parseExtend(c.type_extend) }));
 }
 /* ac=videolist 的 class[].type_extend 携带 area/year/lang 可选值（影视仓二级筛选数据源） */
 const parseExtend = v => {
@@ -88,7 +89,7 @@ let VOCAB = LS('fongmi_words', []);
 const addWords = names => {
   const set = new Set(VOCAB); let dirty = false;
   for (const n of names) { if (n && !set.has(n)) { set.add(n); VOCAB.push(n); dirty = true; } }
-  if (VOCAB.length > 800) VOCAB = VOCAB.slice(-800);
+  if (VOCAB.length > 2000) VOCAB = VOCAB.slice(-2000);
   if (dirty) { try { localStorage.setItem('fongmi_words', JSON.stringify(VOCAB)); } catch { /* 满 */ } }
 };
 /* 扫码远程输入：搜索与订阅导入共用一个 session 二维码（手机页 Tab 切换，免重复扫码） */
@@ -695,7 +696,7 @@ async function loadRec(pg = 1) {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, area: '', year: '', lang: '' };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, parentEmpty: false };
 function renderVod() {
   body.innerHTML = `<div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
     <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
@@ -710,18 +711,42 @@ async function loadTypes() {
   Vod.types = [];
   try { Vod.types = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); } catch { /* 无分类 */ }
   if (rid !== Vod.reqId || App.view !== 'vod') return;
-  const tabs = [{ id: '', name: '首页' }, ...Vod.types.map(t => ({ id: t.id, name: t.name }))];
+  const tops = Vod.types.filter(t => t.pid === '0' || t.pid === '' || t.pid === 'null');
+  const tabList = tops.length ? tops : Vod.types;
+  const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
   const cur = Vod.tab?.id ?? '';
   $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
   $('#typeRow').onclick = e => {
     const b = e.target.closest('[data-tid]'); if (!b) return;
-    Vod.tab = b.dataset.tid === '' ? null : Vod.types.find(t => t.id === b.dataset.tid);
-    Vod.filters = null; Vod.area = ''; Vod.year = ''; Vod.lang = '';
-    const sr = $('#subRow'); if (sr) sr.innerHTML = '';
+    const id = b.dataset.tid;
+    if (id === '') { // 首页：无分类，直接全量最新
+      Vod.tab = null; Vod.filters = null; Vod.showFilters = false;
+      resetFilterVals(); $('#subRow').innerHTML = '';
+      document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
+      loadVod(1); return;
+    }
+    if (Vod.tab && Vod.tab.id === id) { // 再次点击当前分类：展开/收起二级筛选（影视仓式）
+      Vod.showFilters = !Vod.showFilters;
+      drawSubRow();
+      if (Vod.showFilters) setTimeout(() => $('#subRow')?.querySelector('[data-focus]')?.focus(), 30);
+      return;
+    }
+    Vod.tab = Vod.types.find(t => t.id === id) || null;
+    Vod.showFilters = false; resetFilterVals();
+    Vod.filters = null;
     document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
     loadVod(1);
   };
   loadVod(1);
+}
+const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; Vod.parentEmpty = false; };
+/* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
+function buildFilters(t, raw) {
+  const subs = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
+  const meta = parseFilterMeta(raw) || {};
+  const e = Object.assign({}, t.extend || {}, meta);
+  const arr = v => (Array.isArray(v) ? v : String(v || '')).toString().split(',').filter(Boolean);
+  return { subs, area: arr(e.area), year: arr(e.year), lang: arr(e.lang) };
 }
 async function loadVod(pg = 1) {
   const s = SRC.vod[Home.srcIdx]; if (!s) return;
@@ -730,7 +755,8 @@ async function loadVod(pg = 1) {
   Vod.loading = true;
   if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
   const t = Vod.tab;
-  let q = t ? `ac=videolist&t=${encodeURIComponent(t.id)}` : 'ac=videolist';
+  const effT = Vod.sub || (t && !Vod.parentEmpty ? t.id : '');
+  let q = effT ? `ac=videolist&t=${encodeURIComponent(effT)}` : 'ac=videolist';
   if (t && Vod.area) q += `&area=${encodeURIComponent(Vod.area)}`;
   if (t && Vod.year) q += `&year=${encodeURIComponent(Vod.year)}`;
   if (t && Vod.lang) q += `&lang=${encodeURIComponent(Vod.lang)}`;
@@ -738,8 +764,14 @@ async function loadVod(pg = 1) {
   let items = [], err = null, raw = '';
   try { raw = await httpGet(listUrl(s.url, q)); items = parseList(raw, s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
+  if (err) { Vod.loading = false; grid.innerHTML = `<p class="err">${esc(err)}</p>`; return; }
+  /* 父分类 id 查不到数据（如非凡源 type_id=1 只是分组）→ 回退为全量最新列表 */
+  if (pg === 1 && t && !Vod.sub && !Vod.parentEmpty && !items.length && Vod.types.some(c => c.pid === t.id)) {
+    Vod.parentEmpty = true;
+    return loadVod(1);
+  }
   Vod.loading = false; Vod.page = pg;
-  if (pg === 1 && t) { Vod.filters = parseFilterMeta(raw); drawSubRow(); }
+  if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
   addWords(items.map(it => it.name));
   Vod.items = pg === 1 ? items : Vod.items.concat(items);
   Vod.more = items.length > 0;
@@ -760,25 +792,55 @@ function drawVodGrid() {
 function drawSubRow() {
   const el = $('#subRow'); if (!el) return;
   const f = Vod.filters;
-  if (!Vod.tab || !f) { el.innerHTML = ''; return; }
+  if (!Vod.tab || !Vod.showFilters) { el.innerHTML = ''; return; }
+  if (!f || !(f.subs.length || f.area.length || f.year.length || f.lang.length)) {
+    el.innerHTML = '<span class="muted" style="font-size:12px;padding:6px 28px">该分类不支持二级筛选（源未提供子分类或扩展字段）</span>'; return;
+  }
   const yr = String(new Date().getFullYear());
-  const groups = [];
-  if (f.area.length) groups.push(['area', '地区', f.area]);
-  if (f.year.length) groups.push(['year', '年份', [...new Set([yr, ...f.year])]]);
-  if (f.lang.length) groups.push(['lang', '语言', f.lang]);
-  el.innerHTML = groups.map(([k, label, vals]) =>
+  const grp = (key, label, opts) =>
     `<span class="muted" style="font-size:12px;white-space:nowrap">${label}</span>` +
-    `<button class="chip${!Vod[k] ? ' on' : ''}" data-focus data-f="${k}" data-v="">全部</button>` +
-    vals.slice(0, 24).map(v => `<button class="chip${Vod[k] === v ? ' on' : ''}" data-focus data-f="${k}" data-v="${esc(v)}">${v === yr ? `本年(${yr})` : esc(v)}</button>`).join('')
-  ).join('<span style="width:12px"></span>');
+    `<button class="chip${!Vod[key] ? ' on' : ''}" data-focus data-f="${key}" data-v="">全部</button>` +
+    opts.slice(0, 30).map(([v, name]) =>
+      `<button class="chip${String(Vod[key]) === String(v) ? ' on' : ''}" data-focus data-f="${key}" data-v="${esc(v)}">${esc(name === yr ? `本年(${yr})` : name)}</button>`
+    ).join('');
+  el.innerHTML = [
+    f.subs.length && grp('sub', '子类', f.subs.map(s => [s.id, s.name])),
+    f.area.length && grp('area', '地区', f.area.map(v => [v, v])),
+    f.year.length && grp('year', '年份', [...new Set([yr, ...f.year])].map(v => [v, v])),
+    f.lang.length && grp('lang', '语言', f.lang.map(v => [v, v])),
+  ].filter(Boolean).join('<span style="width:12px"></span>');
   el.onclick = e => {
     const b = e.target.closest('[data-f]'); if (!b) return;
-    Vod[b.dataset.f] = b.dataset.v;
+    const k = b.dataset.f;
+    if (k === 'sub') { Vod.sub = b.dataset.v; Vod.parentEmpty = false; }
+    else Vod[k] = b.dataset.v;
+    Vod.showFilters = false; // 筛选生效后收起，再点分类标签可重新展开修改
     drawSubRow();
     loadVod(1);
   };
 }
 
+/* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想 */
+let vocabSeeding = false;
+async function seedVocab(min = 300) {
+  if (vocabSeeding || VOCAB.length >= min) return;
+  vocabSeeding = true;
+  try {
+    const pool = SRC.vod.filter(s => !isDead(s.url) && !s.isAdult);
+    const order = [SRC.vod[Home.srcIdx], ...pool].filter(Boolean);
+    const seen = new Set();
+    let rounds = 0;
+    for (const s of order) {
+      if (VOCAB.length >= min || rounds >= 6) break;
+      if (seen.has(norm(s.url))) continue;
+      seen.add(norm(s.url)); rounds++;
+      try {
+        const names = parseList(await httpGet(listUrl(s.url, 'ac=videolist&pg=1')), s).map(it => it.name).filter(Boolean);
+        addWords(names);
+      } catch { /* 单源失败跳过 */ }
+    }
+  } finally { vocabSeeding = false; }
+}
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
   const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
@@ -812,14 +874,14 @@ function renderSearch() {
       hits = VOCAB.filter(w => initialsOf(w).toLowerCase().startsWith(q));
     }
     if (!hits.length) hits = VOCAB.filter(w => w.toLowerCase().includes(q));
-    hits = [...new Set(hits)].slice(0, 14);
+    hits = [...new Set(hits)].slice(0, 30);
     row.innerHTML = hits.length
       ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join('')
       : '<span class="muted" style="font-size:12px">没有匹配的片名，可点候选词或换字母试试</span>';
   };
   const drawCand = () => {
     const row = $('#candRow'); if (!row) return;
-    const words = [...new Set(VOCAB.slice(-200).reverse())].slice(0, 14);
+    const words = [...new Set(VOCAB.slice(-600).reverse())].slice(0, 48);
     row.innerHTML = words.length
       ? `<span class="muted" style="font-size:12px;white-space:nowrap">资源候选词</span>` + words.map(w => `<button class="chip" data-focus data-k="${esc(w)}">${esc(w)}</button>`).join('')
       : '<span class="muted" style="font-size:12px">候选词加载中…（需有点播源）</span>';
@@ -842,18 +904,7 @@ function renderSearch() {
   };
   drawQr($('#srchQr'));
   drawCand();
-  (async () => {
-    if (VOCAB.length >= 120) return;
-    const s = SRC.vod[Home.srcIdx]; if (!s) return;
-    try {
-      const names = [];
-      for (let pg = 1; pg <= 3 && App.view === 'search'; pg++) {
-        names.push(...parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s).map(it => it.name));
-      }
-      addWords(names.filter(Boolean));
-      if (App.view === 'search') { drawCand(); drawSug(); }
-    } catch { /* 静默 */ }
-  })();
+  seedVocab().then(() => { if (App.view === 'search') { drawCand(); drawSug(); } });
   setTimeout(() => $('#kw').focus(), 50);
 }
 
@@ -1141,4 +1192,5 @@ function inputDigit(k) {
 /* ================= 启动 ================= */
 switchView('home');
 setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）
+setTimeout(seedVocab, 2500);   // 后台预取片名，进搜索页即有候选词
 remoteInit(); // 扫码远程输入（搜索/订阅导入共用一个码）
