@@ -14,6 +14,7 @@ async function httpGet(url, timeout = 15000) {
   }
   const text = await r.text();
   if (!r.ok) throw new Error('HTTP ' + r.status + '：' + text.slice(0, 80));
+  if (text.trimStart().startsWith('<')) throw new Error('源返回网页而非JSON（站点可能已失效或被运营商拦截）');
   return text;
 }
 
@@ -127,24 +128,26 @@ function parseDetail(data, source) {
     sourceName: source.name, episodes: eps,
   };
 }
-const apiBase = s => s.url.replace(/\/+$/, '');
-// TVBox 同款首页：源 api 无参请求返回「最近更新」，仅带 pg 翻页
-const homeList = async (s, pg) => {
-  const clean = s.url.replace(/\?+$/, '');
-  const url = clean.includes('?') ? `${clean}&pg=${pg}` : `${clean}?pg=${pg}`;
-  return parseList(JSON.parse(await httpGet(url, 10000)), s);
+// 有些订阅的 api 自带查询串（如 …vod.php?ac=list），拼接时必须按是否已含 '?' 选 '?'/'&'，否则产生坏 URL
+const apiBase = s => s.url.replace(/\/+$/, '').replace(/\?+$/, '');
+const apiUrl = (s, query) => {
+  const b = apiBase(s);
+  return b + (b.includes('?') ? '&' : '?') + query;
 };
-const getTypes = async s => parseTypes(JSON.parse(await httpGet(apiBase(s) + '?ac=list', 10000)));
-const listByType = async (s, typeId, pg) => parseList(JSON.parse(await httpGet(`${apiBase(s)}?ac=videolist&t=${encodeURIComponent(typeId)}&pg=${pg}`, 10000)), s);
-const getDetail = async (s, id) => parseDetail(JSON.parse(await httpGet(`${apiBase(s)}?ac=videolist&ids=${encodeURIComponent(id)}`, 10000)), s);
+// TVBox 同款首页：源 api 无参请求返回「最近更新」，仅带 pg 翻页
+const homeList = async (s, pg) =>
+  parseList(JSON.parse(await httpGet(apiUrl(s, `pg=${pg}`), 10000)), s);
+const getTypes = async s => parseTypes(JSON.parse(await httpGet(apiUrl(s, 'ac=list'), 10000)));
+const listByType = async (s, typeId, pg) => parseList(JSON.parse(await httpGet(apiUrl(s, `ac=videolist&t=${encodeURIComponent(typeId)}&pg=${pg}`), 10000)), s);
+const getDetail = async (s, id) => parseDetail(JSON.parse(await httpGet(apiUrl(s, `ac=videolist&ids=${encodeURIComponent(id)}`), 10000)), s);
 
 async function searchOneSource(s, wd) {
   const q = 'ac=videolist&wd=' + encodeURIComponent(wd);
-  const data = JSON.parse(await httpGet(`${apiBase(s)}?${q}&pg=1`, 10000));
+  const data = JSON.parse(await httpGet(apiUrl(s, `${q}&pg=1`), 10000));
   let list = parseList(data, s);
   const pages = Math.min(Math.max(parseInt(data.pagecount || '1', 10) || 1, 1), 5);
   for (let p = 2; p <= pages; p++) {
-    try { list = list.concat(parseList(JSON.parse(await httpGet(`${apiBase(s)}?${q}&pg=${p}`, 10000)), s)); } catch { /* 忽略翻页失败 */ }
+    try { list = list.concat(parseList(JSON.parse(await httpGet(apiUrl(s, `${q}&pg=${p}`), 10000)), s)); } catch { /* 忽略翻页失败 */ }
   }
   return list;
 }
@@ -170,7 +173,8 @@ function jsonLoose(text) {
   return JSON.parse(t);
 }
 const normUrl = u => String(u || '').trim().replace(/\/+$/, '');
-const isCmsApi = u => /api\.php\/provide\/vod/i.test(u || '');
+// 与 Android SubscriptionParser 对齐：排除 at/xml 输出（返回 XML 非 JSON，无法直连解析）
+const isCmsApi = u => /\/api\.php\/provide\/vod(?![^?#]*\/at\/xml)(?:[\/?#]|$)/i.test(String(u || '').trim());
 
 function parseRoot(root) {
   const vod = [], live = []; let skipped = 0; let name = null; let format = 'libretv';
@@ -339,7 +343,7 @@ function chips(arr, idx, fn, key = o => o.name) {
 function viewBrowse() {
   const sources = vodSources();
   let html = `<div class="chips">${chips(sources, state.sourceIdx, 'pickSource', o => o.name + (o.isAdult ? '·成人' : ''))}</div>`;
-  if (!sources.length) return html + `<p class="muted" style="margin-top:20px">尚未导入点播源。${PRESETS.map(p => `<button class="btn ghost" style="margin-left:8px" onclick="quickImport('${p.url}')">一键导入·${esc(p.name)}</button>`).join('')}</p>`;
+  if (!sources.length) return html + `<p class="muted" style="margin-top:20px">尚未导入点播源。<button class="btn ghost" style="margin-left:8px" onclick="addBuiltinSources()">一键添加内置已测源（推荐）</button>${PRESETS.map(p => `<button class="btn ghost" style="margin-left:8px" onclick="quickImport('${p.url}')">一键导入·${esc(p.name)}</button>`).join('')}</p>`;
   html += `<div class="chips" style="margin-top:8px"><span class="chip ${!state.type ? 'sel' : ''}" onclick="pickType(null)">首页（最近更新）</span>${state.types.map(t => `<span class="chip ${t.id === (state.type || {}).id ? 'sel' : ''}" onclick="pickType('${esc(t.id)}','${esc(t.name)}')">${esc(t.name)}</span>`).join('')}</div>`;
   html += `<div style="margin:8px 0">${state.loading ? '<span class="muted">加载中…</span>' : ''}${state.error ? `<span class="err">${esc(state.error)}</span>` : ''}</div>`;
   html += `<div class="grid">${state.items.map((it, i) => `
@@ -433,13 +437,32 @@ function viewDetail() {
   return html;
 }
 
-/* ---- 预置订阅（实测可达）---- */
+/* ---- 预置订阅（2026-10-29 本机探活脚本实测，括号内为可用 CMS 源数）---- */
 const PRESETS = [
-  { name: 'Qist 综合（点播+直播）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
-  { name: 'Liucn 单仓', url: 'https://raw.liucn.cc/box/m.json' },
-  { name: 'noimank 多仓', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
-  { name: '多多快速仓库', url: 'https://jihulab.com/duomv/apps/-/raw/main/fast.json' },
+  { name: 'noimank 多仓（5源可用）', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
+  { name: 'Liucn 单仓（2源可用）', url: 'https://raw.liucn.cc/box/m.json' },
+  { name: 'Qist 综合（点播+直播，1源可用）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
 ];
+/* ---- 内置已测源：probe-urls.mjs 逐源 ac=list 实测通过的常见苹果CMS站，免订阅直加 ---- */
+const BUILTIN_SOURCES = [
+  { name: '非凡资源', url: 'https://cj.ffzyapi.com/api.php/provide/vod' },
+  { name: '量子资源', url: 'https://cj.lziapi.com/api.php/provide/vod' },
+  { name: '360采集', url: 'https://360zy.com/api.php/provide/vod' },
+  { name: '索尼采集', url: 'https://suoniapi.com/api.php/provide/vod' },
+  { name: '天天采集', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod' },
+  { name: '茅台采集', url: 'https://mtzy.me/api.php/provide/vod' },
+  { name: '火狐采集', url: 'https://hhzyapi.com/api.php/provide/vod' },
+  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod?ac=list' },
+  { name: '速播采集', url: 'https://subocaiji.com/api.php/provide/vod' },
+];
+window.addBuiltinSources = () => {
+  const old = new Set(vodSources().map(v => normUrl(v.url)));
+  const nv = BUILTIN_SOURCES.filter(s => !old.has(normUrl(s.url)));
+  SRC = { vod: [...SRC.vod, ...nv].slice(0, 100), live: liveSources() };
+  store.save(SRC);
+  state._afterImport = false;
+  switchTab('browse');
+};
 // 在源管理或首页空态都可点击：后台导入，成功后自动切回影视首页
 window.quickImport = url => { state._afterImport = true; runImport(url, $('#impMsg') || null); };
 
@@ -498,7 +521,7 @@ function probeTable() {
 function viewSources() {
   return `
   <div class="row"><input type="text" id="impUrl" placeholder="订阅地址：TVBox / 多仓 / LibreTV / 源目录 JSON URL"><button class="btn" onclick="doImport()">导入</button><button class="btn ghost" onclick="clearInput()">清空输入</button><button class="btn ghost" onclick="probeAll()">检测全部点播源</button><button class="btn ghost" onclick="clearAll()">清除所有源</button></div>
-  <div class="row" style="margin-top:6px"><span class="muted">一键导入：</span>${PRESETS.map(p => `<button class="btn ghost" onclick="quickImport('${p.url}')">${esc(p.name)}</button>`).join('')}</div>
+  <div class="row" style="margin-top:6px"><span class="muted">一键导入：</span><button class="btn ghost" onclick="addBuiltinSources()">内置已测源（推荐）</button>${PRESETS.map(p => `<button class="btn ghost" onclick="quickImport('${p.url}')">${esc(p.name)}</button>`).join('')}</div>
   <p class="muted">导入结果：<span id="impMsg"></span></p>
   ${state.probe ? probeTable() : ''}
   <h3>点播源（${SRC.vod.length}/100）</h3>

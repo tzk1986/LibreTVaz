@@ -54,16 +54,15 @@ class CmsRepository {
     }
 
     private suspend fun searchOneSource(source: VodSource, wd: String): List<VodSummary> {
-        val base = source.url.removeSuffix("/")
         val query = "ac=videolist&wd=${URLEncoder.encode(wd, "UTF-8")}"
-        val firstJson = fetchJson("$base?$query&pg=1")
+        val firstJson = fetchJson(apiUrl(source, "$query&pg=1"))
         val list = CmsParser.parseSearchList(firstJson, source).toMutableList()
         val pageCount = firstJson.optString("pagecount", "1").toIntOrNull()?.coerceIn(1, MAX_PAGES) ?: 1
         if (pageCount > 1) {
             val extras = coroutineScope {
                 (2..pageCount).map { pg ->
                     async(Dispatchers.IO) {
-                        runCatching { CmsParser.parseSearchList(fetchJson("$base?$query&pg=$pg"), source) }
+                        runCatching { CmsParser.parseSearchList(fetchJson(apiUrl(source, "$query&pg=$pg")), source) }
                             .getOrDefault(emptyList())
                     }
                 }.awaitAll()
@@ -76,32 +75,35 @@ class CmsRepository {
     /** 首页"最近更新"：与 TVBox 一致，直接 GET 站点 api 根地址不带参数，取源返回的 list */
     suspend fun home(source: VodSource, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
         runCatching {
-            CmsParser.parseSearchList(fetchJson("${source.url.removeSuffix("/")}?pg=$page"), source)
+            CmsParser.parseSearchList(fetchJson(apiUrl(source, "pg=$page")), source)
         }.getOrDefault(emptyList())
     }
 
     /** ac=list 取源分类（影视首页导航用） */
     suspend fun types(source: VodSource): List<VodType> = withContext(Dispatchers.IO) {
-        val base = source.url.removeSuffix("/")
-        runCatching { CmsParser.parseTypes(fetchJson("$base?ac=list")) }.getOrDefault(emptyList())
+        runCatching { CmsParser.parseTypes(fetchJson(apiUrl(source, "ac=list"))) }.getOrDefault(emptyList())
     }
 
     /** 按分类翻列表页，ac=videolist&t={typeId}&pg= */
     suspend fun listByType(source: VodSource, typeId: String, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
-        val base = source.url.removeSuffix("/")
         runCatching {
             CmsParser.parseSearchList(
-                fetchJson("$base?ac=videolist&t=${URLEncoder.encode(typeId, "UTF-8")}&pg=$page"),
+                fetchJson(apiUrl(source, "ac=videolist&t=${URLEncoder.encode(typeId, "UTF-8")}&pg=$page")),
                 source,
             )
         }.getOrDefault(emptyList())
     }
 
     suspend fun detail(source: VodSource, id: String): VideoDetail? = withContext(Dispatchers.IO) {
-        val base = source.url.removeSuffix("/")
         runCatching {
-            CmsParser.parseDetail(fetchJson("$base?ac=videolist&ids=${URLEncoder.encode(id, "UTF-8")}"), source)
+            CmsParser.parseDetail(fetchJson(apiUrl(source, "ac=videolist&ids=${URLEncoder.encode(id, "UTF-8")}")), source)
         }.getOrNull()
+    }
+
+    /** 部分订阅的 api 自带查询串（如 …vod?ac=list），拼接需按是否已含 '?' 选分隔符，否则产生坏 URL */
+    private fun apiUrl(source: VodSource, query: String): String {
+        val base = source.url.trim().removeSuffix("/").removeSuffix("?")
+        return base + (if (base.contains('?')) "&" else "?") + query
     }
 
     private fun fetchJson(url: String): JSONObject = JSONObject(Http.get(url))
