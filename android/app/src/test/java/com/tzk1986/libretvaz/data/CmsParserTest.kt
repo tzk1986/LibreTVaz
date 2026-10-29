@@ -74,6 +74,18 @@ class CmsParserTest {
     }
 
     @Test
+    fun `parseTypes reads class array and skips incomplete entries`() {
+        val json = JSONObject(
+            """{"class":[{"type_id":"1","type_name":"电影"},{"type_id":"2","type_name":""},{"type_name":"无id"}]}"""
+        )
+        val types = CmsParser.parseTypes(json)
+        assertEquals(1, types.size)
+        assertEquals("1", types[0].id)
+        assertEquals("电影", types[0].name)
+        assertTrue(CmsParser.parseTypes(JSONObject("""{"code":200}""")).isEmpty())
+    }
+
+    @Test
     fun `adult type detection`() {
         assertTrue(CmsParser.isAdultType("伦理片"))
         assertFalse(CmsParser.isAdultType("喜剧"))

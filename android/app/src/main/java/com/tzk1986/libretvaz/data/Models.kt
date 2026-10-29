@@ -40,6 +40,11 @@ data class VideoDetail(
     val episodes: List<String>,
 )
 
+data class VodType(
+    val id: String,
+    val name: String,
+)
+
 data class LiveChannel(
     val id: String,
     val name: String,

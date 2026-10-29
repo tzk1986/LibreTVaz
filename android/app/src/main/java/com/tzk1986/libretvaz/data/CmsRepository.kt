@@ -73,6 +73,23 @@ class CmsRepository {
         return list
     }
 
+    /** ac=list 取源分类（影视首页导航用） */
+    suspend fun types(source: VodSource): List<VodType> = withContext(Dispatchers.IO) {
+        val base = source.url.removeSuffix("/")
+        runCatching { CmsParser.parseTypes(fetchJson("$base?ac=list")) }.getOrDefault(emptyList())
+    }
+
+    /** 按分类翻列表页，ac=videolist&t={typeId}&pg= */
+    suspend fun listByType(source: VodSource, typeId: String, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
+        val base = source.url.removeSuffix("/")
+        runCatching {
+            CmsParser.parseSearchList(
+                fetchJson("$base?ac=videolist&t=${URLEncoder.encode(typeId, "UTF-8")}&pg=$page"),
+                source,
+            )
+        }.getOrDefault(emptyList())
+    }
+
     suspend fun detail(source: VodSource, id: String): VideoDetail? = withContext(Dispatchers.IO) {
         val base = source.url.removeSuffix("/")
         runCatching {

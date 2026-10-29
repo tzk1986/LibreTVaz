@@ -14,7 +14,7 @@ android {
         minSdk = 23
         targetSdk = 36
         versionCode = 1
-        versionName = "0.3.0-m3"
+        versionName = "0.4.0-m4"
     }
 
     buildTypes {
@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
+    implementation(libs.coil.compose)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // 单元测试里 android.jar 的 org.json 是空桩，需放真实实现（测试 classpath 优先于 android.jar）
     testImplementation(libs.junit)

@@ -116,6 +116,17 @@ object CmsParser {
         return matchesPrepared(nName, query)
     }
 
+    /** ac=list 返回的 class 数组 → 分类列表 */
+    fun parseTypes(data: JSONObject): List<VodType> {
+        val arr = data.optJSONArray("class") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("type_id")
+            val name = o.optString("type_name")
+            if (id.isEmpty() || name.isEmpty()) null else VodType(id, name)
+        }
+    }
+
     fun parseSearchList(data: JSONObject, source: VodSource): List<VodSummary> {
         val arr = data.optJSONArray("list") ?: return emptyList()
         return (0 until arr.length()).mapNotNull { i ->

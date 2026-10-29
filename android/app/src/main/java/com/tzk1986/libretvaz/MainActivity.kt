@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VodSummary
+import com.tzk1986.libretvaz.ui.BrowseScreen
 import com.tzk1986.libretvaz.ui.DetailScreen
 import com.tzk1986.libretvaz.ui.HomeScreen
 import com.tzk1986.libretvaz.ui.LiveScreen
@@ -25,7 +26,8 @@ sealed class Screen {
     data object Sources : Screen()
     data object Settings : Screen()
     data object Search : Screen()
-    data class Detail(val item: VodSummary) : Screen()
+    data object Browse : Screen()
+    data class Detail(val item: VodSummary, val backTo: Screen) : Screen()
     data class Player(val url: String, val backTo: Screen) : Screen()
 }
 
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
                         Screen.Home -> HomeScreen(
                             sourceStore = sourceStore,
                             onSearch = { screen = Screen.Search },
+                            onBrowse = { screen = Screen.Browse },
                             onLive = { screen = Screen.Live },
                             onSources = { screen = Screen.Sources },
                             onSettings = { screen = Screen.Settings },
@@ -56,11 +59,16 @@ class MainActivity : ComponentActivity() {
                         Screen.Search -> SearchScreen(
                             store = sourceStore,
                             onBack = { screen = Screen.Home },
-                            onPick = { screen = Screen.Detail(it) },
+                            onPick = { screen = Screen.Detail(it, Screen.Search) },
+                        )
+                        Screen.Browse -> BrowseScreen(
+                            store = sourceStore,
+                            onBack = { screen = Screen.Home },
+                            onPick = { screen = Screen.Detail(it, Screen.Browse) },
                         )
                         is Screen.Detail -> DetailScreen(
                             item = current.item,
-                            onBack = { screen = Screen.Search },
+                            onBack = { screen = current.backTo },
                             onPlay = { url -> screen = Screen.Player(url, current) },
                         )
                         is Screen.Player -> PlayerScreen(
