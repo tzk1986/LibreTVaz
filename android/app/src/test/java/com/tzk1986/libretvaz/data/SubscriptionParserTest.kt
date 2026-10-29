@@ -47,15 +47,18 @@ class SubscriptionParserTest {
     }
 
     @Test
-    fun `tvbox live skips txt and nonzero type`() {
+    fun `tvbox live keeps txt and untyped, skips proxy and spider types`() {
+        // 与 TVBox 对齐：txt 是合法直播订阅格式；type 仅 proxy://、1(spider) 不可拉取
         val text = """{"lives":[
-            {"name":"ok","type":0,"url":"https://a.com/x.m3u8"},
+            {"name":"m3u8","type":0,"url":"https://a.com/x.m3u8"},
             {"name":"txt","type":0,"url":"https://b.com/list.txt"},
+            {"name":"无扩展名","url":"https://d.com/playlist"},
+            {"name":"proxy","type":0,"url":"proxy://do=live&type=txt"},
             {"name":"其它","type":1,"url":"https://c.com/y.m3u8"}
         ]}"""
         val p = SubscriptionParser.parse(text)
-        assertEquals(listOf("ok"), p.live.map { it.name })
-        assertEquals(2, p.skipped)
+        assertEquals(listOf("m3u8", "txt", "无扩展名", "其它"), p.live.map { it.name })
+        assertEquals(1, p.skipped)
     }
 
     @Test

@@ -30,8 +30,7 @@ object SubscriptionParser {
     private val SPIDER_PATTERN = Pattern.compile("^csp_|\\.(?:jar|js|py)(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)
     private val CMS_API_PATTERN =
         Pattern.compile("/api\\.php/provide/vod(?![^?#]*/at/xml)(?:[/?#]|$)", Pattern.CASE_INSENSITIVE)
-    private val M3U_PATTERN = Pattern.compile("\\.m3u8?(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)
-    private val TXT_PATTERN = Pattern.compile("\\.txt(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)
+    private val PROXY_URL = Pattern.compile("^proxy://", Pattern.CASE_INSENSITIVE)
     private val HTTP_PREFIX = Pattern.compile("^https?://", Pattern.CASE_INSENSITIVE)
 
     fun parse(text: String): ParsedSubscription = parseRoot(rootOf(text))
@@ -242,8 +241,9 @@ object SubscriptionParser {
             val live = lives.optJSONObject(i) ?: continue
             val name = optionalString(live.opt("name"))
             val url = normalizeUrl(live.opt("url"), false) ?: run { skips.count++; continue }
-            val type = toNumber(live.opt("type"))
-            if ((type != null && type != 0) || (!M3U_PATTERN.matcher(url).find() && TXT_PATTERN.matcher(url).find())) {
+            // 与 TVBox 对齐：不按 type/扩展名过滤，运行时按内容识别 m3u/txt/json；
+            // 仅剔除无 http 拉取语义的 proxy:// 内嵌条目
+            if (PROXY_URL.matcher(url).find()) {
                 skips.count++; continue
             }
             if (!seen.add(url)) continue

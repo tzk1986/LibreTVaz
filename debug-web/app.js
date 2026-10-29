@@ -191,7 +191,8 @@ function parseRoot(root) {
         else skipped++;
       }
       for (const o of root.lives || []) {
-        if (o && o.type === 0 && /^https?:\/\//i.test(o.url || '') && !/\.txt$/i.test(o.url))
+        // 与 TVBox 对齐：不按 type/扩展名过滤，仅剔除 proxy:// 内嵌条目
+        if (o && /^https?:\/\//i.test(o.url || '') && !/^proxy:\/\//i.test(o.url))
           pushLive({ name: o.name || o.url, url: o.url, epg: o.epg || null });
         else skipped++;
       }
@@ -442,7 +443,8 @@ window.doImport = async () => {
 };
 window.delVod = i => { SRC.vod.splice(i, 1); store.save(SRC); render(); };
 window.delLive = i => { SRC.live.splice(i, 1); store.save(SRC); render(); };
-window.clearAll = () => { if (confirm('清空全部源？')) { SRC = { vod: [], live: [] }; store.save(SRC); state.probe = null; render(); } };
+window.clearInput = () => { const el = $('#impUrl'); if (el) el.value = ''; };
+window.clearAll = () => { if (confirm('清除全部点播/直播源？')) { SRC = { vod: [], live: [] }; store.save(SRC); state.probe = null; render(); } };
 window.probeAll = async () => {
   const sources = vodSources();
   if (!sources.length) return;
@@ -469,7 +471,7 @@ function probeTable() {
 }
 function viewSources() {
   return `
-  <div class="row"><input type="text" id="impUrl" placeholder="订阅地址：TVBox / 多仓 / LibreTV / 源目录 JSON URL"><button class="btn" onclick="doImport()">导入</button><button class="btn ghost" onclick="probeAll()">检测全部点播源</button><button class="btn ghost" onclick="clearAll()">清空</button></div>
+  <div class="row"><input type="text" id="impUrl" placeholder="订阅地址：TVBox / 多仓 / LibreTV / 源目录 JSON URL"><button class="btn" onclick="doImport()">导入</button><button class="btn ghost" onclick="clearInput()">清空输入</button><button class="btn ghost" onclick="probeAll()">检测全部点播源</button><button class="btn ghost" onclick="clearAll()">清除所有源</button></div>
   <p class="muted">导入结果：<span id="impMsg"></span></p>
   ${state.probe ? probeTable() : ''}
   <h3>点播源（${SRC.vod.length}/100）</h3>
