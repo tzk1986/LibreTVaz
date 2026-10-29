@@ -178,6 +178,79 @@ const BUILTIN_SOURCES = [
   { name: '速播采集', url: 'https://subocaiji.com/api.php/provide/vod' },
 ];
 const saveSrc = () => localStorage.setItem('libretvaz_sources', JSON.stringify(SRC));
+
+/* ---- 订阅解析：从完整调试台 app.js 原样移植（对应 SubscriptionParser.kt） ---- */
+const PRESETS = [
+  { name: 'noimank 多仓（5源可用）', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
+  { name: 'Liucn 单仓（2源可用）', url: 'https://raw.liucn.cc/box/m.json' },
+  { name: 'Qist 综合（点播+直播）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
+];
+const ADULT_KEYWORDS = ['伦理片','福利','倫理片','福利片','日本伦理','日本福利','日本福利片','日本伦理片','擦边短剧','擦边','韩国伦理','里番动漫','门事件','萝莉少女','制服诱惑','国产传媒','cosplay','黑丝诱惑','无码','日本无码','有码','日本有码','SWAG','网红主播','色情片','同性片','福利视频','无码高清','有码高清','91视频','自拍偷拍','mini传媒'];
+const isAdultType = t => !!t && ADULT_KEYWORDS.some(k => t.includes(k));
+const normUrl = norm;
+const isCmsApi = u => /\/api\.php\/provide\/vod(?![^?#]*\/at\/xml)(?:[\/?#]|$)/i.test(String(u || '').trim());
+function jsonLoose(text) {
+  let t = text.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  t = t.replace(/,(\s*[}\]])/g, '$1');
+  return JSON.parse(t);
+}
+function parseRoot(root) {
+  const vod = [], live = []; let skipped = 0; let name = null; let format = 'libretv';
+  const pushVod = v => { const key = normUrl(v.url); if (!key || vod.some(x => normUrl(x.url) === key)) { skipped++; return; } if (vod.length >= 100) { skipped++; return; } vod.push(v); };
+  const pushLive = l => { const key = normUrl(l.url); if (!key || live.some(x => normUrl(x.url) === key)) { skipped++; return; } if (live.length >= 50) { skipped++; return; } live.push(l); };
+  if (Array.isArray(root)) {
+    const has = root.some(o => o && o.baseUrl);
+    if (has && !root.some(o => o && o.url && !o.baseUrl)) {
+      format = 'source-catalog';
+      for (const o of root) {
+        if (o && o.baseUrl && o.enabled !== false && isCmsApi(o.baseUrl)) pushVod({ name: o.name || o.baseUrl, url: normUrl(o.baseUrl), isAdult: !!o.isAdult });
+        else skipped++;
+      }
+    } else {
+      for (const o of root) {
+        if (o && o.url && isCmsApi(o.url)) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult });
+        else skipped++;
+      }
+    }
+  } else if (root && typeof root === 'object') {
+    name = root.name || null;
+    if (root.sites) {
+      format = 'tvbox';
+      for (const o of root.sites) {
+        const api = o && o.api || '';
+        if ((o.type === 0 || o.type === 1) && !/^csp_/i.test(api) && isCmsApi(api) && o.searchable !== 0)
+          pushVod({ name: o.name || api, url: normUrl(api), isAdult: isAdultType(o.name) });
+        else skipped++;
+      }
+      for (const o of root.lives || []) {
+        if (o && /^https?:\/\//i.test(o.url || '') && !/^proxy:\/\//i.test(o.url))
+          pushLive({ name: o.name || o.url, url: o.url, epg: o.epg || null });
+        else skipped++;
+      }
+    } else if (root.sources) {
+      for (const o of root.sources) if (o && o.url) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult }); else skipped++;
+      for (const o of root.liveSources || []) if (o && o.url) pushLive({ name: o.name || o.url, url: o.url, epg: o.epg || null }); else skipped++;
+    } else skipped++;
+  }
+  if (!vod.length && !live.length) throw new Error(`未找到可导入的数据源（跳过 ${skipped} 个不兼容项）`);
+  return { name, format, vod, live, skipped, repos: 0, reposFailed: 0 };
+}
+async function parseExpanded(text, fetcher) {
+  const root = jsonLoose(text);
+  if (root && !Array.isArray(root) && !root.sites && !root.sources && Array.isArray(root.urls)) {
+    const entries = root.urls.filter(o => o && /^https?:\/\//i.test(o.url || '')).slice(0, 20);
+    const settled = await Promise.allSettled(entries.map(async e => parseRoot(jsonLoose(await fetcher(e.url)))));
+    const vod = [], live = []; let reposFailed = 0; const seenV = new Set(), seenL = new Set();
+    for (const r of settled) {
+      if (r.status !== 'fulfilled') { reposFailed++; continue; }
+      for (const v of r.value.vod) { const k = normUrl(v.url); if (!seenV.has(k) && vod.length < 100) { seenV.add(k); vod.push(v); } }
+      for (const l of r.value.live) { const k = normUrl(l.url); if (!seenL.has(k) && live.length < 50) { seenL.add(k); live.push(l); } }
+    }
+    if (!vod.length && !live.length) throw new Error(`多仓展开失败 ${reposFailed}/${entries.length}，且无可导入源`);
+    return { name: root.name || null, format: 'multi-repo', vod, live, skipped: entries.length - settled.filter(r => r.status === 'fulfilled').length, repos: entries.length, reposFailed };
+  }
+  return parseRoot(root);
+}
 function openSrcMgr() {
   $('#srcModal').classList.add('open');
   drawSrcMgr();
@@ -189,9 +262,17 @@ function drawSrcMgr() {
     <div class="hrow" style="margin-bottom:10px">
       <button class="btn" data-focus id="smAdd">＋ 添加内置已测源</button>
       <button class="btn" data-focus id="smClear">清除所有点播源</button>
-      <button class="btn" data-focus id="smSub">导入订阅 → 完整调试台</button>
       <button class="btn" data-focus id="smClose">关闭(Esc)</button>
     </div>
+    <h3>导入订阅（复用完整调试台同款解析：tvbox / 多仓 urls / 内置格式）</h3>
+    <div class="sbox" style="padding:6px 0">
+      <input id="subUrl" placeholder="粘贴订阅地址（.json 配置或 TVBox 多仓）" data-focus style="flex:1">
+      <button class="btn" data-focus id="smImport">导入</button>
+    </div>
+    <div class="hrow" id="presetRow" style="flex-wrap:wrap">
+      ${PRESETS.map(p => `<button class="btn" data-focus data-preset="${esc(p.url)}">${esc(p.name)}</button>`).join('')}
+    </div>
+    <p id="impMsg" class="muted" style="margin:6px 0;min-height:20px"></p>
     <h3>点播源（${SRC.vod.length}）</h3>
     ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span><span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
     <h3>直播源（${SRC.live.length}）</h3>
@@ -207,12 +288,37 @@ function drawSrcMgr() {
     if (!confirm('确认清除所有点播源？')) return;
     SRC.vod = []; saveSrc(); Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange();
   };
-  $('#smSub').onclick = () => window.open('/', '_blank');
   $('#smClose').onclick = closeSrcMgr;
+  $('#smImport').onclick = () => doImport($('#subUrl').value);
+  $('#subUrl').onkeydown = e => { if (e.key === 'Enter') doImport($('#subUrl').value); };
+  $('#presetRow').onclick = e => { const b = e.target.closest('[data-preset]'); if (b) { $('#subUrl').value = b.dataset.preset; doImport(b.dataset.preset); } };
   $('#srcMgr').onclick = e => {
     const rv = e.target.closest('[data-rmv]'); if (rv) { SRC.vod.splice(+rv.dataset.rmv, 1); saveSrc(); if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange(); }
     const rl = e.target.closest('[data-rml]'); if (rl) { SRC.live.splice(+rl.dataset.rml, 1); saveSrc(); if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0; drawSrcMgr(); }
   };
+  setTimeout(() => $('#subUrl')?.focus(), 50);
+}
+
+/* 订阅导入：解析器从完整调试台 app.js 移植（jsonLoose/parseRoot/parseExpanded） */
+async function doImport(url) {
+  url = (url || '').trim();
+  const msg = $('#impMsg'); if (!url) return;
+  if (msg) msg.textContent = '拉取解析中…';
+  try {
+    const text = await httpGet(url, 20000);
+    const p = await parseExpanded(text, u => httpGet(u, 20000));
+    const oldVod = new Set(SRC.vod.map(v => norm(v.url)));
+    const oldLive = new Set(SRC.live.map(l => norm(l.url)));
+    const nv = p.vod.filter(v => !oldVod.has(norm(v.url)));
+    const nl = p.live.filter(l => !oldLive.has(norm(l.url)));
+    SRC.vod = [...SRC.vod, ...nv].slice(0, 100);
+    SRC.live = [...SRC.live, ...nl].slice(0, 50);
+    saveSrc();
+    if (msg) msg.innerHTML = `<span class="ok">导入成功（${p.format}）：点播 +${nv.length} · 直播 +${nl.length}${p.repos ? ` · 仓库 ${p.repos - p.reposFailed}/${p.repos}` : ''}${p.skipped ? ` · 跳过 ${p.skipped}` : ''}</span>`;
+    drawSrcMgr(); refreshAfterSourceChange();
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="err">${esc(e.message || String(e))}</span>`;
+  }
 }
 function refreshAfterSourceChange() {
   $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
