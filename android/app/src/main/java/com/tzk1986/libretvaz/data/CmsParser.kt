@@ -5,7 +5,6 @@ import java.util.regex.Pattern
 
 /**
  * Apple CMS 响应解析（移植自 Web 端 src/lib/cms-parser.ts 核心逻辑）。
- * 季数别名匹配暂未移植，M2c 补。
  */
 object CmsParser {
     private val M3U8_IN_TEXT = Pattern.compile("\\${'$'}https?://[^\"'\\s]+?\\.m3u8")
@@ -25,15 +24,96 @@ object CmsParser {
     fun isAdultType(typeName: String?): Boolean =
         typeName != null && ADULT_KEYWORDS.any { typeName.contains(it) }
 
-    /** 关键词归一后包含即相关；多词查询要求每词都命中（完整数字边界校验暂未移植） */
     fun isRelevant(name: String, wd: String): Boolean {
+        val query = prepareQuery(wd) ?: return true
+        return isRelevantPrepared(name, query)
+    }
+
+    private data class SeasonRef(val base: String, val season: Int, val explicit: Boolean)
+
+    private class PreparedQuery(val normalized: String, val season: SeasonRef?, val tokens: List<String>)
+
+    /**
+     * 季数别名解析（与 Web 端一致）：查询侧允许「庆余年2」无空格写法；
+     * 标题侧要求空格或明确「第N季」，避免把片名自带数字当成季数。
+     */
+    private fun parseSeasonSuffix(text: String, allowAnnotations: Boolean, bareNeedsSpace: Boolean): SeasonRef? {
+        val t = text.trim()
+        val explicitPattern = if (allowAnnotations)
+            Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季.*$")
+        else
+            Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季$")
+        val barePattern = if (bareNeedsSpace) Regex("^(.*?)\\s+([1-9]\\d?)$") else Regex("^(.*?)\\s*([1-9]\\d?)$")
+        val explicit = explicitPattern.matchEntire(t)
+        val match = explicit ?: barePattern.matchEntire(t) ?: return null
+        val base = match.groupValues[1]
+        if (normalizeTitle(base).isEmpty()) return null
+        val value = match.groupValues[2]
+        var season: Int? = value.toIntOrNull()
+        if (season == null) {
+            val chinese = value.replace("两", "二")
+            val digits = "零一二三四五六七八九"
+            season = when {
+                chinese.length == 1 && chinese in "一二三四五六七八九" -> digits.indexOf(chinese)
+                Regex("^[一二三四五六七八九]?十[一二三四五六七八九]?$").matches(chinese) -> {
+                    val parts = chinese.split("十")
+                    val tens = parts[0]
+                    val units = if (parts.size > 1) parts[1] else ""
+                    (if (tens.isNotEmpty()) digits.indexOf(tens) else 1) * 10 +
+                        (if (units.isNotEmpty()) digits.indexOf(units) else 0)
+                }
+                else -> null
+            }
+        }
+        season = season ?: return null
+        return SeasonRef(base, season, explicit != null)
+    }
+
+    private fun prepareQuery(wd: String): PreparedQuery? {
+        val normalized = normalizeTitle(wd)
+        if (normalized.isEmpty()) return null
+        return PreparedQuery(
+            normalized = normalized,
+            season = parseSeasonSuffix(wd, allowAnnotations = false, bareNeedsSpace = false),
+            tokens = wd.trim().split(Regex("\\s+")).map { normalizeTitle(it) }.filter { it.isNotEmpty() },
+        )
+    }
+
+    /** 数字必须完整命中，避免第 2 季误匹配 12 或 20（移植自 Web includesKeyword） */
+    private fun includesKeyword(title: String, keyword: String): Boolean {
+        if (title.isEmpty() || keyword.isEmpty()) return false
+        val kwStartDigit = keyword.first() in '0'..'9'
+        val kwEndDigit = keyword.last() in '0'..'9'
+        var index = title.indexOf(keyword)
+        while (index >= 0) {
+            val before = if (index > 0) title[index - 1] else ' '
+            val afterIdx = index + keyword.length
+            val after = if (afterIdx < title.length) title[afterIdx] else ' '
+            val beforeOk = !kwStartDigit || before !in '0'..'9'
+            val afterOk = !kwEndDigit || after !in '0'..'9'
+            if (beforeOk && afterOk) return true
+            index = title.indexOf(keyword, index + 1)
+        }
+        return false
+    }
+
+    private fun matchesPrepared(nName: String, query: PreparedQuery): Boolean {
+        if (includesKeyword(nName, query.normalized)) return true
+        return query.tokens.size > 1 && query.tokens.all { includesKeyword(nName, it) }
+    }
+
+    private fun isRelevantPrepared(name: String, query: PreparedQuery): Boolean {
         val nName = normalizeTitle(name)
         if (nName.isEmpty()) return false
-        val normalized = normalizeTitle(wd.trim())
-        if (normalized.isEmpty()) return true
-        if (nName.contains(normalized)) return true
-        val tokens = wd.trim().split(Regex("\\s+")).map { normalizeTitle(it) }.filter { it.isNotEmpty() }
-        return tokens.size > 1 && tokens.all { nName.contains(it) }
+        val titleSeason = parseSeasonSuffix(name, allowAnnotations = true, bareNeedsSpace = true)
+        if (query.season != null && titleSeason != null) {
+            if (query.season.season != titleSeason.season) return false
+            if (query.season.explicit || titleSeason.explicit) {
+                val baseQuery = prepareQuery(query.season.base)
+                if (baseQuery != null) return matchesPrepared(normalizeTitle(titleSeason.base), baseQuery)
+            }
+        }
+        return matchesPrepared(nName, query)
     }
 
     fun parseSearchList(data: JSONObject, source: VodSource): List<VodSummary> {

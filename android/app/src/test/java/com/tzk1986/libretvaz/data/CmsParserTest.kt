@@ -42,9 +42,12 @@ class CmsParserTest {
     @Test
     fun `isRelevant matches across punctuation and multi tokens`() {
         assertTrue(CmsParser.isRelevant("摔跤吧！爸爸", "摔跤吧 爸爸"))
-        assertTrue(CmsParser.isRelevant("庆余年第二季", "庆余年 第二季"))
-        // 季数别名（庆余年2 ↔ 庆余年第二季）暂未移植，M4 补
+        assertTrue(CmsParser.isRelevant("庆余年 第二季", "庆余年2"))
+        assertTrue(CmsParser.isRelevant("庆余年第三季", "庆余年 3"))
+        assertTrue(CmsParser.isRelevant("我是大侦探第二季粤语版", "我是大侦探2"))
+        assertFalse(CmsParser.isRelevant("庆余年12", "庆余年1"))
         assertFalse(CmsParser.isRelevant("爸爸去哪儿", "摔跤吧!爸爸"))
+        assertFalse(CmsParser.isRelevant("庆余年 第二季", "庆余年3"))
     }
 
     @Test
