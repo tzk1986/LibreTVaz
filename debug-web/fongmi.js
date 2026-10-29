@@ -261,6 +261,7 @@ function openSiteDialog() {
   $('#siteGrid').onclick = e => {
     const b = e.target.closest('[data-i]'); if (!b) return;
     Home.srcIdx = +b.dataset.i;
+    localStorage.setItem('fongmi_site_idx', String(Home.srcIdx));
     closeSiteDialog();
     $('#siteName').textContent = SRC.vod[Home.srcIdx].name;
     if (App.view === 'vod' || App.view === 'home') { Home.tab = null; Vod.tab = null; loadSiteData(); }
@@ -610,6 +611,7 @@ async function sourceGuard() {
       if (best < 0) { await probeRestBackground(); best = pickBestSource(); }
       if (best >= 0) {
         Home.srcIdx = best;
+        localStorage.setItem('fongmi_site_idx', String(best));
         toast(`当前源已失效，自动切换到「${SRC.vod[best].name}」`);
         refreshAfterSourceChange();
       } else toast('所有点播源均不可用：请检查网络，或在源管理重新导入');
@@ -637,7 +639,7 @@ function bindGrid(el, items, onPick, onDel) {
 }
 
 /* ================= 首页（HomeActivity：功能行 + 最近观看 + 更新推荐） ================= */
-const Home = { srcIdx: 0, types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
+const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
 function renderHome() {
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]);
   body.innerHTML = `<main id="scroller">
@@ -696,7 +698,7 @@ async function loadRec(pg = 1) {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false };
 function renderVod() {
   body.innerHTML = `<div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
     <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
@@ -705,20 +707,36 @@ function renderVod() {
   loadTypes();
 }
 function loadSiteData() { Vod.reqId++; Home.reqId++; }
+/* 有子类的父分类一律聚合子类展示（非凡/量子等 CMS 父 id 直查为空壳或仅 1~3 条杂项） */
+const applyTabMerged = () => {
+  const kids = Vod.tab ? Vod.types.filter(c => c.pid === Vod.tab.id && c.id !== Vod.tab.id) : [];
+  Vod.merged = kids.length ? kids : null;
+};
 async function loadTypes() {
   const s = SRC.vod[Home.srcIdx]; if (!s) return;
   const rid = ++Vod.reqId;
   Vod.types = [];
   try { Vod.types = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); } catch { /* 无分类 */ }
   if (rid !== Vod.reqId || App.view !== 'vod') return;
+  if (Vod.tab && !Vod.agg) { // 换源后按 id 重解析当前分类，聚合集合随新源重建
+    Vod.tab = Vod.types.find(t => t.id === Vod.tab.id) || null;
+    applyTabMerged();
+  }
   const tops = Vod.types.filter(t => t.pid === '0' || t.pid === '' || t.pid === 'null');
   const tabList = tops.length ? tops : Vod.types;
-  const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
-  const cur = Vod.tab?.id ?? '';
+  const tabs = [{ id: '__agg', name: '🌐 聚合' }, { id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
+  const cur = Vod.agg ? '__agg' : (Vod.tab?.id ?? '');
   $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
   $('#typeRow').onclick = e => {
     const b = e.target.closest('[data-tid]'); if (!b) return;
     const id = b.dataset.tid;
+    if (id === '__agg') { // 站内多源聚合：统一最新墙，点卡片进跨源搜索
+      Vod.agg = true; Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
+      resetFilterVals(); $('#subRow').innerHTML = '';
+      document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
+      loadAgg(); return;
+    }
+    Vod.agg = false;
     if (id === '') { // 首页：无分类，直接全量最新
       Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
       resetFilterVals(); $('#subRow').innerHTML = '';
@@ -733,11 +751,36 @@ async function loadTypes() {
     }
     Vod.tab = Vod.types.find(t => t.id === id) || null;
     Vod.showFilters = false; resetFilterVals();
-    Vod.filters = null; Vod.merged = null;
+    Vod.filters = null; applyTabMerged();
     document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
     loadVod(1);
   };
-  loadVod(1);
+  if (Vod.agg) loadAgg(); else loadVod(1);
+}
+/* 聚合数据源提供者：本期为站内多源合并；将来接豆瓣榜单只需新增一个 provider（接口实测：
+   https://movie.douban.com/j/search_subjects?type=movie|tv&tag=热门&sort=recommend&page_limit=20
+   需浏览器 UA + Referer https://movie.douban.com/，且 proxy 需透传请求头、结果要缓存防限流） */
+const aggProviders = {
+  internal: async () => {
+    const pool = SRC.vod.filter(s => (autoOn() ? !isDead(s.url) : true) && !s.isAdult);
+    const first = SRC.vod[Home.srcIdx];
+    if (first && !pool.includes(first)) pool.unshift(first);
+    const pages = await pMap(pool.slice(0, 12), s =>
+      httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []), 6);
+    return pages.flat();
+  },
+};
+const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { const k = normalizeTitle(it.name); return k && !seen.has(k) && seen.add(k); }); };
+async function loadAgg() {
+  const grid = $('#vodGrid'); if (!grid) return;
+  const rid = ++Vod.reqId;
+  grid.innerHTML = '<p class="muted">正在聚合各源最新（前 12 个健康源）…</p>';
+  const items = dedupByName(await aggProviders.internal());
+  if (rid !== Vod.reqId || App.view !== 'vod' || !Vod.agg || !$('#vodGrid')) return;
+  Vod.items = sortByYearDesc(items); Vod.more = false; Vod.loading = false; Vod.page = 1;
+  addWords(Vod.items.map(it => it.name));
+  drawVodGrid();
+  if (!Vod.items.length) toast('聚合失败：当前无可用点播源');
 }
 const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; };
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
@@ -798,11 +841,6 @@ async function loadVod(pg = 1) {
   try { raw = await httpGet(listUrl(s.url, q)); items = parseList(raw, s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
   if (err) { Vod.loading = false; grid.innerHTML = `<p class="err">${esc(err)}</p>`; return; }
-  /* 父分类 id 查不到数据但带子类 → 聚合全部子类为该分类的真实列表 */
-  if (pg === 1 && t && !Vod.sub && !items.length) {
-    const kids = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
-    if (kids.length) { Vod.merged = kids; return loadMerged(1); }
-  }
   Vod.loading = false; Vod.page = pg;
   if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
   addWords(items.map(it => it.name));
@@ -818,9 +856,14 @@ function drawVodGrid() {
   const grid = $('#vodGrid'); if (!grid) return;
   const shown = sortByYearDesc(Vod.items);
   grid.innerHTML = shown.length
-    ? shown.map((it, i) => cardHtml(it, i)).join('')
-    : '<p class="muted">该分类暂无数据</p>';
-  bindGrid(grid, shown, it => openDetail(it));
+    ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
+    : `<p class="muted">${Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据'}</p>`;
+  bindGrid(grid, shown, it => {
+    if (!Vod.agg) { openDetail(it); return; }
+    // 聚合墙：点击片名进入跨源搜索（影视仓豆瓣式：先统一展示，选中资源再全源查找）
+    Collect.kw = it.name; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
+    switchView('collect'); renderCollect();
+  });
 }
 function drawSubRow() {
   const el = $('#subRow'); if (!el) return;
@@ -1007,7 +1050,8 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>
+    <div id="findWrap"></div>`;
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
     const at = k.findIndex(x => x.id === d.id && x.si === si);
@@ -1017,33 +1061,75 @@ async function openDetail(item) {
   };
   $('#changeBtn').onclick = doChangeSource;
   let line = d.episodes.findIndex(g => g.list.length); if (line < 0) line = 0;
+  let curEp = 0; // 当前播放集序号，跨源跳转后按它续播
+  $('#findBtn').onclick = () => openFindBox(d.title, () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 }));
   const rows = $('#vrows');
   rows.innerHTML = `
     <div class="eprow"><span class="slabel">线路</span><div class="hrow" id="flagRow" style="flex:1"></div></div>
     <div class="eprow" style="align-items:flex-start"><span class="slabel">选集</span><div class="hrow" id="epRow" style="flex:1;flex-wrap:wrap"></div></div>`;
-  const draw = () => {
+  const draw = (ep = 0) => {
     $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${esc(g.flag)}(${g.list.length})</button>`).join('');
-    $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === 0 ? ' on' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
+    $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
     $('#flagRow').onclick = e => {
       const b = e.target.closest('[data-l]'); if (!b) return;
-      line = +b.dataset.l;
+      line = +b.dataset.l; curEp = 0;
       toast(`正在切换线路至「${d.episodes[line].flag}」`);
       draw();
       const f = d.episodes[line].list[0];
       if (f) playInto($('#player'), f.link, `${d.title} · ${f.name}`);
-      $('#epRow').querySelector('[data-e="0"]')?.classList.add('on');
     };
     $('#epRow').onclick = e => {
       const b = e.target.closest('[data-e]'); if (!b) return;
       document.querySelectorAll('#epRow .btn').forEach(x => x.classList.toggle('on', x === b));
-      const u = d.episodes[line].list[+b.dataset.e];
+      curEp = +b.dataset.e;
+      const u = d.episodes[line].list[curEp];
       playInto($('#player'), u.link, `${d.title} · ${u.name}`);
     };
   };
-  draw();
-  const first = d.episodes[line].list[0];
-  if (first) playInto($('#player'), first.link, `${d.title} · ${first.name}`);
+  let startEp = 0;
+  if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度
+    const r = App.resume; App.resume = null;
+    if (d.episodes[r.line]?.list.length) line = r.line;
+    startEp = Math.min(r.ep || 0, d.episodes[line].list.length - 1);
+  }
+  curEp = startEp;
+  draw(startEp);
+  const cur = d.episodes[line].list[startEp];
+  if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`);
+  if (startEp > 0) toast(`已在新源第 ${startEp + 1} 集续播`);
   Focus.set($('#player'));
+}
+/* 播放页"搜本作"：弹出可编辑搜索条 → 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
+function openFindBox(title, getState) {
+  const wrap = $('#findWrap'); if (!wrap) return;
+  if (wrap.innerHTML) { wrap.innerHTML = ''; return; } // 再点一次收起
+  wrap.innerHTML = `<div class="sbox" style="padding:8px 0"><input id="findKw" data-focus value="${esc(title)}" placeholder="片名可编辑">
+    <button class="btn" data-focus id="findGo">全源搜索</button></div>
+    <div class="hrow" id="findRes" style="flex-wrap:wrap;padding:0"></div>`;
+  const runFind = async () => {
+    const kw = $('#findKw').value.trim(); if (!kw) return;
+    const res = $('#findRes'); res.innerHTML = '<span class="muted" style="font-size:12px">全源搜索中…</span>';
+    const sources = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
+    const pages = await pMap(sources, ({ s }) =>
+      httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(kw)}&pg=1`), 8000)
+        .then(raw => parseList(raw, s).filter(v => isRelevant(v.name, kw)).map(v => ({ ...v, source: s }))).catch(() => []), 6);
+    if (!$('#findRes')) return;
+    const found = pages.flat().slice(0, 30);
+    res.innerHTML = found.length
+      ? found.map((f, i) => `<button class="chip" data-focus data-f="${i}">${esc(f.name)}｜${esc(f.source.name)}${f.remarks ? '·' + esc(f.remarks) : ''}</button>`).join('')
+      : '<span class="muted" style="font-size:12px">各源均无结果</span>';
+    res.onclick = e => {
+      const b = e.target.closest('[data-f]'); if (!b) return;
+      const it = found[+b.dataset.f];
+      const st = getState();
+      App.resume = { line: st.line, ep: st.ep, sec: st.sec };
+      openDetail(it);
+    };
+  };
+  $('#findGo').onclick = runFind;
+  $('#findKw').onkeydown = e => { if (e.key === 'Enter') runFind(); };
+  $('#findKw').focus(); $('#findKw').select();
+  if (title) runFind();
 }
 async function doChangeSource() {
   toast('换源：正在其它源查找同名…');
@@ -1116,7 +1202,7 @@ function renderKeep() {
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
-const Live = { srcIdx: 0, groups: [], cur: -1, chans: [], panelOpen: false, gi: 0 };
+const Live = { srcIdx: Math.max(0, LS('fongmi_live_idx', 0)), groups: [], cur: -1, chans: [], panelOpen: false, gi: 0 };
 function parseLiveChannels(text) {
   const t = text.trim();
   const chans = [];
@@ -1159,7 +1245,7 @@ function renderLive() {
   if (!lives.length) { toast('无直播源，请到普通调试台导入含直播的订阅'); return; }
   if (lives.length > 1) {
     body.insertAdjacentHTML('afterbegin', `<div class="hrow" style="padding:6px 28px">${lives.map((x, i) => `<button class="chip${i === Live.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(x.name)}</button>`).join('')}</div>`);
-    body.querySelector('[data-i]').parentElement.onclick = e => { const b = e.target.closest('[data-i]'); if (!b) return; Live.srcIdx = +b.dataset.i; Live.cur = -1; renderLive(); };
+    body.querySelector('[data-i]').parentElement.onclick = e => { const b = e.target.closest('[data-i]'); if (!b) return; Live.srcIdx = +b.dataset.i; localStorage.setItem('fongmi_live_idx', String(Live.srcIdx)); Live.cur = -1; renderLive(); };
   }
   loadLiveList();
 }
