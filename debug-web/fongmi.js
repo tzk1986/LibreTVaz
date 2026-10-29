@@ -14,7 +14,21 @@ async function httpGet(url, timeout = 12000) {
 }
 
 /* ================= 数据层（与 CmsRepository 同规则） ================= */
-const SRC = (() => { try { return JSON.parse(localStorage.getItem('libretvaz_sources')) || { vod: [], live: [] }; } catch { return { vod: [], live: [] }; } })();
+const loadSrc = () => { try { return JSON.parse(localStorage.getItem('libretvaz_sources')) || { vod: [], live: [] }; } catch { return { vod: [], live: [] }; } };
+let SRC = loadSrc();
+const syncSrc = () => { SRC = loadSrc(); };
+// 多标签页共用 localStorage：聚焦时重同步，否则本窗旧快照会在 saveSrc 时把别的标签页删掉的源写回去
+window.addEventListener('focus', () => {
+  const before = JSON.stringify(SRC);
+  syncSrc();
+  if (JSON.stringify(SRC) === before) return;
+  if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; Home.tab = null; Vod.tab = null; }
+  if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0;
+  $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
+  if (App.view === 'home') renderHome();
+  else if (App.view === 'vod') renderVod();
+  else if (App.view === 'live') renderLive();
+});
 const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
@@ -150,7 +164,8 @@ $('#siteName').onclick = openSiteDialog;
 setInterval(() => { const d = new Date(); $('#clock').textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }, 1000);
 
 function openSiteDialog() {
-  if (!SRC.vod.length) return toast('无点播源，请到普通调试台「内置已测源」导入');
+  syncSrc();
+  if (!SRC.vod.length) return toast('无点播源，可在功能行「源管理」导入订阅或添加内置源');
   $('#siteModal').classList.add('open');
   $('#siteGrid').innerHTML = SRC.vod.map((s, i) => `<button class="siteitem${i === Home.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</button>`).join('');
   $('#siteGrid').onclick = e => {
@@ -252,6 +267,8 @@ async function parseExpanded(text, fetcher) {
   return parseRoot(root);
 }
 function openSrcMgr() {
+  syncSrc();
+  if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0;
   $('#srcModal').classList.add('open');
   drawSrcMgr();
   Focus.set($('#srcMgr').querySelector('[data-focus]'));
@@ -286,7 +303,11 @@ function drawSrcMgr() {
   };
   $('#smClear').onclick = () => {
     if (!confirm('确认清除所有点播源？')) return;
-    SRC.vod = []; saveSrc(); Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange();
+    syncSrc();
+    SRC.vod = []; saveSrc();
+    Home.srcIdx = 0; Home.items = []; Home.page = 1; Home.more = false; Home.tab = null;
+    Vod.items = []; Vod.page = 1; Vod.more = false; Vod.tab = null;
+    drawSrcMgr(); refreshAfterSourceChange();
   };
   $('#smClose').onclick = closeSrcMgr;
   $('#smImport').onclick = () => doImport($('#subUrl').value);
@@ -307,6 +328,7 @@ async function doImport(url) {
   try {
     const text = await httpGet(url, 20000);
     const p = await parseExpanded(text, u => httpGet(u, 20000));
+    syncSrc(); // 拉取期间其它标签页可能已改动，合并前以最新存储为准
     const oldVod = new Set(SRC.vod.map(v => norm(v.url)));
     const oldLive = new Set(SRC.live.map(l => norm(l.url)));
     const nv = p.vod.filter(v => !oldVod.has(norm(v.url)));
@@ -347,7 +369,7 @@ function bindGrid(el, items, onPick, onDel) {
 /* ================= 首页（HomeActivity：功能行 + 最近观看 + 更新推荐） ================= */
 const Home = { srcIdx: 0, types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
 function renderHome() {
-  const hist = LS('fongmi_hist', []);
+  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]);
   body.innerHTML = `<main id="scroller">
     <div class="funcs" id="funcs">
       <div class="func" data-focus data-nav="vod"><b>点播</b><i>VodActivity</i></div>
