@@ -24,7 +24,7 @@ data class ParsedSubscription(
 )
 
 object SubscriptionParser {
-    private const val MAX_VOD = 100
+    private const val MAX_VOD = 200
     private const val MAX_LIVE = 50
     private const val MAX_REPOS = 20
     private val SPIDER_PATTERN = Pattern.compile("^csp_|\\.(?:jar|js|py)(?:[?#].*)?$", Pattern.CASE_INSENSITIVE)

@@ -14,7 +14,7 @@ async function httpGet(url, timeout = 12000) {
 }
 
 /* ================= 数据层（与 CmsRepository 同规则） ================= */
-const loadSrc = () => { try { return JSON.parse(localStorage.getItem('libretvaz_sources')) || { vod: [], live: [] }; } catch { return { vod: [], live: [] }; } };
+const loadSrc = () => { try { const o = JSON.parse(localStorage.getItem('libretvaz_sources')) || {}; return { vod: o.vod || [], live: o.live || [], subs: o.subs || [] }; } catch { return { vod: [], live: [], subs: [] }; } };
 let SRC = loadSrc();
 const syncSrc = () => { SRC = loadSrc(); };
 // 多标签页共用 localStorage：聚焦时重同步，否则本窗旧快照会在 saveSrc 时把别的标签页删掉的源写回去
@@ -170,7 +170,13 @@ function openSiteDialog() {
   syncSrc();
   if (!SRC.vod.length) return toast('无点播源，可在功能行「源管理」导入订阅或添加内置源');
   $('#siteModal').classList.add('open');
-  $('#siteGrid').innerHTML = SRC.vod.map((s, i) => `<button class="siteitem${i === Home.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</button>`).join('');
+  const rank = i => { const h = healthOf(SRC.vod[i].url); return h ? (h.fails >= DEAD_FAILS ? 2 : 0) : 1; };
+  const msOf = i => healthOf(SRC.vod[i].url)?.ms ?? 1e9;
+  const order = SRC.vod.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || msOf(a) - msOf(b));
+  $('#siteGrid').innerHTML = order.map(i => {
+    const s = SRC.vod[i], h = healthOf(s.url), dead = rank(i) === 2;
+    return `<button class="siteitem${i === Home.srcIdx ? ' on' : ''}${dead ? ' dead' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}${h ? `<small style="display:block;font-size:11px;color:${dead ? '#f28b82' : '#81c995'}">${dead ? '失效' : (h.ms ?? '') + 'ms'}</small>` : ''}</button>`;
+  }).join('');
   $('#siteGrid').onclick = e => {
     const b = e.target.closest('[data-i]'); if (!b) return;
     Home.srcIdx = +b.dataset.i;
@@ -273,7 +279,7 @@ function jsonLoose(text) {
 }
 function parseRoot(root) {
   const vod = [], live = []; let skipped = 0; let name = null; let format = 'libretv';
-  const pushVod = v => { const key = normUrl(v.url); if (!key || vod.some(x => normUrl(x.url) === key)) { skipped++; return; } if (vod.length >= 100) { skipped++; return; } vod.push(v); };
+  const pushVod = v => { const key = normUrl(v.url); if (!key || vod.some(x => normUrl(x.url) === key)) { skipped++; return; } if (vod.length >= 200) { skipped++; return; } vod.push(v); };
   const pushLive = l => { const key = normUrl(l.url); if (!key || live.some(x => normUrl(x.url) === key)) { skipped++; return; } if (live.length >= 50) { skipped++; return; } live.push(l); };
   if (Array.isArray(root)) {
     const has = root.some(o => o && o.baseUrl);
@@ -320,7 +326,7 @@ async function parseExpanded(text, fetcher) {
     const vod = [], live = []; let reposFailed = 0; const seenV = new Set(), seenL = new Set();
     for (const r of settled) {
       if (r.status !== 'fulfilled') { reposFailed++; continue; }
-      for (const v of r.value.vod) { const k = normUrl(v.url); if (!seenV.has(k) && vod.length < 100) { seenV.add(k); vod.push(v); } }
+      for (const v of r.value.vod) { const k = normUrl(v.url); if (!seenV.has(k) && vod.length < 200) { seenV.add(k); vod.push(v); } }
       for (const l of r.value.live) { const k = normUrl(l.url); if (!seenL.has(k) && live.length < 50) { seenL.add(k); live.push(l); } }
     }
     if (!vod.length && !live.length) throw new Error(`多仓展开失败 ${reposFailed}/${entries.length}，且无可导入源`);
@@ -338,11 +344,14 @@ function openSrcMgr() {
 function closeSrcMgr() { $('#srcModal').classList.remove('open'); }
 function drawSrcMgr() {
   $('#srcMgr').innerHTML = `
-    <div class="hrow" style="margin-bottom:10px">
+    <div class="hrow" style="margin-bottom:10px;flex-wrap:wrap">
       <button class="btn" data-focus id="smAdd">＋ 添加内置已测源</button>
+      <button class="btn" data-focus id="smSubNow">立即更新订阅</button>
+      <button class="btn${autoOn() ? ' on' : ''}" data-focus id="smAuto">自动维护：${autoOn() ? '开' : '关'}</button>
       <button class="btn" data-focus id="smClear">清除所有点播源</button>
       <button class="btn" data-focus id="smClose">关闭(Esc)</button>
     </div>
+    <p class="muted" style="margin:0 0 4px">订阅 ${SRC.subs.length} 条（每 24h 自动重拉合并新源）· 死源连续失败 ${DEAD_FAILS} 次标失效，满 7 天自动移除 · 当前源失效自动切换最快健康源（跳过成人源）</p>
     <h3>导入订阅（复用完整调试台同款解析：tvbox / 多仓 urls / 内置格式）</h3>
     <div class="sbox" style="padding:6px 0">
       <input id="subUrl" placeholder="粘贴订阅地址（.json 配置或 TVBox 多仓）" data-focus style="flex:1">
@@ -352,19 +361,20 @@ function drawSrcMgr() {
       ${PRESETS.map(p => `<button class="btn" data-focus data-preset="${esc(p.url)}">${esc(p.name)}</button>`).join('')}
     </div>
     <p id="impMsg" class="muted" style="margin:6px 0;min-height:20px"></p>
-    <h3>点播源（${SRC.vod.length}）</h3>
-    ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span><span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
+    <h3>点播源（${SRC.vod.length}/200）</h3>
+    ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span>${hb(s)}<span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
     <h3>直播源（${SRC.live.length}）</h3>
     ${SRC.live.map((l, i) => `<div class="srcrow"><span class="n">${esc(l.name)}</span><span class="url">${esc(l.url)}</span><button class="rm" data-focus data-rml="${i}">删除</button></div>`).join('') || '<p class="muted">无直播源</p>'}`;
   $('#smAdd').onclick = () => {
     const has = new Set(SRC.vod.map(v => norm(v.url)));
     const add = BUILTIN_SOURCES.filter(s => !has.has(norm(s.url)));
     if (!add.length) return toast('内置源已全部添加');
-    SRC.vod = [...SRC.vod, ...add].slice(0, 100);
+    SRC.vod = [...SRC.vod, ...add].slice(0, 200);
     saveSrc(); toast(`已添加 ${add.length} 个已测源`); drawSrcMgr(); refreshAfterSourceChange();
   };
   $('#smClear').onclick = () => {
-    if (!confirm('确认清除所有点播源？')) return;
+    if (!confirm('确认清除所有点播源？\n（将同时关闭自动维护，避免订阅自动回填——方便手动测试导入；可在「自动维护」按钮再打开）')) return;
+    localStorage.setItem('fongmi_auto', '0');
     syncSrc();
     SRC.vod = []; saveSrc();
     Home.srcIdx = 0; Home.items = []; Home.page = 1; Home.more = false; Home.tab = null;
@@ -372,6 +382,12 @@ function drawSrcMgr() {
     drawSrcMgr(); refreshAfterSourceChange();
   };
   $('#smClose').onclick = closeSrcMgr;
+  $('#smAuto').onclick = () => {
+    localStorage.setItem('fongmi_auto', autoOn() ? '0' : '1');
+    drawSrcMgr();
+    toast(autoOn() ? '源自动维护已开启' : '自动维护已关闭：不再测活/更新订阅/自动切换');
+  };
+  $('#smSubNow').onclick = () => { localStorage.setItem('fongmi_subs_ts', '0'); toast('正在更新订阅…'); sourceGuard(); };
   $('#smImport').onclick = () => doImport($('#subUrl').value);
   $('#subUrl').onkeydown = e => { if (e.key === 'Enter') doImport($('#subUrl').value); };
   $('#presetRow').onclick = e => { const b = e.target.closest('[data-preset]'); if (b) { $('#subUrl').value = b.dataset.preset; doImport(b.dataset.preset); } };
@@ -395,8 +411,9 @@ async function doImport(url) {
     const oldLive = new Set(SRC.live.map(l => norm(l.url)));
     const nv = p.vod.filter(v => !oldVod.has(norm(v.url)));
     const nl = p.live.filter(l => !oldLive.has(norm(l.url)));
-    SRC.vod = [...SRC.vod, ...nv].slice(0, 100);
+    SRC.vod = [...SRC.vod, ...nv].slice(0, 200);
     SRC.live = [...SRC.live, ...nl].slice(0, 50);
+    if (!SRC.subs.includes(normUrl(url))) SRC.subs.push(normUrl(url));
     saveSrc();
     if (msg) msg.innerHTML = `<span class="ok">导入成功（${p.format}）：点播 +${nv.length} · 直播 +${nl.length}${p.repos ? ` · 仓库 ${p.repos - p.reposFailed}/${p.repos}` : ''}${p.skipped ? ` · 跳过 ${p.skipped}` : ''}</span>`;
     drawSrcMgr(); refreshAfterSourceChange();
@@ -409,6 +426,111 @@ function refreshAfterSourceChange() {
   $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
   if (App.view === 'vod') { Home.tab = null; Vod.tab = null; renderVod(); }
   else if (App.view === 'home') renderHome();
+}
+
+/* ================= 源自维护引擎（基础版） =================
+ * 健康档案 + 启动守护（当前源失效自动切最快健康源）+ 后台补测 + 订阅自动更新 + 死源清理
+ * 基础版先保证源范围与自动化，播放中暂停探测等性能优化后置 */
+const DEAD_FAILS = 3, DEAD_REMOVE_MS = 7 * 864e5, RECHECK_MS = 6 * 36e5, SUBS_REFRESH_MS = 24 * 36e5;
+let HEALTH = LS('fongmi_health', {});
+const saveHealth = () => localStorage.setItem('fongmi_health', JSON.stringify(HEALTH));
+const healthOf = u => HEALTH[normUrl(u)] || null;
+const isDead = u => { const h = healthOf(u); return !!h && h.fails >= DEAD_FAILS; };
+const autoOn = () => !!LS('fongmi_auto', 1);
+const hb = s => {
+  const h = healthOf(s.url); if (!h) return '';
+  const dead = h.fails >= DEAD_FAILS;
+  return `<span class="${dead ? 'err' : 'ok'}" style="font-size:11px;flex:none">${dead ? '✗失效' : '✓' + (h.ms ?? '') + 'ms'}</span>`;
+};
+function recordOk(s, ms) { HEALTH[normUrl(s.url)] = { ok: true, ms, fails: 0, err: null, ts: Date.now(), deadSince: null }; saveHealth(); }
+function recordFail(s, err) {
+  const old = healthOf(s.url) || {};
+  const fails = (old.fails || 0) + 1;
+  HEALTH[normUrl(s.url)] = { ok: false, ms: old.ms ?? null, fails, err, ts: Date.now(), deadSince: fails >= DEAD_FAILS ? (old.deadSince || Date.now()) : null };
+  saveHealth();
+}
+async function probeOne(s) {
+  const t0 = performance.now();
+  try {
+    const types = parseTypes(await httpGet(listUrl(s.url, 'ac=list'), 8000));
+    if (!types.length) throw new Error('ac=list 未返回分类');
+    recordOk(s, Math.round(performance.now() - t0));
+    return true;
+  } catch (e) { recordFail(s, String(e.message || e).slice(0, 60)); return false; }
+}
+const BgProbe = { running: false };
+async function probeRestBackground() {
+  if (BgProbe.running) return;
+  BgProbe.running = true;
+  let qi = 0;
+  const worker = async () => {
+    while (qi < SRC.vod.length) {
+      const s = SRC.vod[qi++];
+      const h = healthOf(s.url);
+      if (h && Date.now() - h.ts < 60e3) continue;
+      await probeOne(s);
+      if (App.view === 'probe') drawProbeRows();
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  BgProbe.running = false;
+}
+function pickBestSource() {
+  const ranked = SRC.vod
+    .map((s, i) => ({ s, i, h: healthOf(s.url) }))
+    .filter(x => !x.s.isAdult && x.h && x.h.ok && x.h.fails < DEAD_FAILS)
+    .sort((a, b) => (a.h.ms ?? 1e9) - (b.h.ms ?? 1e9));
+  return ranked.length ? ranked[0].i : -1;
+}
+function pruneDeadSources() {
+  const keep = SRC.vod.filter(s => { const h = healthOf(s.url); return !(h && h.deadSince && Date.now() - h.deadSince > DEAD_REMOVE_MS); });
+  const removed = SRC.vod.length - keep.length;
+  if (removed) {
+    SRC.vod = keep;
+    if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0;
+    saveSrc(); refreshAfterSourceChange();
+    toast(`已清理 ${removed} 个连续失效满 7 天的源`);
+  }
+}
+async function refreshSubsIfStale() {
+  if (!SRC.subs.length) { SRC.subs = PRESETS.map(p => normUrl(p.url)); localStorage.setItem('fongmi_subs_ts', '0'); saveSrc(); }
+  const ts = +LS('fongmi_subs_ts', 0);
+  if (SRC.vod.length && Date.now() - ts < SUBS_REFRESH_MS) return;
+  localStorage.setItem('fongmi_subs_ts', String(Date.now()));
+  let added = 0;
+  for (const sub of SRC.subs.slice(0, 5)) {
+    try {
+      const p = await parseExpanded(await httpGet(sub, 20000), u => httpGet(u, 20000));
+      const have = new Set(SRC.vod.map(v => normUrl(v.url)));
+      const nv = p.vod.filter(v => !have.has(normUrl(v.url)));
+      if (nv.length) { SRC.vod = [...SRC.vod, ...nv].slice(0, 200); added += nv.length; }
+    } catch { /* 订阅暂时不可达，下个周期再试 */ }
+  }
+  if (added) { saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源`); }
+}
+let guarding = false;
+async function sourceGuard() {
+  if (guarding || !autoOn()) return;
+  guarding = true;
+  try {
+    pruneDeadSources();
+    await refreshSubsIfStale();
+    if (!SRC.vod.length) return;
+    let s = SRC.vod[Home.srcIdx];
+    const h = s && healthOf(s.url);
+    if (s && (!h || !h.ok || Date.now() - h.ts > RECHECK_MS)) await probeOne(s);
+    s = SRC.vod[Home.srcIdx];
+    if (s && isDead(s.url)) {
+      let best = pickBestSource();
+      if (best < 0) { await probeRestBackground(); best = pickBestSource(); }
+      if (best >= 0) {
+        Home.srcIdx = best;
+        toast(`当前源已失效，自动切换到「${SRC.vod[best].name}」`);
+        refreshAfterSourceChange();
+      } else toast('所有点播源均不可用：请检查网络，或在源管理重新导入');
+    }
+    probeRestBackground();
+  } finally { guarding = false; }
 }
 
 /* ================= 卡片渲染（adapter_vod_rect 同款） ================= */
@@ -560,9 +682,9 @@ function renderCollect() {
     document.querySelectorAll('#cTabs .chip').forEach(c => c.classList.toggle('on', c === b));
     drawCollectTab();
   };
-  const sources = SRC.vod;
+  const sources = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
   if (!sources.length) { $('#cGrid').innerHTML = '<p class="err">无点播源</p>'; return; }
-  sources.forEach((s, si) => {
+  sources.forEach(({ s, si }) => {
     (async () => {
       try {
         const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
@@ -653,7 +775,7 @@ async function openDetail(item) {
 }
 async function doChangeSource() {
   toast('换源：正在其它源查找同名…');
-  const others = SRC.vod.filter((_, i) => i !== Home.srcIdx);
+  const others = SRC.vod.filter((s, i) => i !== Home.srcIdx && !isDead(s.url));
   const title = ($('#vtxt h2')?.firstChild?.textContent || '').trim();
   if (!title) return;
   const found = [];
@@ -700,8 +822,10 @@ async function probeAll() {
       let list = [];
       if (types.length) list = parseList(await httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(types[0].id)}&pg=1`), 12000), s);
       Probe.rows[i] = { name: s.name, url: s.url, ms: Math.round(performance.now() - t0), state: list.length ? `OK：${types.length} 分类 / 列表 ${list.length} 条` : (types.length ? '仅分类可用，列表为空' : 'ac=list 与列表均无数据 → 源可能已失效') };
+      if (types.length) recordOk(s, Probe.rows[i].ms); else recordFail(s, 'ac=list 与列表均无数据');
     } catch (e) {
       Probe.rows[i] = { name: s.name, url: s.url, ms: Math.round(performance.now() - t0), state: '失败：' + (e.message || e) };
+      recordFail(s, String(e.message || e).slice(0, 60));
     }
     drawProbeRows();
   }
@@ -828,3 +952,4 @@ function inputDigit(k) {
 
 /* ================= 启动 ================= */
 switchView('home');
+setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）

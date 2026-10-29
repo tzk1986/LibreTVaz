@@ -17,7 +17,7 @@ class SourceStore(context: Context) {
         val url = normalizeVodUrl(source.url)
         if (!isHttp(url)) return false
         return mutateVod { list ->
-            if (list.size >= 100 || list.any { it.url == url }) false
+            if (list.size >= MAX_VOD || list.any { it.url == url }) false
             else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url)); true }
         }
     }
@@ -26,7 +26,7 @@ class SourceStore(context: Context) {
         val url = source.url.trim()
         if (!isHttp(url)) return false
         return mutateLive { list ->
-            if (list.size >= 50 || list.any { it.url == url }) false
+            if (list.size >= MAX_LIVE || list.any { it.url == url }) false
             else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url)); true }
         }
     }
@@ -65,7 +65,7 @@ class SourceStore(context: Context) {
     private fun mergeVod(target: MutableList<VodSource>, incoming: List<VodSource>): Int {
         var added = 0
         for (s in incoming) {
-            if (target.size >= 100) break
+            if (target.size >= MAX_VOD) break
             if (target.none { it.url == s.url }) { target.add(s); added++ }
         }
         return added
@@ -74,7 +74,7 @@ class SourceStore(context: Context) {
     private fun mergeLive(target: MutableList<LiveSource>, incoming: List<LiveSource>): Int {
         var added = 0
         for (s in incoming) {
-            if (target.size >= 50) break
+            if (target.size >= MAX_LIVE) break
             if (target.none { it.url == s.url }) { target.add(s); added++ }
         }
         return added
@@ -138,5 +138,7 @@ class SourceStore(context: Context) {
     companion object {
         private const val KEY_VOD = "vod_sources"
         private const val KEY_LIVE = "live_sources"
+        const val MAX_VOD = 200
+        private const val MAX_LIVE = 50
     }
 }
