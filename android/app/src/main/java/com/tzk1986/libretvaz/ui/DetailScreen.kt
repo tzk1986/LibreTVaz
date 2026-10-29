@@ -41,7 +41,10 @@ fun DetailScreen(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = onBack) { Text("返回") }
             Column(modifier = Modifier.weight(1f)) {
-                Text(item.name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AdultTag(adultOf(item))
+                    Text(item.name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                }
                 Text(
                     listOfNotNull(item.year, item.area, item.typeName, "来源：${item.sourceName}").joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,

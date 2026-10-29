@@ -92,7 +92,7 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
                 item { Text("（空）", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
             } else {
                 items(vodList.mapIndexed { i, s -> i to s }) { (index, s) ->
-                    SourceRow(s.name, s.url) { store.removeVodAt(index); refresh() }
+                    SourceRow(s.name, s.url, s.isAdult) { store.removeVodAt(index); refresh() }
                 }
             }
             item { Text("直播源（${liveList.size}）", style = MaterialTheme.typography.titleMedium) }
@@ -101,6 +101,7 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
             } else {
                 items(liveList.mapIndexed { i, s -> i to s }) { (index, s) ->
                     SourceRow(s.name, s.url) { store.removeLiveAt(index); refresh() }
+
                 }
             }
         }
@@ -108,14 +109,17 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
 }
 
 @Composable
-private fun SourceRow(name: String, url: String, onDelete: () -> Unit) {
+private fun SourceRow(name: String, url: String, adult: Boolean = false, onDelete: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AdultTag(adult)
+                Text(name, style = MaterialTheme.typography.bodyLarge)
+            }
             Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 1)
         }
         TextButton(onClick = onDelete) { Text("删除") }

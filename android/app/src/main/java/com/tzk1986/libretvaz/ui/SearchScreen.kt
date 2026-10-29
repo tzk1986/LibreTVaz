@@ -90,7 +90,10 @@ fun SearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(item.name, style = MaterialTheme.typography.bodyLarge)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                AdultTag(adultOf(item))
+                                Text(item.name, style = MaterialTheme.typography.bodyLarge)
+                            }
                             Text(
                                 listOfNotNull(item.year, item.area, item.typeName, item.remarks).joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,

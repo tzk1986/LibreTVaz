@@ -21,7 +21,6 @@ class CmsRepository {
     suspend fun search(
         wd: String,
         sources: List<VodSource>,
-        filterAdult: Boolean = true,
         onProgress: ((done: Int, total: Int) -> Unit)? = null,
     ): SearchOutcome = coroutineScope {
         val done = AtomicInteger(0)
@@ -42,9 +41,6 @@ class CmsRepository {
 
         val errorMessages = perSource.indices.mapNotNull { i -> errors[i]?.let { "${sources[i].name}：$it" } }
         var filtered = perSource.flatten().distinctBy { it.sourceKey + it.vodId }
-        if (filterAdult) {
-            filtered = filtered.filter { !it.isAdult && !CmsParser.isAdultType(it.typeName) }
-        }
         filtered = filtered.filter { CmsParser.isRelevant(it.name, wd) }
         val exact = CmsParser.normalizeTitle(wd)
         filtered = filtered.sortedWith(
