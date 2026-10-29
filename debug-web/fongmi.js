@@ -33,6 +33,8 @@ const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } 
 const siteLabel = () => Home.aggMode ? '🌐 聚合' : (SRC.vod[Home.srcIdx]?.name || '未配置点播源');
 /* 本地缓存（SWR 模式）：有上次数据先秒显，后台拉新成功后替换并重存；安卓端对应 DiskCache + stale 首屏 */
 const cacheGet = k => { try { const v = JSON.parse(localStorage.getItem('fongmi_cache:' + k)); return (v && v.d) || null; } catch { return null; } };
+const cacheRaw = k => { try { return JSON.parse(localStorage.getItem('fongmi_cache:' + k)) || null; } catch { return null; } };
+const AGG_TTL = 3 * 60 * 1000; // 源级聚合分片缓存 3 分钟内不重复拉取
 const cacheSet = (k, d) => {
   try { localStorage.setItem('fongmi_cache:' + k, JSON.stringify({ t: Date.now(), d })); }
   catch { // 配额满：清掉全部旧缓存，下次访问重新积累
@@ -817,13 +819,6 @@ const aggPool = () => {
   if (first && !first.isAdult && !pool.includes(first)) pool.unshift(first);
   return pool.slice(0, 12);
 };
-const aggProviders = {
-  internal: async () => {
-    const pages = await pMap(aggPool(), s =>
-      httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []), 6);
-    return pages.flat();
-  },
-};
 /* 各源分类树缓存：聚合分类墙按名称匹配每个源的父分类，再取其子类首页合并 */
 const typesCache = new Map();
 const getSrcTypes = s => {
@@ -834,47 +829,71 @@ const getSrcTypes = s => {
   })());
   return typesCache.get(s.url);
 };
-async function loadAggCat(cat) {
-  const grid = $('#vodGrid'); if (!grid) return;
-  const rid = ++Vod.reqId;
-  const ck = 'agg:cat:' + cat.key;
-  const cached = cacheGet(ck);
-  if (cached && cached.length) { Vod.items = sortByYearDesc(cached); Vod.loading = false; Vod.more = false; drawVodGrid(); }
-  else grid.innerHTML = `<p class="muted">正在聚合各源「${cat.key}」（前 ${aggPool().length} 个健康源）…</p>`;
-  const pages = await pMap(aggPool(), async s => {
-    const types = await getSrcTypes(s);
-    const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
-    if (!p) return [];
-    const kids = types.filter(c => c.pid === p.id && c.id !== p.id);
-    const qs = kids.length ? kids.slice(0, 3) : [p];
-    const sub = await pMap(qs, c =>
-      httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`)).then(raw => parseList(raw, s)), 3);
-    return sub.flat();
-  }, 4);
-  if (rid !== Vod.reqId || !Vod.agg || App.view !== 'vod' || !$('#vodGrid')) return;
-  const items = dedupByName(pages.flat());
-  if (items.length) {
-    cacheSet(ck, items);
-    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
-    addWords(Vod.items.map(it => it.name));
-    drawVodGrid();
-  } else if (!cached || !cached.length) toast(`聚合无数据：各源均无「${cat.key}」分类`);
-}
 const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { const k = normalizeTitle(it.name); return k && !seen.has(k) && seen.add(k); }); };
-async function loadAgg() {
+/* 单个源在聚合墙中贡献的数据：cat=null 取全量最新，否则按名称匹配其父分类并取前 3 个子类首页 */
+async function fetchAggSource(s, cat) {
+  if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []);
+  const types = await getSrcTypes(s);
+  const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
+  if (!p) return [];
+  const kids = types.filter(c => c.pid === p.id && c.id !== p.id);
+  const qs = kids.length ? kids.slice(0, 3) : [p];
+  const sub = await pMap(qs, c =>
+    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`)).then(raw => parseList(raw, s)), 3);
+  return sub.flat();
+}
+const aggKey = (s, cat) => 'aggs:' + s.url + '|' + (cat ? cat.key : 'latest');
+/* 聚合墙（按源分片缓存 + 渐进渲染）：
+   ① 先用各源上次分片立即拼出整墙（秒开）② 逐源拉新，一源返回就重画一次，不等最慢源
+   ③ 全部分片 3 分钟内新鲜则跳过请求；渲染完后台低并发预取其余分类，切分类同样秒开 */
+let aggToken = 0;
+async function runAggWall(cat) {
   const grid = $('#vodGrid'); if (!grid) return;
-  const rid = ++Vod.reqId;
-  const cached = cacheGet('agg:latest');
-  if (cached && cached.length) { Vod.items = sortByYearDesc(cached); Vod.loading = false; Vod.more = false; drawVodGrid(); }
-  else grid.innerHTML = '<p class="muted">正在聚合各源最新（前 12 个健康源）…</p>';
-  const items = dedupByName(await aggProviders.internal());
-  if (rid !== Vod.reqId || App.view !== 'vod' || !Vod.agg || !$('#vodGrid')) return;
-  if (items.length) {
-    cacheSet('agg:latest', items);
-    Vod.items = sortByYearDesc(items); Vod.more = false; Vod.loading = false; Vod.page = 1;
-    addWords(Vod.items.map(it => it.name));
+  const rid = ++Vod.reqId, token = ++aggToken;
+  const pool = aggPool();
+  const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && App.view === 'vod' && $('#vodGrid');
+  const merge = () => {
+    const all = [];
+    for (const s of pool) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
+    const items = dedupByName(all);
+    if (!items.length) return false;
+    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
+    addWords(items.map(it => it.name));
     drawVodGrid();
-  } else if (!cached || !cached.length) toast('聚合失败：当前无可用点播源');
+    return true;
+  };
+  const need = [];
+  for (const s of pool) {
+    const v = cacheRaw(aggKey(s, cat));
+    if (!(v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < AGG_TTL)) need.push(s);
+  }
+  if (!merge() && need.length) grid.innerHTML = `<p class="muted">正在聚合各源${cat ? '「' + cat.key + '」' : '最新'}，拉到即显示…</p>`;
+  await pMap(need, async s => {
+    const fresh = await fetchAggSource(s, cat);
+    if (fresh.length) cacheSet(aggKey(s, cat), fresh);
+    if (alive()) merge();
+  }, 5);
+  if (alive() && !Vod.items.length) toast(`聚合无数据：各源均无「${cat ? cat.key : '最新'}」`);
+  if (alive() && !cat) aggPrefetch(rid, token, cat);
+  else if (alive() && cat) aggPrefetch(rid, token, null);
+}
+const loadAgg = () => runAggWall(null);
+const loadAggCat = cat => runAggWall(cat);
+/* 预取其余分类的源分片（只入缓存不渲染），低并发避免抢当前请求带宽 */
+async function aggPrefetch(rid, token, skip) {
+  if (rid !== Vod.reqId || token !== aggToken) return;
+  await new Promise(r => setTimeout(r, 2000));
+  for (const c of [null, ...AGG_CATS]) {
+    if (!c && skip) continue; // 只从最新墙发起「全量+各类」预取
+    if (c === skip) continue;
+    if (rid !== Vod.reqId || token !== aggToken || !Home.aggMode || App.view !== 'vod') return;
+    await pMap(aggPool(), async s => {
+      const k = aggKey(s, c); const v = cacheRaw(k);
+      if (v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < AGG_TTL) return;
+      const fresh = await fetchAggSource(s, c);
+      if (fresh.length) cacheSet(k, fresh);
+    }, 2);
+  }
 }
 const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; };
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
