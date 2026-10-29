@@ -91,6 +91,42 @@ const addWords = names => {
   if (VOCAB.length > 800) VOCAB = VOCAB.slice(-800);
   if (dirty) { try { localStorage.setItem('fongmi_words', JSON.stringify(VOCAB)); } catch { /* 满 */ } }
 };
+/* 扫码远程输入：搜索与订阅导入共用一个 session 二维码（手机页 Tab 切换，免重复扫码） */
+const RemoteIn = { sid: Math.random().toString(36).slice(2, 8), base: '', url: '', onSearch: null };
+async function remoteInit() {
+  try {
+    const j = await (await fetch('/api/remote/base')).json();
+    const host = /^(\d+\.\d+\.\d+\.\d+|[a-f0-9:.]+)$/i.test(location.hostname) ? location.hostname : j.host;
+    RemoteIn.base = `http://${host}:${j.port || 8787}`;
+  } catch { RemoteIn.base = location.origin; }
+  RemoteIn.url = `${RemoteIn.base}/remote?id=${RemoteIn.sid}`;
+  drawQr($('#srchQr')); drawQr($('#smQr'));
+  setInterval(remotePoll, 1500);
+}
+function drawQr(el) {
+  if (!el) return;
+  el.innerHTML = `<div class="qrbox">${window.QRCode ? '<canvas></canvas>' : ''}
+    <div class="qrside"><p class="muted" style="font-size:12px">手机扫码远程输入：搜索关键词与订阅导入共用此码，手机页内 Tab 切换，无需重复扫码${window.QRCode ? '' : '<br>（二维码库未加载，请直接点击下方链接）'}</p>
+    <a href="${esc(RemoteIn.url)}" target="_blank" style="color:var(--accent);font-size:11px;word-break:break-all">${esc(RemoteIn.url) || '初始化中…'}</a></div></div>`;
+  if (window.QRCode) {
+    const c = el.querySelector('canvas');
+    if (RemoteIn.url) QRCode.toCanvas(c, RemoteIn.url, { width: 130, margin: 1, color: { dark: '#e8eaed', light: '#14171a' } }).catch(() => {});
+  }
+}
+async function remotePoll() {
+  if (!RemoteIn.base) return;
+  let hit = null;
+  try { hit = await (await fetch(`${RemoteIn.base}/api/remote/poll?id=${RemoteIn.sid}`)).json(); } catch { return; }
+  if (!hit || !hit.text) return;
+  if (hit.mode === 'sub') {
+    toast('收到远程订阅链接，开始导入…');
+    const inp = $('#subUrl'); if (inp) inp.value = hit.text;
+    doImport(hit.text);
+  } else {
+    if (App.view !== 'search') switchView('search');
+    setTimeout(() => RemoteIn.onSearch && RemoteIn.onSearch(hit.text), 80);
+  }
+}
 function splitPlayUrl(url) {
   return String(url || '').split('#').map(seg => {
     const i = seg.indexOf('$'); if (i < 0) return null;
@@ -406,6 +442,7 @@ function drawSrcMgr() {
       ${PRESETS.map(p => `<button class="btn" data-focus data-preset="${esc(p.url)}">${esc(p.name)}</button>`).join('')}
     </div>
     <p id="impMsg" class="muted" style="margin:6px 0;min-height:20px"></p>
+    <div id="smQr" style="margin:4px 0 10px"></div>
     <h3>点播源（${SRC.vod.length}/200）</h3>
     ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span>${hb(s)}<span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
     <h3>直播源（${SRC.live.length}）</h3>
@@ -440,6 +477,7 @@ function drawSrcMgr() {
     const rv = e.target.closest('[data-rmv]'); if (rv) { SRC.vod.splice(+rv.dataset.rmv, 1); saveSrc(); if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange(); }
     const rl = e.target.closest('[data-rml]'); if (rl) { SRC.live.splice(+rl.dataset.rml, 1); saveSrc(); if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0; drawSrcMgr(); }
   };
+  drawQr($('#smQr'));
   setTimeout(() => $('#subUrl')?.focus(), 50);
 }
 
@@ -651,8 +689,9 @@ async function loadRec(pg = 1) {
   addWords(items.map(it => it.name));
   Home.items = pg === 1 ? items : Home.items.concat(items);
   Home.more = items.length > 0;
-  grid.innerHTML = (err && pg === 1 ? `<p class="err">${esc(err)}</p>` : '') + Home.items.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
-  bindGrid(grid, Home.items, it => openDetail(it));
+  const shown = sortByYearDesc(Home.items);
+  grid.innerHTML = (err && pg === 1 ? `<p class="err">${esc(err)}</p>` : '') + shown.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
+  bindGrid(grid, shown, it => openDetail(it));
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
@@ -706,22 +745,16 @@ async function loadVod(pg = 1) {
   Vod.more = items.length > 0;
   drawVodGrid();
 }
+/* 默认呈现最新：按 vod_year 倒序（同年保持源返回的更新时间序），无需再点筛选 */
+const yearNum = it => parseInt(it.year, 10) || 0;
+const sortByYearDesc = items =>
+  items.map((it, i) => [it, i]).sort((a, b) => (yearNum(b[0]) - yearNum(a[0])) || (a[1] - b[1])).map(p => p[0]);
 function drawVodGrid() {
   const grid = $('#vodGrid'); if (!grid) return;
-  const t = Vod.tab;
-  let shown = Vod.items, html = '';
-  const yr = String(new Date().getFullYear());
-  const canPin = !!t && !Vod.area && !Vod.year && !Vod.lang;
-  if (canPin) {
-    const fresh = Vod.items.filter(it => it.year === yr);
-    const rest = Vod.items.filter(it => it.year !== yr);
-    if (fresh.length) {
-      shown = [...fresh, ...rest];
-      html = `<div class="secthead">🆕 ${yr} 最新 · 直接看</div>${fresh.map((it, i) => cardHtml(it, i)).join('')}<div class="secthead">全部 · 按更新排序</div>${rest.map((it, i) => cardHtml(it, i + fresh.length)).join('')}`;
-    }
-  }
-  if (!html) html = shown.map((it, i) => cardHtml(it, i)).join('');
-  grid.innerHTML = html || (Vod.items.length ? '' : '<p class="muted">该分类暂无数据</p>');
+  const shown = sortByYearDesc(Vod.items);
+  grid.innerHTML = shown.length
+    ? shown.map((it, i) => cardHtml(it, i)).join('')
+    : '<p class="muted">该分类暂无数据</p>';
   bindGrid(grid, shown, it => openDetail(it));
 }
 function drawSubRow() {
@@ -749,16 +782,18 @@ function drawSubRow() {
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
   const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入或点选下方键盘字母，回车搜索" data-focus></div>
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus></div>
     <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
       <button class="btn" data-focus data-kb="C">清空</button>
+      <div id="srchQr" style="margin-left:auto"></div>
     </div>
     <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
+    <div class="hrow" id="candRow" style="padding:0 28px 6px"></div>
     <main id="scroller">
       ${LS('fongmi_kw', []).length ? `<div class="rowhead">搜索历史</div><div class="hrow">${LS('fongmi_kw', []).map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}
-      <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方会实时联想浏览过的片名，遥控选中即填入。词库来自你浏览/搜索积累的资源名${pinCollator ? '' : '（当前浏览器不支持拼音排序，联想退化为子串匹配）'}。</p>
+      <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方实时联想当前源里的片名，遥控选中即填入。候选词进入本页时自动从当前源拉取积累；手机扫码可与电视同步输入。</p>
     </main>`;
   const run = () => {
     const kw = $('#kw').value.trim(); if (!kw) return;
@@ -768,7 +803,8 @@ function renderSearch() {
     switchView('collect'); renderCollect();
   };
   const drawSug = () => {
-    const q = $('#kw').value.trim().toLowerCase();
+    const inp = $('#kw'); if (!inp) return;
+    const q = inp.value.trim().toLowerCase();
     const row = $('#sugRow'); if (!row) return;
     if (!q) { row.innerHTML = ''; return; }
     let hits = [];
@@ -779,8 +815,16 @@ function renderSearch() {
     hits = [...new Set(hits)].slice(0, 14);
     row.innerHTML = hits.length
       ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join('')
-      : (VOCAB.length ? '<span class="muted" style="font-size:12px">没有匹配的已收录片名</span>' : '<span class="muted" style="font-size:12px">词库为空：先去首页/分类浏览一些资源再回来联想</span>');
+      : '<span class="muted" style="font-size:12px">没有匹配的片名，可点候选词或换字母试试</span>';
   };
+  const drawCand = () => {
+    const row = $('#candRow'); if (!row) return;
+    const words = [...new Set(VOCAB.slice(-200).reverse())].slice(0, 14);
+    row.innerHTML = words.length
+      ? `<span class="muted" style="font-size:12px;white-space:nowrap">资源候选词</span>` + words.map(w => `<button class="chip" data-focus data-k="${esc(w)}">${esc(w)}</button>`).join('')
+      : '<span class="muted" style="font-size:12px">候选词加载中…（需有点播源）</span>';
+  };
+  RemoteIn.onSearch = t => { const inp = $('#kw'); if (!inp) return; inp.value = t; drawSug(); run(); };
   $('#kw').onkeydown = e => { if (e.key === 'Enter') run(); };
   $('#kw').oninput = drawSug;
   body.onclick = e => {
@@ -796,6 +840,20 @@ function renderSearch() {
     if (w) { $('#kw').value = w.dataset.w; drawSug(); return; }
     const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); }
   };
+  drawQr($('#srchQr'));
+  drawCand();
+  (async () => {
+    if (VOCAB.length >= 120) return;
+    const s = SRC.vod[Home.srcIdx]; if (!s) return;
+    try {
+      const names = [];
+      for (let pg = 1; pg <= 3 && App.view === 'search'; pg++) {
+        names.push(...parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s).map(it => it.name));
+      }
+      addWords(names.filter(Boolean));
+      if (App.view === 'search') { drawCand(); drawSug(); }
+    } catch { /* 静默 */ }
+  })();
   setTimeout(() => $('#kw').focus(), 50);
 }
 
@@ -1083,3 +1141,4 @@ function inputDigit(k) {
 /* ================= 启动 ================= */
 switchView('home');
 setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）
+remoteInit(); // 扫码远程输入（搜索/订阅导入共用一个码）
