@@ -123,6 +123,12 @@ function parseDetail(data, source) {
   };
 }
 const apiBase = s => s.url.replace(/\/+$/, '');
+// TVBox 同款首页：源 api 无参请求返回「最近更新」，仅带 pg 翻页
+const homeList = async (s, pg) => {
+  const clean = s.url.replace(/\?+$/, '');
+  const url = clean.includes('?') ? `${clean}&pg=${pg}` : `${clean}?pg=${pg}`;
+  return parseList(JSON.parse(await httpGet(url, 10000)), s);
+};
 const getTypes = async s => parseTypes(JSON.parse(await httpGet(apiBase(s) + '?ac=list', 10000)));
 const listByType = async (s, typeId, pg) => parseList(JSON.parse(await httpGet(`${apiBase(s)}?ac=videolist&t=${encodeURIComponent(typeId)}&pg=${pg}`, 10000)), s);
 const getDetail = async (s, id) => parseDetail(JSON.parse(await httpGet(`${apiBase(s)}?ac=videolist&ids=${encodeURIComponent(id)}`, 10000)), s);
@@ -294,7 +300,7 @@ async function initBrowse() {
   state.loading = true; render();
   try {
     state.types = await getTypes(s);
-    state.type = state.types[0] || null;
+    state.type = null; // 首页=最近更新墙（TVBox 同款），点分类才进列表
   } catch (e) { state.error = `分类加载失败：${e.message || e}（该源可能不支持 ac=list）`; }
   await loadPage(1);
 }
@@ -303,7 +309,7 @@ async function loadPage(pg) {
   if (!s || !state.type) { state.loading = false; render(); return; }
   state.loading = true; state.error = null; render();
   try {
-    const page = await listByType(s, state.type.id, pg);
+    const page = state.type ? await listByType(s, state.type.id, pg) : await homeList(s, pg);
     state.items = pg === 1 ? page : state.items.concat(page);
     state.more = page.length > 0; state.page = pg;
     if (!page.length && pg === 1) state.error = '该分类暂无数据，源可能不支持分类列表';
@@ -329,7 +335,7 @@ function viewBrowse() {
   const sources = vodSources();
   let html = `<div class="chips">${chips(sources, state.sourceIdx, 'pickSource', o => o.name + (o.isAdult ? '·成人' : ''))}</div>`;
   if (!sources.length) return html + `<p class="muted" style="margin-top:20px">尚未导入点播源，请先到「源管理」导入订阅地址。</p>`;
-  html += `<div class="chips" style="margin-top:8px">${state.types.map(t => `<span class="chip ${t.id === (state.type || {}).id ? 'sel' : ''}" onclick="pickType('${esc(t.id)}','${esc(t.name)}')">${esc(t.name)}</span>`).join('')}</div>`;
+  html += `<div class="chips" style="margin-top:8px"><span class="chip ${!state.type ? 'sel' : ''}" onclick="pickType(null)">首页（最近更新）</span>${state.types.map(t => `<span class="chip ${t.id === (state.type || {}).id ? 'sel' : ''}" onclick="pickType('${esc(t.id)}','${esc(t.name)}')">${esc(t.name)}</span>`).join('')}</div>`;
   html += `<div style="margin:8px 0">${state.loading ? '<span class="muted">加载中…</span>' : ''}${state.error ? `<span class="err">${esc(state.error)}</span>` : ''}</div>`;
   html += `<div class="grid">${state.items.map((it, i) => `
     <div class="card" onclick="openDetail(${i})">
@@ -341,7 +347,7 @@ function viewBrowse() {
   return html;
 }
 window.pickSource = i => { state.sourceIdx = i; initBrowse(); };
-window.pickType = (id, name) => { state.type = { id, name }; loadPage(1); };
+window.pickType = (id, name) => { state.type = id ? { id, name } : null; loadPage(1); };
 window.openDetail = async i => {
   const it = state.items[i] || (state.results || [])[i];
   state.detail = null; state.detailErr = null; state.detailItem = it;

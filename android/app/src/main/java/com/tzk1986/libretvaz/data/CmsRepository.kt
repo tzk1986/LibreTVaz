@@ -73,6 +73,13 @@ class CmsRepository {
         return list
     }
 
+    /** 首页"最近更新"：与 TVBox 一致，直接 GET 站点 api 根地址不带参数，取源返回的 list */
+    suspend fun home(source: VodSource, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
+        runCatching {
+            CmsParser.parseSearchList(fetchJson("${source.url.removeSuffix("/")}?pg=$page"), source)
+        }.getOrDefault(emptyList())
+    }
+
     /** ac=list 取源分类（影视首页导航用） */
     suspend fun types(source: VodSource): List<VodType> = withContext(Dispatchers.IO) {
         val base = source.url.removeSuffix("/")

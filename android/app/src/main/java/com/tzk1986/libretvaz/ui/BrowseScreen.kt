@@ -5,10 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,7 +26,11 @@ import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
 
-/** TVBox 风格根页面：顶栏功能入口 + 源/分类导航 + 海报墙 */
+/**
+ * TVBox 同款根页面：
+ * 未选分类时首页=源 api 无参请求返回的「最近更新」海报墙（pg 翻页）；
+ * 点分类 chips 切换到该分类的 ac=videolist 列表页（对应 TVBox 的 VodActivity）。
+ */
 @Composable
 fun BrowseScreen(
     store: SourceStore,
@@ -55,18 +60,19 @@ fun BrowseScreen(
     LaunchedEffect(source) {
         type = null
         types = source?.let { repo.types(it) } ?: emptyList()
-        type = types.firstOrNull()
     }
 
     LaunchedEffect(source, type, targetPage) {
-        val s = source; val t = type
-        if (s == null || t == null) return@LaunchedEffect
+        val s = source ?: return@LaunchedEffect
+        val t = type
         loading = true
         error = null
-        val page = repo.listByType(s, t.id, targetPage)
+        val page = if (t == null) repo.home(s, targetPage) else repo.listByType(s, t.id, targetPage)
         if (targetPage == 1) items = page else items = items + page
         canLoadMore = page.isNotEmpty()
-        if (page.isEmpty() && targetPage == 1) error = "该分类暂无数据，源可能不支持分类列表"
+        if (page.isEmpty() && targetPage == 1) {
+            error = if (type == null) "源未返回最近更新数据，可点上方分类浏览" else "该分类暂无数据，源可能不支持分类列表"
+        }
         loading = false
     }
 
@@ -101,20 +107,29 @@ fun BrowseScreen(
         }
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(sources.size) { i ->
+            itemsIndexed(sources) { i, s ->
                 FilterChip(
                     selected = i == sourceIdx,
                     onClick = { sourceIdx = i; targetPage = 1 },
-                    label = { Text(sources[i].name) },
+                    label = { Text(s.name + if (s.isAdult) "·成人" else "") },
                 )
             }
         }
 
         if (types.isNotEmpty()) {
+            val typeList = types
+            val currentType = type
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(types) { t ->
+                item {
                     FilterChip(
-                        selected = t.id == type?.id,
+                        selected = currentType == null,
+                        onClick = { type = null; targetPage = 1 },
+                        label = { Text("首页") },
+                    )
+                }
+                items(typeList) { t ->
+                    FilterChip(
+                        selected = t.id == currentType?.id,
                         onClick = { type = t; targetPage = 1 },
                         label = { Text(t.name) },
                     )
@@ -122,10 +137,14 @@ fun BrowseScreen(
             }
         }
 
-        when {
-            loading -> Text("加载中…")
-            error != null -> Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = type?.name ?: "最近更新",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (loading) Text("加载中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
+        if (error != null && !loading) Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
 
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 120.dp),
@@ -133,8 +152,7 @@ fun BrowseScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items.indices.toList(), key = { it }) { i ->
-                val item = items[i]
+            itemsIndexed(items) { _, item ->
                 PosterCard(item = item, onClick = { onPick(item) })
             }
             if (canLoadMore && !loading) {
