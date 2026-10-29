@@ -208,6 +208,7 @@ const PRESETS = [
   { name: 'noimank 多仓（5源可用）', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
   { name: 'Liucn 单仓（2源可用）', url: 'https://raw.liucn.cc/box/m.json' },
   { name: 'Qist 综合（点播+直播）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
+  { name: 'tvyuan 云端体检聚合（Actions 每小时测速，实测14源可用）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/25175/tvyuan/main/tvbox_collect.json' },
 ];
 const ADULT_KEYWORDS = ['伦理片','福利','倫理片','福利片','日本伦理','日本福利','日本福利片','日本伦理片','擦边短剧','擦边','韩国伦理','里番动漫','门事件','萝莉少女','制服诱惑','国产传媒','cosplay','黑丝诱惑','无码','日本无码','有码','日本有码','SWAG','网红主播','色情片','同性片','福利视频','无码高清','有码高清','91视频','自拍偷拍','mini传媒'];
 const isAdultType = t => !!t && ADULT_KEYWORDS.some(k => t.includes(k));
@@ -493,7 +494,8 @@ function pruneDeadSources() {
   }
 }
 async function refreshSubsIfStale() {
-  if (!SRC.subs.length) { SRC.subs = PRESETS.map(p => normUrl(p.url)); localStorage.setItem('fongmi_subs_ts', '0'); saveSrc(); }
+  const missing = PRESETS.map(p => normUrl(p.url)).filter(u => !SRC.subs.includes(u));
+  if (missing.length) { SRC.subs = [...SRC.subs, ...missing]; localStorage.setItem('fongmi_subs_ts', '0'); saveSrc(); }
   const ts = +LS('fongmi_subs_ts', 0);
   if (SRC.vod.length && Date.now() - ts < SUBS_REFRESH_MS) return;
   localStorage.setItem('fongmi_subs_ts', String(Date.now()));
