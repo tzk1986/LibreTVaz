@@ -38,7 +38,8 @@
   @media (max-width: 1100px) { .grid { grid-template-columns: repeat(4, 1fr); } }
   .card { cursor: pointer; border-radius: 8px; padding: 3px; border: 2px solid transparent; position: relative; }
   .card .pic { aspect-ratio: 2/3; border-radius: 6px; background: var(--card); overflow: hidden; position: relative; }
-  .card .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card .pic img { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; }
+  .card .pic .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 10px; font-size: 15px; line-height: 1.5; color: #7a8087; background: linear-gradient(160deg, #23272b, #191c1f); overflow: hidden; }
   .card .year { position: absolute; right: 4px; top: 4px; background: rgba(0,0,0,.6); color: #ffd76e; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
   .card .site { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.6); color: var(--dim); font-size: 10px; padding: 1px 5px; border-radius: 3px; }
   .card .remark { position: absolute; right: 6px; bottom: 4px; color: #ffd76e; font-size: 11px; text-shadow: 0 1px 2px #000; }

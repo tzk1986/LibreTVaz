@@ -32,6 +32,8 @@ window.addEventListener('focus', () => {
 const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
+// CMS 无参/简化列表不返回 vod_pic，海报墙必须带 ac=videolist；源 api 自带 ac= 时先剔除避免重复
+const listUrl = (u, query) => apiUrl(norm(u).replace(/([?&])ac=[^&#]*/gi, '$1').replace(/[?&]+$/, ''), query);
 
 function parseList(text, source) {
   const j = JSON.parse(text);
@@ -352,7 +354,7 @@ function refreshAfterSourceChange() {
 function cardHtml(it, i, opts = {}) {
   return `<div class="card" data-focus data-i="${i}">
     ${opts.del ? '<button class="del" data-del="1">×</button>' : ''}
-    <div class="pic">${it.pic ? `<img src="/proxy?url=${encodeURIComponent(it.pic)}" loading="lazy" onerror="this.remove()">` : ''}
+    <div class="pic"><div class="ph">${esc(it.name)}</div>${it.pic ? `<img src="/proxy?url=${encodeURIComponent(it.pic)}" loading="lazy" onerror="this.remove()">` : ''}
       ${it.year ? `<span class="year">${esc(it.year)}</span>` : ''}
       ${opts.showSite && it.source ? `<span class="site">${esc(it.source.name)}</span>` : ''}
       ${it.remarks ? `<span class="remark">${esc(it.remarks)}</span>` : ''}</div>
@@ -412,7 +414,7 @@ async function loadRec(pg = 1) {
   Home.loading = true;
   if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Home.items = []; }
   let items = [], err = null;
-  try { items = parseList(await httpGet(apiUrl(s.url, `pg=${pg}`)), s); } catch (e) { err = e.message; }
+  try { items = parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s); } catch (e) { err = e.message; }
   if (App.view !== 'home' || !$('#recGrid')) return;
   Home.loading = false; Home.page = pg;
   Home.items = pg === 1 ? items : Home.items.concat(items);
@@ -453,9 +455,9 @@ async function loadVod(pg = 1) {
   const grid = $('#vodGrid'); if (!grid) return;
   Vod.loading = true;
   if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
-  const q = Vod.tab ? `ac=videolist&t=${encodeURIComponent(Vod.tab.id)}&pg=${pg}` : `pg=${pg}`;
+  const q = Vod.tab ? `ac=videolist&t=${encodeURIComponent(Vod.tab.id)}&pg=${pg}` : `ac=videolist&pg=${pg}`;
   let items = [], err = null;
-  try { items = parseList(await httpGet(apiUrl(s.url, q)), s); } catch (e) { err = e.message; }
+  try { items = parseList(await httpGet(listUrl(s.url, q)), s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
   Vod.loading = false; Vod.page = pg;
   Vod.items = pg === 1 ? items : Vod.items.concat(items);
@@ -500,7 +502,7 @@ function renderCollect() {
   sources.forEach((s, si) => {
     (async () => {
       try {
-        const t = await httpGet(apiUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
+        const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
         const list = parseList(t, s).filter(v => v.name.toLowerCase().includes(Collect.kw.toLowerCase()));
         if (Collect.stop || !list.length || App.view !== 'collect') return;
         Collect.bySite[si] = list;
@@ -537,7 +539,7 @@ async function openDetail(item) {
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
     <div id="vrows"></div></main>`;
   let d;
-  try { d = parseDetail(await httpGet(apiUrl(s.url, `ac=videolist&ids=${encodeURIComponent(item.id)}`)), s); }
+  try { d = parseDetail(await httpGet(listUrl(s.url, `ac=videolist&ids=${encodeURIComponent(item.id)}`)), s); }
   catch (e) { $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">详情失败：${esc(e.message)}</p>`; return; }
   if (!d.id) { $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">源未返回详情</p>`; return; }
   if (App.view !== 'video') return;
@@ -594,7 +596,7 @@ async function doChangeSource() {
   const found = [];
   await Promise.all(others.map(async s => {
     try {
-      const list = parseList(await httpGet(apiUrl(s.url, `ac=videolist&wd=${encodeURIComponent(title)}&pg=1`), 8000), s);
+      const list = parseList(await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(title)}&pg=1`), 8000), s);
       const m = list.find(v => v.name === title) || list.find(v => v.name.includes(title));
       if (m) found.push({ ...m, source: s });
     } catch { /* 忽略 */ }

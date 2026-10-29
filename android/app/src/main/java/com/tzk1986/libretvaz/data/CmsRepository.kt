@@ -72,10 +72,10 @@ class CmsRepository {
         return list
     }
 
-    /** 首页"最近更新"：与 TVBox 一致，直接 GET 站点 api 根地址不带参数，取源返回的 list */
+    /** 首页"最近更新"：带 ac=videolist 取完整字段——无参模式多数源不返回 vod_pic，海报墙会全空白 */
     suspend fun home(source: VodSource, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
         runCatching {
-            CmsParser.parseSearchList(fetchJson(apiUrl(source, "pg=$page")), source)
+            CmsParser.parseSearchList(fetchJson(apiUrl(source, "ac=videolist&pg=$page")), source)
         }.getOrDefault(emptyList())
     }
 
