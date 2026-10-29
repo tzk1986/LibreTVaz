@@ -68,7 +68,12 @@ async function inspect(one) {
   try {
     const v = await get(apiOf(stripAc(raw), 'ac=videolist&pg=1'));
     const years = (v.list || []).map(x => yrOf(x.vod_year));
-    console.log(`  ac=videolist 全量：total=${v.total} 首页年份 max=${Math.max(...years, 0)}（若为当前年说明含最新资源，年份倒序即可置顶）`);
+    const pics = (v.list || []).filter(x => /^https?:\/\//i.test(x.vod_pic || '')).length;
+    const picRate = v.list?.length ? Math.round(pics * 100 / v.list.length) : 0;
+    console.log(`  ac=videolist 全量：total=${v.total} 首页 max 年=${Math.max(...years, 0)} 海报覆盖=${pics}/${v.list.length}(${picRate}%)${picRate >= 80 ? ' ✓海报墙可用' : picRate > 0 ? ' △海报不全' : ' ✗无海报'}`);
+    const need = ['电影', '电视剧', '综艺'];
+    const names = cls.map(c => c.type_name || '');
+    console.log('  主分类覆盖：' + need.map(n => `${n}${names.some(x => x.includes(n)) ? '✓' : '✗'}`).join(' ') + (names.some(x => x.includes('动漫') || x.includes('动画')) ? ' 动漫✓' : ' 动漫✗'));
   } catch (e) { console.log('  ac=videolist 全量失败：' + e.message); }
   try {
     const s = await get(apiOf(stripAc(raw), 'ac=videolist&wd=' + encodeURIComponent('战') + '&pg=1'));

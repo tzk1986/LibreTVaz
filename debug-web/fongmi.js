@@ -24,12 +24,13 @@ window.addEventListener('focus', () => {
   if (JSON.stringify(SRC) === before) return;
   if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; Home.tab = null; Vod.tab = null; }
   if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0;
-  $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
+  $('#siteName').textContent = siteLabel();
   if (App.view === 'home') renderHome();
   else if (App.view === 'vod') renderVod();
   else if (App.view === 'live') renderLive();
 });
 const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const siteLabel = () => Home.aggMode ? '🌐 聚合' : (SRC.vod[Home.srcIdx]?.name || '未配置点播源');
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
 // CMS 无参/简化列表不返回 vod_pic，海报墙必须带 ac=videolist；源 api 自带 ac= 时先剔除避免重复
@@ -234,7 +235,7 @@ function switchView(v) {
   $('#siteModal').classList.remove('open');
   App.view = v;
   Focus.set(null);
-  $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
+  $('#siteName').textContent = siteLabel();
   if (v === 'home') renderHome();
   else if (v === 'vod') renderVod();
   else if (v === 'search') renderSearch();
@@ -254,16 +255,18 @@ function openSiteDialog() {
   const rank = i => { const h = healthOf(SRC.vod[i].url); return h ? (h.fails >= DEAD_FAILS ? 2 : 0) : 1; };
   const msOf = i => healthOf(SRC.vod[i].url)?.ms ?? 1e9;
   const order = SRC.vod.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || msOf(a) - msOf(b));
-  $('#siteGrid').innerHTML = order.map(i => {
+  $('#siteGrid').innerHTML = `<button class="siteitem${Home.aggMode ? ' on' : ''}" data-focus data-i="-1">🌐 聚合<small style="display:block;font-size:11px;color:var(--dim)">全源合并·点卡片跨源搜索</small></button>` + order.map(i => {
     const s = SRC.vod[i], h = healthOf(s.url), dead = rank(i) === 2;
-    return `<button class="siteitem${i === Home.srcIdx ? ' on' : ''}${dead ? ' dead' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}${h ? `<small style="display:block;font-size:11px;color:${dead ? '#f28b82' : '#81c995'}">${dead ? '失效' : (h.ms ?? '') + 'ms'}</small>` : ''}</button>`;
+    return `<button class="siteitem${!Home.aggMode && i === Home.srcIdx ? ' on' : ''}${dead ? ' dead' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}${h ? `<small style="display:block;font-size:11px;color:${dead ? '#f28b82' : '#81c995'}">${dead ? '失效' : (h.ms ?? '') + 'ms'}</small>` : ''}</button>`;
   }).join('');
   $('#siteGrid').onclick = e => {
     const b = e.target.closest('[data-i]'); if (!b) return;
-    Home.srcIdx = +b.dataset.i;
-    localStorage.setItem('fongmi_site_idx', String(Home.srcIdx));
+    const i = +b.dataset.i;
+    Home.aggMode = i === -1;
+    if (i >= 0) { Home.srcIdx = i; localStorage.setItem('fongmi_site_idx', String(i)); }
+    localStorage.setItem('fongmi_agg', Home.aggMode ? '1' : '0');
     closeSiteDialog();
-    $('#siteName').textContent = SRC.vod[Home.srcIdx].name;
+    $('#siteName').textContent = siteLabel();
     if (App.view === 'vod' || App.view === 'home') { Home.tab = null; Vod.tab = null; loadSiteData(); }
     if (App.view === 'vod') renderVod(); else if (App.view === 'home') renderHome();
   };
@@ -508,7 +511,7 @@ async function doImport(url) {
 }
 function refreshAfterSourceChange() {
   Probe.rows = null;
-  $('#siteName').textContent = SRC.vod[Home.srcIdx]?.name || '未配置点播源';
+  $('#siteName').textContent = siteLabel();
   if (App.view === 'vod') { Home.tab = null; Vod.tab = null; renderVod(); }
   else if (App.view === 'home') renderHome();
 }
@@ -639,7 +642,7 @@ function bindGrid(el, items, onPick, onDel) {
 }
 
 /* ================= 首页（HomeActivity：功能行 + 最近观看 + 更新推荐） ================= */
-const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
+const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), aggMode: localStorage.getItem('fongmi_agg') === '1', types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
 function renderHome() {
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]);
   body.innerHTML = `<main id="scroller">
@@ -712,31 +715,44 @@ const applyTabMerged = () => {
   const kids = Vod.tab ? Vod.types.filter(c => c.pid === Vod.tab.id && c.id !== Vod.tab.id) : [];
   Vod.merged = kids.length ? kids : null;
 };
+const isTopType = t => t.pid === '0' || t.pid === '' || t.pid === 'null';
 async function loadTypes() {
   const s = SRC.vod[Home.srcIdx]; if (!s) return;
   const rid = ++Vod.reqId;
+  if (Home.aggMode) { // 聚合模式（源选择弹窗进入）：固定四大类标签，数据跨全部健康源合并
+    Vod.agg = true; Vod.types = []; Vod.filters = null; Vod.merged = null;
+    const tabs = [{ id: '', name: '🌐 最新' }, ...AGG_CATS.map(c => ({ id: 'cat:' + c.key, name: c.key }))];
+    const cur = Vod.tab ? 'cat:' + Vod.tab.id : '';
+    $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
+    $('#typeRow').onclick = e => {
+      const b = e.target.closest('[data-tid]'); if (!b) return;
+      const id = b.dataset.tid;
+      if ((Vod.tab && 'cat:' + Vod.tab.id === id) || (!Vod.tab && id === '')) return;
+      document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
+      $('#subRow').innerHTML = '';
+      if (id === '') { Vod.tab = null; loadAgg(); }
+      else { const cat = AGG_CATS.find(c => 'cat:' + c.key === id); Vod.tab = { id: cat.key, name: cat.key }; loadAggCat(cat); }
+    };
+    if (Vod.tab && !AGG_CATS.some(c => c.key === Vod.tab.id)) Vod.tab = null;
+    if (Vod.tab) loadAggCat(AGG_CATS.find(c => c.key === Vod.tab.id)); else loadAgg();
+    return;
+  }
+  Vod.agg = false;
   Vod.types = [];
   try { Vod.types = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); } catch { /* 无分类 */ }
   if (rid !== Vod.reqId || App.view !== 'vod') return;
-  if (Vod.tab && !Vod.agg) { // 换源后按 id 重解析当前分类，聚合集合随新源重建
+  if (Vod.tab) { // 换源后按 id 重解析当前分类，聚合集合随新源重建
     Vod.tab = Vod.types.find(t => t.id === Vod.tab.id) || null;
     applyTabMerged();
   }
-  const tops = Vod.types.filter(t => t.pid === '0' || t.pid === '' || t.pid === 'null');
+  const tops = Vod.types.filter(isTopType);
   const tabList = tops.length ? tops : Vod.types;
-  const tabs = [{ id: '__agg', name: '🌐 聚合' }, { id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
-  const cur = Vod.agg ? '__agg' : (Vod.tab?.id ?? '');
+  const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
+  const cur = Vod.tab?.id ?? '';
   $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
   $('#typeRow').onclick = e => {
     const b = e.target.closest('[data-tid]'); if (!b) return;
     const id = b.dataset.tid;
-    if (id === '__agg') { // 站内多源聚合：统一最新墙，点卡片进跨源搜索
-      Vod.agg = true; Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
-      resetFilterVals(); $('#subRow').innerHTML = '';
-      document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
-      loadAgg(); return;
-    }
-    Vod.agg = false;
     if (id === '') { // 首页：无分类，直接全量最新
       Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
       resetFilterVals(); $('#subRow').innerHTML = '';
@@ -755,21 +771,57 @@ async function loadTypes() {
     document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
     loadVod(1);
   };
-  if (Vod.agg) loadAgg(); else loadVod(1);
+  loadVod(1);
 }
 /* 聚合数据源提供者：本期为站内多源合并；将来接豆瓣榜单只需新增一个 provider（接口实测：
    https://movie.douban.com/j/search_subjects?type=movie|tv&tag=热门&sort=recommend&page_limit=20
    需浏览器 UA + Referer https://movie.douban.com/，且 proxy 需透传请求头、结果要缓存防限流） */
+const AGG_CATS = [
+  { key: '电影', kw: ['电影', '影片'] },
+  { key: '电视剧', kw: ['电视剧', '连续剧', '剧集', '网剧'] },
+  { key: '综艺', kw: ['综艺', '节目'] },
+  { key: '动漫', kw: ['动漫', '动画', '番'] },
+];
+const aggPool = () => {
+  const pool = SRC.vod.filter(s => (autoOn() ? !isDead(s.url) : true) && !s.isAdult);
+  const first = SRC.vod[Home.srcIdx];
+  if (first && !first.isAdult && !pool.includes(first)) pool.unshift(first);
+  return pool.slice(0, 12);
+};
 const aggProviders = {
   internal: async () => {
-    const pool = SRC.vod.filter(s => (autoOn() ? !isDead(s.url) : true) && !s.isAdult);
-    const first = SRC.vod[Home.srcIdx];
-    if (first && !pool.includes(first)) pool.unshift(first);
-    const pages = await pMap(pool.slice(0, 12), s =>
+    const pages = await pMap(aggPool(), s =>
       httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []), 6);
     return pages.flat();
   },
 };
+/* 各源分类树缓存：聚合分类墙按名称匹配每个源的父分类，再取其子类首页合并 */
+const typesCache = new Map();
+const getSrcTypes = s => {
+  if (!typesCache.has(s.url)) typesCache.set(s.url, httpGet(apiUrl(s.url, 'ac=list')).then(parseTypes).catch(() => []));
+  return typesCache.get(s.url);
+};
+async function loadAggCat(cat) {
+  const grid = $('#vodGrid'); if (!grid) return;
+  const rid = ++Vod.reqId;
+  grid.innerHTML = `<p class="muted">正在聚合各源「${cat.key}」（前 ${aggPool().length} 个健康源）…</p>`;
+  const pages = await pMap(aggPool(), async s => {
+    const types = await getSrcTypes(s);
+    const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
+    if (!p) return [];
+    const kids = types.filter(c => c.pid === p.id && c.id !== p.id);
+    const qs = kids.length ? kids.slice(0, 3) : [p];
+    const sub = await pMap(qs, c =>
+      httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`)).then(raw => parseList(raw, s)), 3);
+    return sub.flat();
+  }, 4);
+  if (rid !== Vod.reqId || !Vod.agg || App.view !== 'vod' || !$('#vodGrid')) return;
+  const items = dedupByName(pages.flat());
+  Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
+  addWords(Vod.items.map(it => it.name));
+  drawVodGrid();
+  if (!items.length) toast(`聚合无数据：各源均无「${cat.key}」分类`);
+}
 const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { const k = normalizeTitle(it.name); return k && !seen.has(k) && seen.add(k); }); };
 async function loadAgg() {
   const grid = $('#vodGrid'); if (!grid) return;
