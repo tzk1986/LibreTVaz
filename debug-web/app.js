@@ -6,7 +6,12 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 async function httpGet(url, timeout = 15000) {
-  const r = await fetch('/proxy?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(timeout) });
+  let r;
+  try {
+    r = await fetch('/proxy?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(timeout) });
+  } catch (e) {
+    throw new Error(e?.name === 'TimeoutError' ? `请求超时（${timeout / 1000}s）` : '网络失败/域名无法解析');
+  }
   const text = await r.text();
   if (!r.ok) throw new Error('HTTP ' + r.status + '：' + text.slice(0, 80));
   return text;
@@ -334,7 +339,7 @@ function chips(arr, idx, fn, key = o => o.name) {
 function viewBrowse() {
   const sources = vodSources();
   let html = `<div class="chips">${chips(sources, state.sourceIdx, 'pickSource', o => o.name + (o.isAdult ? '·成人' : ''))}</div>`;
-  if (!sources.length) return html + `<p class="muted" style="margin-top:20px">尚未导入点播源，请先到「源管理」导入订阅地址。</p>`;
+  if (!sources.length) return html + `<p class="muted" style="margin-top:20px">尚未导入点播源。${PRESETS.map(p => `<button class="btn ghost" style="margin-left:8px" onclick="quickImport('${p.url}')">一键导入·${esc(p.name)}</button>`).join('')}</p>`;
   html += `<div class="chips" style="margin-top:8px"><span class="chip ${!state.type ? 'sel' : ''}" onclick="pickType(null)">首页（最近更新）</span>${state.types.map(t => `<span class="chip ${t.id === (state.type || {}).id ? 'sel' : ''}" onclick="pickType('${esc(t.id)}','${esc(t.name)}')">${esc(t.name)}</span>`).join('')}</div>`;
   html += `<div style="margin:8px 0">${state.loading ? '<span class="muted">加载中…</span>' : ''}${state.error ? `<span class="err">${esc(state.error)}</span>` : ''}</div>`;
   html += `<div class="grid">${state.items.map((it, i) => `
@@ -428,6 +433,15 @@ function viewDetail() {
   return html;
 }
 
+/* ---- 预置订阅（实测可达）---- */
+const PRESETS = [
+  { name: 'Qist 综合（点播+直播）', url: 'https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
+  { name: 'Liucn 单仓', url: 'https://raw.liucn.cc/box/m.json' },
+  { name: 'noimank 多仓', url: 'https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json' },
+  { name: '多多快速仓库', url: 'https://jihulab.com/duomv/apps/-/raw/main/fast.json' },
+];
+window.quickImport = url => { $('#impUrl').value = url; doImport(); };
+
 /* ---- 源管理 ---- */
 window.addSourceUrl = null;
 window.doImport = async () => {
@@ -478,6 +492,7 @@ function probeTable() {
 function viewSources() {
   return `
   <div class="row"><input type="text" id="impUrl" placeholder="订阅地址：TVBox / 多仓 / LibreTV / 源目录 JSON URL"><button class="btn" onclick="doImport()">导入</button><button class="btn ghost" onclick="clearInput()">清空输入</button><button class="btn ghost" onclick="probeAll()">检测全部点播源</button><button class="btn ghost" onclick="clearAll()">清除所有源</button></div>
+  <div class="row" style="margin-top:6px"><span class="muted">一键导入：</span>${PRESETS.map(p => `<button class="btn ghost" onclick="quickImport('${p.url}')">${esc(p.name)}</button>`).join('')}</div>
   <p class="muted">导入结果：<span id="impMsg"></span></p>
   ${state.probe ? probeTable() : ''}
   <h3>点播源（${SRC.vod.length}/100）</h3>
