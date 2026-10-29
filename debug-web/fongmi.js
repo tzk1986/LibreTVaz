@@ -31,6 +31,14 @@ window.addEventListener('focus', () => {
 });
 const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const siteLabel = () => Home.aggMode ? '🌐 聚合' : (SRC.vod[Home.srcIdx]?.name || '未配置点播源');
+/* 本地缓存（SWR 模式）：有上次数据先秒显，后台拉新成功后替换并重存；安卓端对应 DiskCache + stale 首屏 */
+const cacheGet = k => { try { const v = JSON.parse(localStorage.getItem('fongmi_cache:' + k)); return (v && v.d) || null; } catch { return null; } };
+const cacheSet = (k, d) => {
+  try { localStorage.setItem('fongmi_cache:' + k, JSON.stringify({ t: Date.now(), d })); }
+  catch { // 配额满：清掉全部旧缓存，下次访问重新积累
+    Object.keys(localStorage).filter(x => x.startsWith('fongmi_cache:')).forEach(x => localStorage.removeItem(x));
+  }
+};
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
 // CMS 无参/简化列表不返回 vod_pic，海报墙必须带 ac=videolist；源 api 自带 ac= 时先剔除避免重复
@@ -687,11 +695,23 @@ async function loadRec(pg = 1) {
   const grid = $('#recGrid'); if (!grid) return;
   if (!s) { grid.innerHTML = '<p class="muted">无点播源</p>'; return; }
   Home.loading = true;
-  if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Home.items = []; }
+  let cachedShown = false;
+  if (pg === 1) {
+    Home.items = [];
+    const cached = cacheGet('rec:' + s.url);
+    if (cached && cached.length) {
+      cachedShown = true;
+      const shown = sortByYearDesc(cached);
+      grid.innerHTML = shown.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
+      bindGrid(grid, shown, it => openDetail(it));
+    } else grid.innerHTML = '<p class="muted">加载中…</p>';
+  }
   let items = [], err = null;
   try { items = parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s); } catch (e) { err = e.message; }
   if (App.view !== 'home' || !$('#recGrid')) return;
+  if (err && pg === 1 && cachedShown) { Home.loading = false; return; } // 拉新失败保留缓存首屏
   Home.loading = false; Home.page = pg;
+  if (pg === 1 && items.length) cacheSet('rec:' + s.url, items);
   addWords(items.map(it => it.name));
   Home.items = pg === 1 ? items : Home.items.concat(items);
   Home.more = items.length > 0;
@@ -738,40 +758,49 @@ async function loadTypes() {
     return;
   }
   Vod.agg = false;
-  Vod.types = [];
-  try { Vod.types = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); } catch { /* 无分类 */ }
-  if (rid !== Vod.reqId || App.view !== 'vod') return;
-  if (Vod.tab) { // 换源后按 id 重解析当前分类，聚合集合随新源重建
-    Vod.tab = Vod.types.find(t => t.id === Vod.tab.id) || null;
-    applyTabMerged();
-  }
-  const tops = Vod.types.filter(isTopType);
-  const tabList = tops.length ? tops : Vod.types;
-  const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
-  const cur = Vod.tab?.id ?? '';
-  $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
-  $('#typeRow').onclick = e => {
-    const b = e.target.closest('[data-tid]'); if (!b) return;
-    const id = b.dataset.tid;
-    if (id === '') { // 首页：无分类，直接全量最新
-      Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
-      resetFilterVals(); $('#subRow').innerHTML = '';
+  Vod.types = cacheGet('types:' + s.url) || []; // 先用缓存分类秒出标签，拉新后替换
+  const drawTabs = () => {
+    if (Vod.tab) { // 换源/刷新后按 id 重解析当前分类，聚合集合随新分类树重建
+      Vod.tab = Vod.types.find(t => t.id === Vod.tab.id) || null;
+      applyTabMerged();
+    }
+    const tops = Vod.types.filter(isTopType);
+    const tabList = tops.length ? tops : Vod.types;
+    const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
+    const cur = Vod.tab?.id ?? '';
+    const row = $('#typeRow'); if (!row || App.view !== 'vod') return;
+    row.innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
+    row.onclick = e => {
+      const b = e.target.closest('[data-tid]'); if (!b) return;
+      const id = b.dataset.tid;
+      if (id === '') { // 首页：无分类，直接全量最新
+        Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
+        resetFilterVals(); $('#subRow').innerHTML = '';
+        document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
+        loadVod(1); return;
+      }
+      if (Vod.tab && Vod.tab.id === id) { // 再次点击当前分类：展开/收起二级筛选（影视仓式）
+        Vod.showFilters = !Vod.showFilters;
+        drawSubRow();
+        if (Vod.showFilters) setTimeout(() => $('#subRow')?.querySelector('[data-focus]')?.focus(), 30);
+        return;
+      }
+      Vod.tab = Vod.types.find(t => t.id === id) || null;
+      Vod.showFilters = false; resetFilterVals();
+      Vod.filters = null; applyTabMerged();
       document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
-      loadVod(1); return;
-    }
-    if (Vod.tab && Vod.tab.id === id) { // 再次点击当前分类：展开/收起二级筛选（影视仓式）
-      Vod.showFilters = !Vod.showFilters;
-      drawSubRow();
-      if (Vod.showFilters) setTimeout(() => $('#subRow')?.querySelector('[data-focus]')?.focus(), 30);
-      return;
-    }
-    Vod.tab = Vod.types.find(t => t.id === id) || null;
-    Vod.showFilters = false; resetFilterVals();
-    Vod.filters = null; applyTabMerged();
-    document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
-    loadVod(1);
+      loadVod(1);
+    };
   };
+  drawTabs();
   loadVod(1);
+  try {
+    const fresh = parseTypes(await httpGet(apiUrl(s.url, 'ac=list')));
+    cacheSet('types:' + s.url, fresh);
+    if (rid !== Vod.reqId || App.view !== 'vod') return;
+    Vod.types = fresh;
+    drawTabs();
+  } catch { /* 保留缓存分类树 */ }
 }
 /* 聚合数据源提供者：本期为站内多源合并；将来接豆瓣榜单只需新增一个 provider（接口实测：
    https://movie.douban.com/j/search_subjects?type=movie|tv&tag=热门&sort=recommend&page_limit=20
@@ -798,13 +827,20 @@ const aggProviders = {
 /* 各源分类树缓存：聚合分类墙按名称匹配每个源的父分类，再取其子类首页合并 */
 const typesCache = new Map();
 const getSrcTypes = s => {
-  if (!typesCache.has(s.url)) typesCache.set(s.url, httpGet(apiUrl(s.url, 'ac=list')).then(parseTypes).catch(() => []));
+  if (!typesCache.has(s.url)) typesCache.set(s.url, (async () => {
+    const ck = 'types:' + s.url;
+    try { const d = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); cacheSet(ck, d); return d; }
+    catch { return cacheGet(ck) || []; } // 慢源/死源用上次分类树兜底
+  })());
   return typesCache.get(s.url);
 };
 async function loadAggCat(cat) {
   const grid = $('#vodGrid'); if (!grid) return;
   const rid = ++Vod.reqId;
-  grid.innerHTML = `<p class="muted">正在聚合各源「${cat.key}」（前 ${aggPool().length} 个健康源）…</p>`;
+  const ck = 'agg:cat:' + cat.key;
+  const cached = cacheGet(ck);
+  if (cached && cached.length) { Vod.items = sortByYearDesc(cached); Vod.loading = false; Vod.more = false; drawVodGrid(); }
+  else grid.innerHTML = `<p class="muted">正在聚合各源「${cat.key}」（前 ${aggPool().length} 个健康源）…</p>`;
   const pages = await pMap(aggPool(), async s => {
     const types = await getSrcTypes(s);
     const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
@@ -817,22 +853,28 @@ async function loadAggCat(cat) {
   }, 4);
   if (rid !== Vod.reqId || !Vod.agg || App.view !== 'vod' || !$('#vodGrid')) return;
   const items = dedupByName(pages.flat());
-  Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
-  addWords(Vod.items.map(it => it.name));
-  drawVodGrid();
-  if (!items.length) toast(`聚合无数据：各源均无「${cat.key}」分类`);
+  if (items.length) {
+    cacheSet(ck, items);
+    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
+    addWords(Vod.items.map(it => it.name));
+    drawVodGrid();
+  } else if (!cached || !cached.length) toast(`聚合无数据：各源均无「${cat.key}」分类`);
 }
 const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { const k = normalizeTitle(it.name); return k && !seen.has(k) && seen.add(k); }); };
 async function loadAgg() {
   const grid = $('#vodGrid'); if (!grid) return;
   const rid = ++Vod.reqId;
-  grid.innerHTML = '<p class="muted">正在聚合各源最新（前 12 个健康源）…</p>';
+  const cached = cacheGet('agg:latest');
+  if (cached && cached.length) { Vod.items = sortByYearDesc(cached); Vod.loading = false; Vod.more = false; drawVodGrid(); }
+  else grid.innerHTML = '<p class="muted">正在聚合各源最新（前 12 个健康源）…</p>';
   const items = dedupByName(await aggProviders.internal());
   if (rid !== Vod.reqId || App.view !== 'vod' || !Vod.agg || !$('#vodGrid')) return;
-  Vod.items = sortByYearDesc(items); Vod.more = false; Vod.loading = false; Vod.page = 1;
-  addWords(Vod.items.map(it => it.name));
-  drawVodGrid();
-  if (!Vod.items.length) toast('聚合失败：当前无可用点播源');
+  if (items.length) {
+    cacheSet('agg:latest', items);
+    Vod.items = sortByYearDesc(items); Vod.more = false; Vod.loading = false; Vod.page = 1;
+    addWords(Vod.items.map(it => it.name));
+    drawVodGrid();
+  } else if (!cached || !cached.length) toast('聚合失败：当前无可用点播源');
 }
 const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; };
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
@@ -858,7 +900,14 @@ async function loadMerged(pg) {
   const grid = $('#vodGrid'); if (!grid) return;
   const t = Vod.tab;
   Vod.loading = true;
-  if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
+  const ck = `mrg:${s.url}|${t ? t.id : ''}|${Vod.area}|${Vod.year}|${Vod.lang}`;
+  let cachedShown = false;
+  if (pg === 1) {
+    Vod.items = [];
+    const cached = cacheGet(ck);
+    if (cached && cached.length) { cachedShown = true; Vod.items = cached; drawVodGrid(); }
+    else grid.innerHTML = '<p class="muted">加载中…</p>';
+  }
   let extra = '';
   if (Vod.area) extra += `&area=${encodeURIComponent(Vod.area)}`;
   if (Vod.year) extra += `&year=${encodeURIComponent(Vod.year)}`;
@@ -868,7 +917,9 @@ async function loadMerged(pg) {
       .then(raw => parseList(raw, s)));
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
   const fresh = dedupById(pages.flat());
+  if (pg === 1 && !fresh.length && cachedShown) { Vod.loading = false; return; } // 拉新为空保留缓存首屏
   Vod.loading = false; Vod.page = pg;
+  if (pg === 1 && fresh.length) cacheSet(ck, fresh);
   if (pg === 1) { Vod.filters = buildFilters(t, null); if (Vod.showFilters) drawSubRow(); }
   addWords(fresh.map(it => it.name));
   Vod.items = pg === 1 ? fresh : dedupById(Vod.items.concat(fresh));
@@ -882,7 +933,14 @@ async function loadVod(pg = 1) {
   const t = Vod.tab;
   if (t && !Vod.sub && Vod.merged) return loadMerged(pg);
   Vod.loading = true;
-  if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
+  const ck = `vod:${s.url}|${Vod.sub || (t ? t.id : 'all')}|${t ? Vod.area + '|' + Vod.year + '|' + Vod.lang : ''}`;
+  let cachedShown = false;
+  if (pg === 1) {
+    Vod.items = [];
+    const cached = cacheGet(ck);
+    if (cached && cached.length) { cachedShown = true; Vod.items = cached; drawVodGrid(); }
+    else grid.innerHTML = '<p class="muted">加载中…</p>';
+  }
   const effT = Vod.sub || (t ? t.id : '');
   let q = effT ? `ac=videolist&t=${encodeURIComponent(effT)}` : 'ac=videolist';
   if (t && Vod.area) q += `&area=${encodeURIComponent(Vod.area)}`;
@@ -892,8 +950,13 @@ async function loadVod(pg = 1) {
   let items = [], err = null, raw = '';
   try { raw = await httpGet(listUrl(s.url, q)); items = parseList(raw, s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
-  if (err) { Vod.loading = false; grid.innerHTML = `<p class="err">${esc(err)}</p>`; return; }
+  if (err) {
+    Vod.loading = false;
+    if (pg === 1 && cachedShown) return; // 拉新失败保留缓存首屏
+    grid.innerHTML = `<p class="err">${esc(err)}</p>`; return;
+  }
   Vod.loading = false; Vod.page = pg;
+  if (pg === 1 && items.length) cacheSet(ck, items);
   if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
   addWords(items.map(it => it.name));
   Vod.items = pg === 1 ? items : Vod.items.concat(items);
