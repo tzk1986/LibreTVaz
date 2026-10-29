@@ -696,7 +696,7 @@ async function loadRec(pg = 1) {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, parentEmpty: false };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null };
 function renderVod() {
   body.innerHTML = `<div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
     <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
@@ -720,7 +720,7 @@ async function loadTypes() {
     const b = e.target.closest('[data-tid]'); if (!b) return;
     const id = b.dataset.tid;
     if (id === '') { // 首页：无分类，直接全量最新
-      Vod.tab = null; Vod.filters = null; Vod.showFilters = false;
+      Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
       resetFilterVals(); $('#subRow').innerHTML = '';
       document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
       loadVod(1); return;
@@ -733,13 +733,13 @@ async function loadTypes() {
     }
     Vod.tab = Vod.types.find(t => t.id === id) || null;
     Vod.showFilters = false; resetFilterVals();
-    Vod.filters = null;
+    Vod.filters = null; Vod.merged = null;
     document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
     loadVod(1);
   };
   loadVod(1);
 }
-const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; Vod.parentEmpty = false; };
+const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; };
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
 function buildFilters(t, raw) {
   const subs = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
@@ -748,14 +748,47 @@ function buildFilters(t, raw) {
   const arr = v => (Array.isArray(v) ? v : String(v || '')).toString().split(',').filter(Boolean);
   return { subs, area: arr(e.area), year: arr(e.year), lang: arr(e.lang) };
 }
+const dedupById = arr => { const seen = new Set(); return arr.filter(it => !seen.has(it.id) && seen.add(it.id)); };
+async function pMap(arr, fn, limit = 6) {
+  const out = new Array(arr.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, arr.length) }, async () => {
+    while (i < arr.length) { const j = i++; out[j] = await fn(arr[j]).catch(() => []); }
+  }));
+  return out;
+}
+/* 父分类聚合：如非凡源「电影片」父 id 查询无数据，并行拉取其全部子类合并为真实分类页 */
+async function loadMerged(pg) {
+  const s = SRC.vod[Home.srcIdx]; if (!s || !Vod.merged) return;
+  const rid = Vod.reqId;
+  const grid = $('#vodGrid'); if (!grid) return;
+  const t = Vod.tab;
+  Vod.loading = true;
+  if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
+  let extra = '';
+  if (Vod.area) extra += `&area=${encodeURIComponent(Vod.area)}`;
+  if (Vod.year) extra += `&year=${encodeURIComponent(Vod.year)}`;
+  if (Vod.lang) extra += `&lang=${encodeURIComponent(Vod.lang)}`;
+  const pages = await pMap(Vod.merged, c =>
+    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}${extra}&pg=${pg}`))
+      .then(raw => parseList(raw, s)));
+  if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
+  const fresh = dedupById(pages.flat());
+  Vod.loading = false; Vod.page = pg;
+  if (pg === 1) { Vod.filters = buildFilters(t, null); if (Vod.showFilters) drawSubRow(); }
+  addWords(fresh.map(it => it.name));
+  Vod.items = pg === 1 ? fresh : dedupById(Vod.items.concat(fresh));
+  Vod.more = pages.some(p => p.length > 0);
+  drawVodGrid();
+}
 async function loadVod(pg = 1) {
   const s = SRC.vod[Home.srcIdx]; if (!s) return;
   const rid = Vod.reqId;
   const grid = $('#vodGrid'); if (!grid) return;
+  const t = Vod.tab;
+  if (t && !Vod.sub && Vod.merged) return loadMerged(pg);
   Vod.loading = true;
   if (pg === 1) { grid.innerHTML = '<p class="muted">加载中…</p>'; Vod.items = []; }
-  const t = Vod.tab;
-  const effT = Vod.sub || (t && !Vod.parentEmpty ? t.id : '');
+  const effT = Vod.sub || (t ? t.id : '');
   let q = effT ? `ac=videolist&t=${encodeURIComponent(effT)}` : 'ac=videolist';
   if (t && Vod.area) q += `&area=${encodeURIComponent(Vod.area)}`;
   if (t && Vod.year) q += `&year=${encodeURIComponent(Vod.year)}`;
@@ -765,10 +798,10 @@ async function loadVod(pg = 1) {
   try { raw = await httpGet(listUrl(s.url, q)); items = parseList(raw, s); } catch (e) { err = e.message; }
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
   if (err) { Vod.loading = false; grid.innerHTML = `<p class="err">${esc(err)}</p>`; return; }
-  /* 父分类 id 查不到数据（如非凡源 type_id=1 只是分组）→ 回退为全量最新列表 */
-  if (pg === 1 && t && !Vod.sub && !Vod.parentEmpty && !items.length && Vod.types.some(c => c.pid === t.id)) {
-    Vod.parentEmpty = true;
-    return loadVod(1);
+  /* 父分类 id 查不到数据但带子类 → 聚合全部子类为该分类的真实列表 */
+  if (pg === 1 && t && !Vod.sub && !items.length) {
+    const kids = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
+    if (kids.length) { Vod.merged = kids; return loadMerged(1); }
   }
   Vod.loading = false; Vod.page = pg;
   if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
@@ -812,7 +845,7 @@ function drawSubRow() {
   el.onclick = e => {
     const b = e.target.closest('[data-f]'); if (!b) return;
     const k = b.dataset.f;
-    if (k === 'sub') { Vod.sub = b.dataset.v; Vod.parentEmpty = false; }
+    if (k === 'sub') { Vod.sub = b.dataset.v; }
     else Vod[k] = b.dataset.v;
     Vod.showFilters = false; // 筛选生效后收起，再点分类标签可重新展开修改
     drawSubRow();
