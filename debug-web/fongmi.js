@@ -234,7 +234,8 @@ const Focus = {
     if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   },
   items() {
-    const scope = $('#askModal').classList.contains('open') ? '#askModal'
+    const scope = (document.fullscreenElement && document.fullscreenElement.id === 'fsStage') ? '#fsStage'
+      : $('#askModal').classList.contains('open') ? '#askModal'
       : $('#qrModal').classList.contains('open') ? '#qrModal'
       : $('#findModal').classList.contains('open') ? '#findModal'
       : $('#siteModal').classList.contains('open') ? '#siteModal'
@@ -288,6 +289,7 @@ const isEditable = el => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXT
 function enterEdit(el) { if (!isEditable(el)) return; el.focus(); el.classList.add('editing'); }
 document.addEventListener('focusout', e => { if (isEditable(e.target)) e.target.classList.remove('editing'); });
 document.addEventListener('keydown', e => {
+  if (document.fullscreenElement) showFsBar(); // 全屏内任意按键唤回播控浮层（TV 惯例）
   const editing = isEditable(document.activeElement);
   if ($('#siteModal').classList.contains('open')) {
     if (e.key === 'Escape') { closeSiteDialog(); return; }
@@ -300,6 +302,7 @@ document.addEventListener('keydown', e => {
     else if (/^[0-9]$/.test(e.key)) { inputDigit(e.key); e.preventDefault(); return; }
   }
   if (e.key === 'Escape') {
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); e.preventDefault(); return; } // Back/Esc 分层第一层=退全屏（部分 TV 浏览器不发原生退全屏事件）
     if (editing) { document.activeElement.blur(); e.preventDefault(); return; } // 退编辑，Focus.el 选中框保留
     if (App.view === 'vod' && Vod.showFilters && Focus.el && $('#subRow')?.contains(Focus.el)) { // R8：筛选行内 Esc=收起并回到当前分类 chip
       Vod.showFilters = false; drawSubRow();
@@ -330,6 +333,7 @@ document.addEventListener('keydown', e => {
   }
 });
 document.addEventListener('click', e => {
+  if (document.fullscreenElement) showFsBar(); // 触屏/鼠标点击同样唤回浮层
   const t = e.target.closest('[data-focus]'); if (!t) return;
   Focus.set(t);
   if (t.dataset.i != null && t.closest?.('#colChan')) Live.hi = Number(t.dataset.i); // R6：记录最后聚焦频道行，供面板顶 favCur 按钮定位
@@ -379,7 +383,8 @@ async function playInto(video, url, title, onDead) {
   if (/\.(m3u8|mpd)/i.test(url) && window.Hls && Hls.isSupported()) {
     mark(true);
     const start = usePx => {
-      hls = new Hls({ enableWorker: true, maxBufferLength: 30, manifestLoadingTimeOut: 10000, fragLoadingTimeOut: 15000, manifestLoadingMaxRetry: 2, fragLoadingMaxRetry: 6, abrEwmaDefaultEstimate: 800000 });
+      // maxBufferLength 30→45：更深缓冲减少弱网分片间隙卡顿；ABR 自动逐级抬清晰度（capLevelToPlayerSize 关，全屏不封顶）
+      hls = new Hls({ enableWorker: true, maxBufferLength: 45, manifestLoadingTimeOut: 10000, fragLoadingTimeOut: 15000, manifestLoadingMaxRetry: 2, fragLoadingMaxRetry: 6, abrEwmaDefaultEstimate: 800000 });
       hls.loadSource(usePx ? px : url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
@@ -415,18 +420,60 @@ function seekVideo(v, d) {
   const fmt = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
   toast((d < 0 ? '« 15s ' : '15s » ') + fmt(v.currentTime) + ' / ' + fmt(v.duration)); // 审计补漏#3：带当前位置/总时长
 }
-/* 遥控全屏：OK 触发（键盘事件属有效用户手势，requestFullscreen 可用）；全屏内画面即焦点，
-   Enter/Space=暂停 ←→=seek Esc=浏览器原生退全屏 */
-function toggleFullscreen() {
-  const v = $('#player'); if (!v) return;
-  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
-  if (!v.requestFullscreen) return toast('该浏览器不支持全屏');
-  v.requestFullscreen().then(() => Focus.set(v)).catch(() => toast('进入全屏失败'));
+/* 遥控全屏（docs/2026-10-30-全屏播控浮层方案.md）：#fsStage 容器全屏 + 底部播控浮层（上/下集/暂停/退出），
+   video 运行时移入、退全屏归位；iOS 等无元素全屏 API 的浏览器回退 video 原生全屏（无浮层）。
+   键位：全屏内任意键唤回浮层（5s 自动淡出）；画面焦点 ←→=±15s seek、Enter/Space=暂停；Esc=浏览器原生退全屏 */
+let fsHome = null, fsCtl = null, fsHideT = 0;
+function showFsBar() {
+  const bar = $('#fsBar'); if (!bar || !document.fullscreenElement) return;
+  bar.classList.add('show'); bar.classList.remove('fade');
+  clearTimeout(fsHideT);
+  fsHideT = setTimeout(() => bar.classList.add('fade'), 5000);
 }
-document.addEventListener('fullscreenchange', () => { // 审计补漏#4：详情/直播两处入口文案同步
-  const txt = document.fullscreenElement ? '⛶ 退出全屏' : '⛶ 全屏';
+/* 浮层与页面上下集按钮的边界置灰：首集灰⏮、末集灰⏭（保留显示不隐藏，点击只提示）；直播（fsCtl=null）隐藏换集键 */
+function syncFsBar() {
+  const prev = $('#fsPrev'); if (!prev) return;
+  const st = fsCtl && fsCtl.state();
+  const next = $('#fsNext'), info = $('#fsInfo');
+  prev.style.display = next.style.display = st ? '' : 'none';
+  if (!st) { info.textContent = App.view === 'live' ? '直播播放中' : ''; return; }
+  prev.classList.toggle('off', st.cur <= 0);
+  next.classList.toggle('off', st.cur >= st.total - 1);
+  const pe = $('#prevEp'), ne = $('#nextEp');
+  if (pe) pe.classList.toggle('off', st.cur <= 0);
+  if (ne) ne.classList.toggle('off', st.cur >= st.total - 1);
+  info.textContent = `${st.title}${st.flag ? ' · ' + st.flag : ''} · 第${st.cur + 1}/${st.total}集`;
+}
+function toggleFullscreen() {
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+  const v = $('#player'); if (!v) return;
+  const st = $('#fsStage');
+  if (st && st.requestFullscreen) {
+    fsHome = { p: v.parentNode, n: v.nextSibling };
+    st.insertBefore(v, st.firstChild);
+    st.requestFullscreen().then(() => { Focus.set(v); showFsBar(); syncFsBar(); })
+      .catch(() => { if (v.parentNode === st) { try { fsHome.p.insertBefore(v, fsHome.n); } catch {} } fsHome = null; toast('进入全屏失败'); });
+    return;
+  }
+  if (v.requestFullscreen) v.requestFullscreen().then(() => Focus.set(v)).catch(() => toast('进入全屏失败'));
+  else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+  else toast('该浏览器不支持全屏');
+}
+document.addEventListener('fullscreenchange', () => { // 含 Esc 原生退出：video 归位防滞留黑屏；详情/直播两处入口文案同步
+  const isFs = !!document.fullscreenElement;
+  const v = $('#player');
+  if (!isFs && v && fsHome) {
+    const { p, n } = fsHome; fsHome = null;
+    try { p.insertBefore(v, n && p.contains(n) ? n : null); } catch {}
+    clearTimeout(fsHideT); $('#fsBar').classList.remove('show', 'fade');
+  }
+  const txt = isFs ? '⛶ 退出全屏' : '⛶ 全屏';
   for (const id of ['fsBtn', 'liveFs']) { const b = $('#' + id); if (b) b.textContent = txt; }
 });
+$('#fsPrev').onclick = () => { if ($('#fsPrev').classList.contains('off')) return toast('已是第一集'); fsCtl && fsCtl.go(-1); };
+$('#fsNext').onclick = () => { if ($('#fsNext').classList.contains('off')) return toast('已是最后一集'); fsCtl && fsCtl.go(1); };
+$('#fsPlay').onclick = () => { const v = $('#player'); if (v) togglePlayVideo(v); };
+$('#fsExit').onclick = () => document.exitFullscreen().catch(() => {});
 
 /* ================= 视图框架 ================= */
 const App = { view: 'home', videoBack: 'vod' };
@@ -434,6 +481,8 @@ const body = $('#body');
 /* 遥控友好返回：非首页视图都在头部放可聚焦「← 首页/返回」按钮（实体遥控器没有 Esc 键，需可选中点确认） */
 const bindBack = (id, fn) => { const b = $('#' + id); if (b) b.onclick = fn; };
 function switchView(v) {
+  if (document.fullscreenElement && document.fullscreenElement.id === 'fsStage') document.exitFullscreen().catch(() => {}); // 切视图先退全屏，video 经 fullscreenchange 归位防孤儿
+  fsCtl = null;
   stopPlayer();
   $('#siteModal').classList.remove('open');
   App.view = v;
@@ -1635,6 +1684,7 @@ async function openDetail(item) {
     $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${esc(g.flag)}(${g.list.length})</button>`).join('');
     const progHere = LS('fongmi_prog', {})[`${d.id}|${si}`];
     $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}${progHere && progHere.ep === i ? ' prog' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
+    syncFsBar(); // 换集/换线/重绘后同步全屏浮层集号信息与上下集置灰（含页面 #prevEp/#nextEp）
     $('#flagRow').onclick = e => {
       const b = e.target.closest('[data-l]'); if (!b) return;
       line = +b.dataset.l; curEp = 0; tried = new Set([line]);
@@ -1686,6 +1736,11 @@ async function openDetail(item) {
     if (!g || curEp + 1 >= g.list.length) { toast('已播完全部剧集'); return; }
     if (LS('fongmi_autonext', 1) === 0) { toast('本集结束（自动连播已关，按下集按钮继续）'); return; }
     toast('本集结束，自动播放下一集'); goEp(1);
+  };
+  // 全屏浮层钩子：换集复用 goEp（含 tried 重置/连播链路零改动），state 供 syncFsBar 读边界集号
+  fsCtl = {
+    go: goEp,
+    state: () => { const g = d.episodes[line]; return g && g.list.length ? { cur: curEp, total: g.list.length, title: d.title, flag: g.flag || '' } : null; },
   };
   let startEp = 0, seekTo = 0, fromProg = false;
   if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度（优先于跨会话进度）

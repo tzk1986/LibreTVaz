@@ -135,6 +135,16 @@
   /* 画面等比不拉伸：object-fit contain 黑边信箱；全屏时铺满视口仍保比例（放最后压过 .vtop/.livewrap 同特异性规则） */
   video { object-fit: contain; background: #000; }
   video:fullscreen, video:-webkit-full-screen { width: 100vw; height: 100vh; object-fit: contain; }
+
+  /* 全屏播控浮层（docs/2026-10-30-全屏播控浮层方案.md）：容器全屏后 video 移入 #fsStage，底部控制条 5s 无操作淡出、任意键唤回 */
+  #fsStage { display: none; }
+  #fsStage:fullscreen { display: block; width: 100vw; height: 100vh; background: #000; position: relative; }
+  #fsStage video { width: 100%; height: 100%; outline: none; }
+  #fsBar { position: absolute; left: 0; right: 0; bottom: 0; display: none; gap: 14px; align-items: center; justify-content: center; padding: 14px 24px; background: linear-gradient(transparent, rgba(0,0,0,.8)); transition: opacity .4s; }
+  #fsBar.show { display: flex; }
+  #fsBar.fade { opacity: 0; pointer-events: none; }
+  #fsInfo { color: #ddd; font-size: 13px; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn.off { opacity: .4; } /* 置灰仍可聚焦点击（只提示不执行），遥控语义与 .chip.off 一致 */
 </style>
 </head>
 <body>
@@ -165,6 +175,13 @@
     <button class="btn" data-focus id="askOk">确定</button>
     <button class="btn" data-focus id="askCancel">取消</button>
   </div>
+</div></div>
+<div id="fsStage"><div id="fsBar">
+  <button class="btn" data-focus id="fsPrev">⏮ 上一集</button>
+  <button class="btn" data-focus id="fsPlay">⏯ 播放/暂停</button>
+  <button class="btn" data-focus id="fsNext">下一集 ⏭</button>
+  <span id="fsInfo"></span>
+  <button class="btn" data-focus id="fsExit">⛶ 退出全屏(Esc)</button>
 </div></div>
 <div id="toast"></div>
 <script src="vendor/hls.min.js"></script>
