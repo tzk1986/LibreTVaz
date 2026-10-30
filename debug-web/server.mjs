@@ -28,7 +28,10 @@ try {
   const { setGlobalDispatcher, EnvHttpProxyAgent, Agent } = await import('undici');
   const opts = { connections: 90, keepAliveTimeout: 15000, keepAliveInitialDelay: 10000 };
   let mode = '直连';
-  if (hasProxyEnv) mode = 'env 代理';
+  if (hasProxyEnv) { // env 代理：未设 NO_PROXY 时保底本机回环直连，避免 /proxy 访问本地目标被甩进代理
+    mode = 'env 代理';
+    if (!process.env.NO_PROXY && !process.env.no_proxy) process.env.NO_PROXY = process.env.no_proxy = 'localhost,127.0.0.1';
+  }
   else if (EnvHttpProxyAgent && await tcpOk('127.0.0.1', 7890)) {
     process.env.HTTP_PROXY = process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
     process.env.NO_PROXY = process.env.no_proxy = 'localhost,127.0.0.1';

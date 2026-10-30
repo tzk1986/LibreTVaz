@@ -67,5 +67,74 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   ok(e.stale(t1) && !e.stale(t2), 'epoch: 换词后旧回调丢弃');
 }
 
+// 6. rewriteM3u8：相对/绝对分片、KEY/MAP URI、防双改写、注释空行保留（方案④）
+{
+  const base = 'https://vod.example.com/a/b/index.m3u8';
+  const px = u => '/proxy?url=' + encodeURIComponent(u);
+  const src = [
+    '#EXTM3U',
+    '#EXT-X-KEY:METHOD=AES-128,URI="https://k.example.com/e.bin"',
+    '#EXT-X-KEY:METHOD=AES-128,URI="/proxy?url=already"',
+    '#EXT-X-MAP:URI="init.mp4"',
+    '#EXT-X-PROGRAM-DATE-TIME:2020-01-01T00:00:00Z',
+    '# 注释行',
+    '',
+    '#EXTINF:10.0,',
+    'seg1.ts',
+    'https://abs.example.com/seg2.ts?x=1',
+    '/rel/seg3.ts',
+  ].join('\n');
+  const L = P.rewriteM3u8(src, base).split('\n');
+  ok(L[0] === '#EXTM3U', 'm3u8: 头行保留');
+  ok(L[1].includes(`URI="${px('https://k.example.com/e.bin')}"`), 'm3u8: KEY 绝对 URI 包代理');
+  ok(L[2].includes('URI="/proxy?url=already"'), 'm3u8: 已代理 KEY 不双改写');
+  ok(L[3].includes(encodeURIComponent('https://vod.example.com/a/b/init.mp4')), 'm3u8: MAP 相对 URI 按 base 解析');
+  ok(L[4] === '#EXT-X-PROGRAM-DATE-TIME:2020-01-01T00:00:00Z', 'm3u8: 其它标签不动');
+  ok(L[5] === '# 注释行' && L[6] === '', 'm3u8: 注释与空行保留');
+  ok(L[8] === px('https://vod.example.com/a/b/seg1.ts'), 'm3u8: 相对分片改写');
+  ok(L[9] === px('https://abs.example.com/seg2.ts?x=1'), 'm3u8: 绝对分片改写');
+  ok(L[10] === px('https://vod.example.com/rel/seg3.ts'), 'm3u8: 根相对分片按主机根解析');
+  const crlf = P.rewriteM3u8('#EXTM3U\r\nseg.ts\r\n', base);
+  ok(crlf.includes('seg') && crlf.includes('\r\n'), 'm3u8: CRLF 保留');
+}
+
+// 7. createPinIndex：qyn 命中、多音字双读、权重排序/淘汰/还原、桶查询性能（方案③.5/④）
+{
+  const ix = P.createPinIndex();
+  ok(ix.ok, 'pin: Intl 拼音 Collator 可用');
+  ix.addMany(['庆余年', '长白串', '白雪公主', '欢乐颂']);
+  eq(ix.suggest('qyn'), ['庆余年'], 'pin: qyn→庆余年');
+  ok(ix.suggest('cb').includes('长白串') && ix.suggest('zb').includes('长白串'), 'pin: 多音字「长」cháng/zhǎng 双读命中');
+  eq(ix.suggest('bx'), ['白雪公主'], 'pin: bx→白雪公主');
+  eq(ix.suggest(''), [], 'pin: 空查询返回空');
+  eq(ix.suggest('12a'), [], 'pin: 非纯字母查询返回空(退化由调用方处理)');
+  ix.add('庆余年'); // 重复 add 应幂等
+  eq(ix.size(), 4, 'pin: 幂等后规模不变');
+  const ix2 = P.createPinIndex();
+  ix2.addMany(['阿飞', '阿花']);
+  ix2.bump('阿花', 5);
+  eq(ix2.top(2), ['阿花', '阿飞'], 'pin: top() 按权重降序');
+  eq(ix2.suggest('a'), ['阿花', '阿飞'], 'pin: suggest() 按权重排序');
+  const ix3 = P.createPinIndex({ max: 3 });
+  ix3.addMany(['甲乙', '丙丁']);
+  ix3.bump('甲乙', 10);
+  ix3.addMany(['戊己', '庚辛', '壬癸']);
+  eq(ix3.size(), 3, 'pin: 超上限触发淘汰');
+  ok(ix3.list().includes('甲乙'), 'pin: 高频词不被新词挤掉（权重淘汰）');
+  ok(!ix3.list().includes('丙丁'), 'pin: 低频最旧优先淘汰');
+  const ix4 = P.createPinIndex({ weights: { 阿花: 9 } });
+  ix4.addMany(['阿飞', '阿花']);
+  eq(ix4.top(1), ['阿花'], 'pin: 构造传入持久化权重即还原排序');
+  const ix5 = P.createPinIndex();
+  const AL = 'abcdefghijklmnopqrstuvwxyz';
+  const names = Array.from({ length: 2000 }, (_, i) => '测试影片' + AL[i % 26] + i);
+  const t0 = performance.now(); ix5.addMany(names); const addMs = performance.now() - t0;
+  let q = 0;
+  const t1 = performance.now(); for (let k = 0; k < 100; k++) q += ix5.suggest('csypz').length; const qMs = (performance.now() - t1) / 100;
+  ok(addMs < 500, `pin: 2000 词建索引 ${addMs.toFixed(1)}ms < 500ms`);
+  ok(qMs < 5, `pin: 前缀桶查询均 ${qMs.toFixed(2)}ms < 5ms（旧全量重算约 100-300ms）`);
+  ok(q > 0, 'pin: 桶查询有命中');
+}
+
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');
 process.exit(fails ? 1 : 0);
