@@ -1249,7 +1249,7 @@ function renderSearch() {
    提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
    源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
    SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
-const Collect = { kw: '', stop: false, done: 0, bySite: {}, tabIdx: '', epoch: 0 };
+const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0 };
 function collectSources() {
   const items = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
   return PerfCore.orderSources(items, x => healthOf(x.s.url)?.ms ?? null, Home.srcIdx);
@@ -1275,8 +1275,9 @@ function renderCollect() {
     drawCollectTab();
   };
   const ep = ++Collect.epoch;
-  Collect.bySite = {}; Collect.tabIdx = '';
+  Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0;
   const sources = collectSources();
+  Collect.total = sources.length; // O3c 判「各源已返回完」做无结果推荐
   if (!sources.length) { $('#cGrid').innerHTML = '<p class="err">无点播源</p>'; return; }
   const ck = PerfCore.searchKey(Collect.kw);
   const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), PerfCore.SEARCH_TTL);
@@ -1297,7 +1298,12 @@ function renderCollect() {
       addSiteTab(s, si, list);
       if (Collect.tabIdx === '') drawCollectTab();
     } catch { /* 单源失败静默，与 FongMi 一致 */ }
-    finally { if (ep === Collect.epoch) Collect.done++; }
+    finally {
+      if (ep !== Collect.epoch) return;
+      Collect.done++;
+      // 全部返回且无任何命中 → 重绘空态（含 O3c 拼音推荐）；此前 bySite 为空时页面会停在「等待各源返回…」
+      if (!Collect.stop && Collect.tabIdx === '' && Collect.done >= Collect.total && !Object.keys(Collect.bySite).length && App.view === 'collect') drawCollectTab();
+    }
   })();
   const [first, rest] = PerfCore.splitBatches(sources, 8);
   first.forEach(fire);
@@ -1308,7 +1314,31 @@ function drawCollectTab() {
   let items;
   if (Collect.tabIdx === '') items = Object.values(Collect.bySite).flat();
   else items = Collect.bySite[+Collect.tabIdx] || [];
-  if (!items.length) { grid.innerHTML = '<p class="muted" style="padding:20px 0">该 Tab 暂无数据</p>'; return; }
+  if (!items.length) {
+    /* O3c 无结果推荐（docs/2026-10-30-O1-O3播放与直播体验方案.md）：全部 Tab+各源返回完+纯字母简拼 →
+       截断核心词（fcz→复仇者）或词库命中词做成「试试搜『XX』?」chip，点击以该词重跑聚合（衔接拼音链） */
+    const allDone = Collect.done >= (Collect.total || 0);
+    const kw = String(Collect.kw || '').trim();
+    const q = kw.toLowerCase();
+    let sug = [];
+    if (Collect.tabIdx === '' && allDone && /^[a-z]{2,}$/.test(q) && pinIndex && typeof PerfCore !== 'undefined') {
+      const hits = pinIndex.suggest(q, 30);
+      const pool = [...new Set([...hits, ...pinIndex.fuzzy(q, 30)])];
+      sug = PerfCore.truncateByQuery(q, pool, 2, 2, w => pinIndex.variants(w));
+      if (!sug.length) sug = hits.slice(0, 2);
+    }
+    grid.innerHTML = `<p class="muted" style="padding:20px 0">${allDone ? '各源均无结果' : '等待各源返回…'}${Collect.tabIdx !== '' ? ' · 该 Tab 暂无数据' : ''}<br>`
+      + (sug.length ? sug.map(w => `<button class="chip" data-focus data-kw="${esc(w)}">试试搜「${esc(w)}」?</button>`).join(' ') : (allDone ? '可换首字母简拼、直接输入中文名或换源重试' : '')) + '</p>';
+    grid.onclick = e => {
+      const b = e.target.closest('[data-kw]'); if (!b) return;
+      const w = b.dataset.kw;
+      const h = LS('fongmi_kw', []).filter(x => x !== w); h.unshift(w);
+      localStorage.setItem('fongmi_kw', JSON.stringify(h.slice(0, 10)));
+      Collect.kw = w; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
+      renderCollect();
+    };
+    return;
+  }
   grid.innerHTML = `<div class="grid">${items.map((it, i) => cardHtml(it, i, { showSite: Collect.tabIdx === '' })).join('')}</div>`;
   bindGrid(grid.querySelector('.grid'), items, it => { App.videoBack = 'collect'; openDetail(it); });
 }
