@@ -142,6 +142,7 @@
       },
       top: n => [...words].sort(rank).slice(0, n),
       initials: word => Array.from(String(word || '')).map(initialOf).join(''),
+      variants: word => py.get(String(word || '').trim()) || [],
       list: () => words.slice(),
       size: () => words.length,
       weights: () => Object.fromEntries(wf),
@@ -161,17 +162,37 @@
     return s.length >= 2 ? s : '';
   }
 
-  // 按查询长度对齐截断（方案②）：纯首字母查询时命中词截到 q 等长汉字并聚合（'fcz'+复仇者联盟系列→复仇者）
-  function truncateByQuery(q, hits, limit = 3, minCount = 2) {
+  // 截断核心词（方案②）：把查询 q 在词首字母串中的**匹配位置**对齐截到 q 等长汉字并聚合
+  // 'fcz'+复仇者联盟→复仇者（idx0）；'lm'+复仇者联盟 fczlm→联盟（idx3）——模糊命中不再从词首错截
+  // variantsOf(w) 由调用方传 pinIndex.variants（含多音字变体）；缺省退化为词首前缀截断
+  function truncateByQuery(q, hits, limit = 3, minCount = 2, variantsOf) {
     q = String(q || '').toLowerCase();
     if (!/^[a-z]+$/.test(q) || q.length < 2 || !hits || hits.length < minCount) return [];
     const inHits = new Set(hits);
+    const hasIni = ch => /[0-9a-z]/i.test(ch) || /[㐀-䶿一-鿿]/.test(ch); // 占一个首字母位的字（与 initialOf 判定一致；标点/符号不占）
     const count = new Map();
     for (const w of hits) {
-      const chars = Array.from(String(w));
-      if (chars.length <= q.length) continue;
-      const core = chars.slice(0, q.length).join('');
-      if (core.length < 2 || inHits.has(core)) continue;
+      let core = '';
+      if (variantsOf) {
+        for (const v of variantsOf(w) || []) {
+          const idx = v.indexOf(q);
+          if (idx < 0) continue;
+          let vi = -1; const out = [];
+          for (const ch of Array.from(String(w))) {
+            if (!hasIni(ch)) { if (out.length) out.push(ch); continue; }
+            vi++;
+            if (vi < idx) continue;
+            if (vi >= idx + q.length) break;
+            out.push(ch);
+          }
+          if (vi >= idx + q.length - 1) core = out.join('').trim();
+          if (core) break;
+        }
+      } else {
+        const chars = Array.from(String(w));
+        if (chars.length > q.length) core = chars.slice(0, q.length).join('').trim();
+      }
+      if (!core || core.length < 2 || inHits.has(core)) continue;
       count.set(core, (count.get(core) || 0) + 1);
     }
     return [...count].filter(([, n]) => n >= minCount).sort((a, b) => b[1] - a[1]).map(([c]) => c).slice(0, limit);

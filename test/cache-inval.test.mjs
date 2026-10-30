@@ -161,6 +161,16 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   ok(!ix.fuzzy('fcz').includes('白雪公主'), 'fuzzy: 无关词不混入');
   eq(ix.fuzzy(''), [], 'fuzzy: 空查询返回空');
 }
+// 8b. truncateByQuery 位置对齐：lm 命中「复仇者联盟」中间，须截成「联盟」而非词首「复仇」（用户 bug）
+{
+  const ix = P.createPinIndex();
+  ix.addMany(['复仇者联盟', '复仇者联盟2', '罗密欧与朱丽叶', '罗密欧与朱丽叶2', '乐高玩具大电影', '超级英雄联盟']);
+  const hits = ix.suggest('lm', 30); // l m → 复仇者联盟? no。实际 lm 需模糊/fuzzy；这里用 fuzzy 覆盖中间命中
+  const pool = ix.fuzzy('lm', 30); // 联盟/朱丽叶? 罗密欧与朱丽叶=lm?? 罗=l 密=m→'lm' 命中词首；复仇者联盟 fczl(m)? 盟=meng→m，盟前联=lian→l →'...lm'中间
+  const t = P.truncateByQuery('lm', [...new Set([...hits, ...pool])], 3, 1, w => ix.variants(w));
+  ok(t.includes('联盟'), 'trunc-align: lm→联盟（匹配位=复仇者联盟末2字，非词首复仇）');
+  ok(!t.includes('复仇') && !t.includes('乐高'), 'trunc-align: 不再错截词首「复仇/乐高」(got ' + JSON.stringify(t) + ')');
+}
 
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');
 process.exit(fails ? 1 : 0);

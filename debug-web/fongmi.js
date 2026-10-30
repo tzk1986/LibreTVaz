@@ -1165,8 +1165,8 @@ function renderSearch() {
       for (const w of pinIndex.fuzzy(q, 30 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
     }
     hits = [...new Set(hits)];
-    // ②截断核心词：系列命中截到查询等长字数（fcz→复仇者），置顶带标，点选即搜
-    const truncs = /^[a-z]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3) : [];
+    // ②截断核心词：查询在首字母串的匹配位置对齐截断（fcz→复仇者、lm→联盟），置顶带标，点选即搜
+    const truncs = /^[a-z]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3, 2, pinIndex && (w => pinIndex.variants(w))) : [];
     const marked = new Set(truncs);
     hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 30);
     row.innerHTML = hits.length
