@@ -1325,10 +1325,35 @@ async function openDetail(item) {
   const dk = `detail:${normUrl(s.url)}|${item.id}`;
   const cached = cacheGet(dk);
   let painted = false;
+  /* O1a 跨会话进度（docs/2026-10-30-O1-O3播放与直播体验方案.md）：fongmi_prog { "<id>|<si>": {ep,sec,dur,ts} }
+     timeupdate 5s 节流 / pause 即写 / ended 清除；写时顺带清理超 30 天或已脱离历史+收藏的孤儿项 */
+  let progKey = '', progEp = () => 0;
+  const progSave = () => {
+    if (!progKey) return;
+    const v = $('#player'); if (!v) return;
+    if (!isFinite(v.duration) || v.duration <= 0 || v.currentTime < 5) return;
+    const all = LS('fongmi_prog', {});
+    all[progKey] = { ep: progEp(), sec: Math.round(v.currentTime), dur: Math.round(v.duration), ts: Date.now() };
+    const alive = new Set([...LS('fongmi_hist', []), ...LS('fongmi_keep', [])].map(h => `${h.id}|${h.si}`));
+    for (const k in all) { if (!alive.has(k) || Date.now() - (all[k].ts || 0) > 2592e6) delete all[k]; }
+    localStorage.setItem('fongmi_prog', JSON.stringify(all));
+  };
+  const progClear = () => {
+    if (!progKey) return;
+    const all = LS('fongmi_prog', {});
+    if (all[progKey]) { delete all[progKey]; localStorage.setItem('fongmi_prog', JSON.stringify(all)); }
+  };
+  {
+    const pv = $('#player'); let lastProg = 0;
+    pv.addEventListener('timeupdate', () => { const n = Date.now(); if (n - lastProg >= 5000) { lastProg = n; progSave(); } });
+    pv.addEventListener('pause', progSave);
+    pv.addEventListener('ended', progClear);
+  }
   const paint = d => {
   if (!d || App.view !== 'video') return;
   painted = true;
   const si = SRC.vod.indexOf(s);
+  progKey = `${d.id}|${si}`;
   $('#vtxt').innerHTML = `
     <h2>${esc(d.title)} <small class="muted" style="font-size:12px">${esc(s.name)}</small></h2>
     <p class="meta">${esc([d.remarks || d.notes, d.year, d.area, d.type].filter(Boolean).join(' / '))}</p>
@@ -1349,7 +1374,8 @@ async function openDetail(item) {
   let line = d.episodes.findIndex(g => g.list.length && g.list.some(x => isStreamLink(x.link)));
   if (line < 0) line = d.episodes.findIndex(g => g.list.length);
   if (line < 0) line = 0;
-  let curEp = 0; // 当前播放集序号，跨源跳转后按它续播
+  let curEp = 0; // 当前播放集序号，跨源跳转/跨会话续播按它归属
+  progEp = () => curEp;
   $('#findBtn').onclick = () => openFindBox(d.title, () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 }));
   const rows = $('#vrows');
   rows.innerHTML = `
@@ -1357,7 +1383,8 @@ async function openDetail(item) {
     <div class="eprow" style="align-items:flex-start"><span class="slabel">选集</span><div class="hrow" id="epRow" style="flex:1;flex-wrap:wrap"></div></div>`;
   const draw = (ep = 0) => {
     $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${esc(g.flag)}(${g.list.length})</button>`).join('');
-    $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
+    const progHere = LS('fongmi_prog', {})[`${d.id}|${si}`];
+    $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}${progHere && progHere.ep === i ? ' prog' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
     $('#flagRow').onclick = e => {
       const b = e.target.closest('[data-l]'); if (!b) return;
       line = +b.dataset.l; curEp = 0;
@@ -1374,17 +1401,33 @@ async function openDetail(item) {
       playInto($('#player'), u.link, `${d.title} · ${u.name}`);
     };
   };
-  let startEp = 0;
-  if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度
+  let startEp = 0, seekTo = 0, fromProg = false;
+  if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度（优先于跨会话进度）
     const r = App.resume; App.resume = null;
     if (d.episodes[r.line]?.list.length) line = r.line;
     startEp = Math.min(r.ep || 0, d.episodes[line].list.length - 1);
+  } else if (LS('fongmi_resume', 1) !== 0) { // O1a 跨会话续播（fongmi_resume=0 关闭读取）
+    const p = LS('fongmi_prog', {})[`${d.id}|${si}`];
+    if (p && d.episodes[line]?.list.length) {
+      startEp = Math.min(p.ep || 0, d.episodes[line].list.length - 1);
+      seekTo = p.sec || 0;
+      fromProg = true;
+    }
   }
   curEp = startEp;
   draw(startEp);
   const cur = d.episodes[line].list[startEp];
   if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`);
-  if (startEp > 0) toast(`已在新源第 ${startEp + 1} 集续播`);
+  if (fromProg) {
+    if (seekTo >= 5) { // hls 时长在 MANIFEST_PARSED 后可用，loadedmetadata/canplay 双保险
+      const vv = $('#player'); let ok = false;
+      const f = () => { if (ok) return; const D = vv.duration; if (isFinite(D) && D > seekTo + 1) { ok = true; vv.currentTime = seekTo; } };
+      vv.addEventListener('loadedmetadata', f); vv.addEventListener('canplay', f);
+    }
+    if (startEp > 0 || seekTo >= 5) {
+      toast(`继续播放 第${startEp + 1}集 ${Math.floor(seekTo / 60)}:${String(Math.floor(seekTo % 60)).padStart(2, '0')}`);
+    }
+  } else if (startEp > 0) toast(`已在新源第 ${startEp + 1} 集续播`);
   Focus.set($('#player'));
   };
   if (cached) paint(cached);

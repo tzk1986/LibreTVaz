@@ -60,6 +60,8 @@
   .chip.on { color: #000; background: var(--fg); font-weight: 600; }
   .btn { background: var(--bg2); border: 2px solid transparent; border-radius: 4px; padding: 5px 14px; cursor: pointer; white-space: nowrap; display: inline-block; }
   .btn.on { color: #000; background: var(--accent); }
+  .btn.prog { position: relative; }
+  .btn.prog::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: #e53935; }
 
   /* 遥控器焦点 */
   .focus { border-color: #fff !important; transform: scale(1.05); box-shadow: 0 0 14px rgba(255,255,255,.35); position: relative; z-index: 5; }
