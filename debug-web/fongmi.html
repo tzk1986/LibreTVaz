@@ -46,7 +46,9 @@
   .card .name { margin-top: 6px; font-size: 13px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .del { position: absolute; left: 2px; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,.7); color: #fff; display: none; align-items: center; justify-content: center; z-index: 2; }
   .card .upd { position: absolute; right: 4px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: #e53935; box-shadow: 0 0 6px #e53935; z-index: 1; }
-  .card.focus .del { display: flex; }
+  .card.focus .del, .card:has(.del.focus) .del { display: flex; }
+  /* 遥控可达：× 自身获焦时白底反色，卡片保持显形（:has 保证 del 不被 display:none 移出焦点候选） */
+  .card .del.focus { background: #fff; color: #000; box-shadow: 0 0 10px rgba(255,255,255,.6); }
 
   .kb { width: 40px; text-align: center; padding: 6px 0; }
 

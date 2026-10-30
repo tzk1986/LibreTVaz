@@ -787,7 +787,7 @@ window.addEventListener('error', e => {
 }, true);
 function cardHtml(it, i, opts = {}) {
   return `<div class="card" data-focus data-i="${i}">
-    ${opts.del ? '<button class="del" data-del="1">×</button>' : ''}
+    ${opts.del ? '<button class="del" data-focus data-del="1" title="删除">×</button>' : ''}
     <div class="pic"><div class="ph">${esc(it.name)}</div>${picHtml(it.pic)}
       ${it.year ? `<span class="year">${esc(it.year)}</span>` : ''}
       ${opts.showSite && it.source ? `<span class="site">${esc(it.source.name)}</span>` : ''}
@@ -1673,7 +1673,7 @@ async function probeAll() {
 /* ================= 收藏页（KeepActivity） ================= */
 function renderKeep() {
   const keep = LS('fongmi_keep', []);
-  body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>焦点按 ×(Enter) 取消收藏</small>
+  body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>选中卡片后按 ↑ 再确定可取消收藏</small>
     <button class="btn" data-focus id="keepBack" style="margin-left:auto">← 首页</button></div>
     <div class="grid" id="keepGrid">${keep.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">空空如也</p>'}</div></main>`;
   bindBack('keepBack', () => switchView('home'));
@@ -1724,7 +1724,7 @@ async function checkKeeps(items) {
 function renderHist() {
   // （入口在首页「历史」功能按钮；返回/删除均可遥控点选）
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]).map(h => ({ ...h, source: SRC.vod[h.si] }));
-  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 最新在最前 · 焦点到卡片按 ×(Enter) 删除</small>
+  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 最新在最前 · 选中卡片按 ↑ 再确定删除</small>
     <button class="btn" data-focus id="histBack" style="margin-left:auto">← 首页</button><button class="btn" data-focus id="histClear">清空全部</button></div>
     <div class="grid" id="histAllGrid">${hist.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">暂无观看历史</p>'}</div></main>`;
   $('#histClear').onclick = () => {
