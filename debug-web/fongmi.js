@@ -273,7 +273,7 @@ async function resolvePlay(link) {
   return link;
 }
 let playSeq = 0;
-async function playInto(video, url, title) {
+async function playInto(video, url, title, onDead) {
   const seq = ++playSeq;
   stopHls();
   video.pause(); video.removeAttribute('src');
@@ -285,7 +285,8 @@ async function playInto(video, url, title) {
     if (seq !== playSeq) return; // 解码期间被新的播放/停止顶掉，丢弃本次
   }
   const px = '/proxy?url=' + encodeURIComponent(url);
-  const dead = () => { stopHls(); mark(false); toast('该线路无法播放，请换线路或换源'); };
+  // O1b：onDead 返回 true 表示外层已改播其它线路，不再弹手动提示
+  const dead = () => { stopHls(); mark(false); if (!onDead || !onDead()) toast('该线路无法播放，请换线路或换源'); };
   if (/\.(m3u8|mpd)/i.test(url) && window.Hls && Hls.isSupported()) {
     mark(true);
     const start = usePx => {
@@ -1376,6 +1377,7 @@ async function openDetail(item) {
   if (line < 0) line = 0;
   let curEp = 0; // 当前播放集序号，跨源跳转/跨会话续播按它归属
   progEp = () => curEp;
+  let tried = new Set(); // O1b 本次失败换链中已试过的线路下标（手动换线/选集会重置）
   $('#findBtn').onclick = () => openFindBox(d.title, () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 }));
   const rows = $('#vrows');
   rows.innerHTML = `
@@ -1387,19 +1389,36 @@ async function openDetail(item) {
     $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}${progHere && progHere.ep === i ? ' prog' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
     $('#flagRow').onclick = e => {
       const b = e.target.closest('[data-l]'); if (!b) return;
-      line = +b.dataset.l; curEp = 0;
+      line = +b.dataset.l; curEp = 0; tried = new Set([line]);
       toast(`正在切换线路至「${d.episodes[line].flag}」`);
       draw();
       const f = d.episodes[line].list[0];
-      if (f) playInto($('#player'), f.link, `${d.title} · ${f.name}`);
+      if (f) playInto($('#player'), f.link, `${d.title} · ${f.name}`, nextLine);
     };
     $('#epRow').onclick = e => {
       const b = e.target.closest('[data-e]'); if (!b) return;
       document.querySelectorAll('#epRow .btn').forEach(x => x.classList.toggle('on', x === b));
-      curEp = +b.dataset.e;
+      curEp = +b.dataset.e; tried = new Set([line]);
       const u = d.episodes[line].list[curEp];
-      playInto($('#player'), u.link, `${d.title} · ${u.name}`);
+      playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
     };
+  };
+  /* O1b 播放失败自动换线：按「未试过≠当前」取候选，优先同集且带流后缀的线路；单次失败只跳一条，
+     重试上限=线路数（tried 集天然封顶）；fongmi_autoline=0 关闭回退原 toast */
+  const nextLine = () => {
+    if (LS('fongmi_autoline', 1) === 0) return false;
+    const cand = d.episodes
+      .map((g, i) => ({ i, u: g.list[curEp] || g.list[0] }))
+      .filter(x => x.i !== line && !tried.has(x.i) && x.u)
+      .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
+    if (!cand.length) return false;
+    tried.add(cand[0].i);
+    line = cand[0].i;
+    draw(curEp);
+    const u = d.episodes[line].list[curEp] || d.episodes[line].list[0];
+    toast(`该线路无法播放，已自动切换「${d.episodes[line].flag}」`);
+    playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
+    return true;
   };
   let startEp = 0, seekTo = 0, fromProg = false;
   if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度（优先于跨会话进度）
@@ -1415,9 +1434,10 @@ async function openDetail(item) {
     }
   }
   curEp = startEp;
+  tried = new Set([line]);
   draw(startEp);
   const cur = d.episodes[line].list[startEp];
-  if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`);
+  if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`, nextLine);
   if (fromProg) {
     if (seekTo >= 5) { // hls 时长在 MANIFEST_PARSED 后可用，loadedmetadata/canplay 双保险
       const vv = $('#player'); let ok = false;
