@@ -70,7 +70,7 @@ function parseList(text, source) {
   return (j.list || []).map(v => ({
     id: String(v.vod_id ?? ''), name: v.vod_name || '', pic: v.vod_pic || '',
     remarks: v.vod_remarks || null, year: v.vod_year || null, area: v.vod_area || null,
-    typeName: v.type_name || null, source,
+    typeName: v.type_name || null, type: v.type || v.vod_class || null, source, // type/class 为 R8 分类中间件第三信号
   })).filter(x => x.id && x.name);
 }
 function parseTypes(text) {
@@ -301,6 +301,12 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     if (editing) { document.activeElement.blur(); e.preventDefault(); return; } // 退编辑，Focus.el 选中框保留
+    if (App.view === 'vod' && Vod.showFilters && Focus.el && $('#subRow')?.contains(Focus.el)) { // R8：筛选行内 Esc=收起并回到当前分类 chip
+      Vod.showFilters = false; drawSubRow();
+      const chip = [...document.querySelectorAll('#typeRow [data-tid]')].find(c => c.dataset.tid === String(Vod.tab?.id ?? ''));
+      Focus.set(chip || $('#typeRow').querySelector('[data-focus]') || $('#vodBack'));
+      e.preventDefault(); return;
+    }
     onEsc(); return;
   }
   if (e.key === 'Enter') {
@@ -890,6 +896,7 @@ function onScroll() {
   if (App.view === 'home') {
     if (Home.more && !Home.loading && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200) loadRec(Home.page + 1);
   } else if (App.view === 'vod') {
+    if (Vod.preset && !Vod.pSrv && Vod.page >= 10) return; // R8 三级 (b)：客户端地区过滤 10 页封顶停止翻页
     if (Vod.more && !Vod.loading && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200) loadVod(Vod.page + 1);
   }
 }
@@ -924,7 +931,7 @@ async function loadRec(pg = 1) {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '' };
 function renderVod() {
   body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="vodBack">← 首页</button></div>
     <div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
@@ -1104,7 +1111,31 @@ async function aggPrefetch(rid, token, skip) {
     }, 2);
   }
 }
-const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; };
+const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; Vod.preset = ''; Vod.pSrv = null; Vod.presetInfo = ''; };
+/* ===== R8 地区预设筛选（docs/2026-10-30-遥控可用性复盘与优化方案.md）=====
+   预设族识别：当前分类沿 pid 上溯根，根名+本名匹配 电影/电视剧/综艺；聚合墙本轮不加（返回 null） */
+function presetKeyForTab() {
+  if (Vod.agg || !Vod.tab) return null;
+  let cur = Vod.tab, root = null, hop = 0;
+  while (cur && hop++ <= 5) { root = cur; const p = cur.pid; cur = p && p !== '0' && p !== '' && p !== 'null' ? Vod.types.find(t => t.id === p) : null; }
+  const nm = ((root && root.name) || '') + '|' + Vod.tab.name;
+  if (/电影|影片/.test(nm) && !/电视剧|连续剧/.test(nm)) return '电影';
+  if (/电视剧|连续剧|剧集/.test(nm)) return '电视剧';
+  if (/综艺|脱口秀|真人秀/.test(nm)) return '综艺';
+  return null;
+}
+const isDescendantOfTab = t => {
+  if (!Vod.tab || !t) return false;
+  let c = t, hop = 0;
+  while (c && hop++ <= 6) { if (c.id === Vod.tab.id) return true; c = Vod.types.find(x => x.id === c.pid); }
+  return false;
+};
+// 分类树中属于当前 tab 子树且名字带地区信号的子分类；无命中返回 null → 走客户端过滤
+const presetIds = labels => {
+  const hit = Vod.types.filter(c => (!Vod.tab || c.id !== Vod.tab.id) && isDescendantOfTab(c) && PerfCore.regionLabels(c.name).some(l => labels.includes(l)));
+  return hit.length ? hit : null;
+};
+const rgOf = it => it._rg || (it._rg = PerfCore.classifyVod(it));
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
 function buildFilters(t, raw) {
   const subs = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
@@ -1122,13 +1153,14 @@ async function pMap(arr, fn, limit = 6) {
   return out;
 }
 /* 父分类聚合：如非凡源「电影片」父 id 查询无数据，并行拉取其全部子类合并为真实分类页 */
-async function loadMerged(pg) {
-  const s = SRC.vod[Home.srcIdx]; if (!s || !Vod.merged) return;
+async function loadMerged(pg, srvIds) { // srvIds=R8 预设命中子分类数组：服务端按这些 id 合并拉取（优先于 Vod.merged 全子类）
+  const s = SRC.vod[Home.srcIdx]; if (!s || !(srvIds || Vod.merged)) return;
   const rid = Vod.reqId;
   const grid = $('#vodGrid'); if (!grid) return;
   const t = Vod.tab;
+  const kids = srvIds || Vod.merged;
   Vod.loading = true;
-  const ck = `mrg:${s.url}|${t ? t.id : ''}|${Vod.area}|${Vod.year}|${Vod.lang}`;
+  const ck = `mrg:${s.url}|${t ? t.id : ''}|${Vod.area}|${Vod.year}|${Vod.lang}|${(srvIds && Vod.preset) || ''}`;
   let cachedShown = false;
   if (pg === 1) {
     Vod.items = [];
@@ -1140,7 +1172,7 @@ async function loadMerged(pg) {
   if (Vod.area) extra += `&area=${encodeURIComponent(Vod.area)}`;
   if (Vod.year) extra += `&year=${encodeURIComponent(Vod.year)}`;
   if (Vod.lang) extra += `&lang=${encodeURIComponent(Vod.lang)}`;
-  const pages = await pMap(Vod.merged, c =>
+  const pages = await pMap(kids, c =>
     httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}${extra}&pg=${pg}`))
       .then(raw => parseList(raw, s)));
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
@@ -1159,6 +1191,7 @@ async function loadVod(pg = 1) {
   const rid = Vod.reqId;
   const grid = $('#vodGrid'); if (!grid) return;
   const t = Vod.tab;
+  if (Vod.preset && Vod.pSrv) return loadMerged(pg, Vod.pSrv); // R8：预设命中子分类→服务端合并拉取（三级数据解析之 (a)）
   if (t && !Vod.sub && Vod.merged) return loadMerged(pg);
   Vod.loading = true;
   const ck = `vod:${s.url}|${Vod.sub || (t ? t.id : 'all')}|${t ? Vod.area + '|' + Vod.year + '|' + Vod.lang : ''}`;
@@ -1197,10 +1230,23 @@ const sortByYearDesc = items =>
   items.map((it, i) => [it, i]).sort((a, b) => (yearNum(b[0]) - yearNum(a[0])) || (a[1] - b[1])).map(p => p[0]);
 function drawVodGrid() {
   const grid = $('#vodGrid'); if (!grid) return;
-  const shown = sortByYearDesc(Vod.items);
+  let shown = sortByYearDesc(Vod.items);
+  /* R8 三级 (b)：预设生效但分类树无地区分类→客户端 classifyVod 过滤；UNKNOWN 保守剔除并计数 */
+  let unknown = 0;
+  if (Vod.preset && !Vod.pSrv) {
+    const entry = (PerfCore.VOD_FILTERS[presetKeyForTab()] || []).find(p => p[0] === Vod.preset);
+    const labs = entry && entry[1].length ? entry[1] : null;
+    if (labs) shown = shown.filter(it => { const r = rgOf(it); if (r === 'UNKNOWN') { unknown++; return false; } return labs.includes(r); });
+  }
+  if (Vod.preset) {
+    Vod.presetInfo = Vod.pSrv
+      ? `地区「${Vod.preset}」：服务端 ${Vod.pSrv.length} 个分类合并`
+      : `地区「${Vod.preset}」：已拉 ${Vod.page} 页 ${Vod.items.length} 部，筛出 ${shown.length} 部${unknown ? ` · ${unknown} 部无地区信息未显示` : ''}${Vod.page >= 10 ? ' · 已拉满 10 页上限' : ''}`;
+  } else Vod.presetInfo = '';
   grid.innerHTML = shown.length
     ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
-    : `<p class="muted">${Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据'}</p>`;
+    : `<p class="muted">${Vod.preset ? esc(Vod.presetInfo) + '（仍无数据可继续下滑拉取或选「全部」）' : (Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据')}</p>`;
+  $('#presetInfo') && ($('#presetInfo').textContent = Vod.presetInfo || '');
   bindGrid(grid, shown, it => {
     if (!Vod.agg) { openDetail(it); return; }
     // 聚合墙：点击片名进入跨源搜索（影视仓豆瓣式：先统一展示，选中资源再全源查找）
@@ -1210,33 +1256,53 @@ function drawVodGrid() {
 }
 function drawSubRow() {
   const el = $('#subRow'); if (!el) return;
+  const pf = Focus.el && el.contains(Focus.el) && Focus.el.dataset ? [Focus.el.dataset.f ?? '', Focus.el.dataset.v ?? ''] : null; // 重绘后焦点归位原 chip
   const f = Vod.filters;
   if (!Vod.tab || !Vod.showFilters) { el.innerHTML = ''; return; }
-  if (!f || !(f.subs.length || f.area.length || f.year.length || f.lang.length)) {
+  const key = presetKeyForTab();
+  const presets = key ? PerfCore.VOD_FILTERS[key] : null;
+  const hasGrps = !!(f && (f.subs.length || f.area.length || f.year.length || f.lang.length));
+  if ((!presets || !presets.length) && !hasGrps) {
     el.innerHTML = '<span class="muted" style="font-size:12px;padding:6px 28px">该分类不支持二级筛选（源未提供子分类或扩展字段）</span>'; return;
   }
   const yr = String(new Date().getFullYear());
-  const grp = (key, label, opts) =>
+  const grp = (k, label, opts) =>
     `<span class="muted" style="font-size:12px;white-space:nowrap">${label}</span>` +
-    `<button class="chip${!Vod[key] ? ' on' : ''}" data-focus data-f="${key}" data-v="">全部</button>` +
-    opts.slice(0, 30).map(([v, name]) =>
-      `<button class="chip${String(Vod[key]) === String(v) ? ' on' : ''}" data-focus data-f="${key}" data-v="${esc(v)}">${esc(name === yr ? `本年(${yr})` : name)}</button>`
+    `<button class="chip${!Vod[k] ? ' on' : ''}" data-focus data-f="${k}" data-v="">全部</button>` +
+    opts.slice(0, 30).map(([v, name, off]) =>
+      `<button class="chip${String(Vod[k]) === String(v) ? ' on' : ''}${off ? ' off' : ''}" data-focus data-f="${k}" data-v="${esc(v)}">${esc(name === yr ? `本年(${yr})` : name)}</button>`
     ).join('');
+  /* R8：预设行置于最左；置灰条件=分类树无命中且当前已加载条目既无匹配也无 UNKNOWN（数据不足时不误判为不支持） */
+  const presetRow = presets && presets.length ? '<span class="muted" style="font-size:12px;white-space:nowrap">地区</span>' +
+    presets.map(([label, labs]) => {
+      let off = false;
+      if (labs.length && !presetIds(labs)) off = Vod.items.length > 0 && !Vod.items.some(it => labs.includes(rgOf(it)) || rgOf(it) === 'UNKNOWN');
+      const on = !Vod.preset ? label === '全部' : Vod.preset === label;
+      return `<button class="chip${on ? ' on' : ''}${off ? ' off' : ''}" data-focus data-f="preset" data-v="${esc(label)}">${esc(label)}</button>`;
+    }).join('') : '';
   el.innerHTML = [
-    f.subs.length && grp('sub', '子类', f.subs.map(s => [s.id, s.name])),
-    f.area.length && grp('area', '地区', f.area.map(v => [v, v])),
-    f.year.length && grp('year', '年份', [...new Set([yr, ...f.year])].map(v => [v, v])),
-    f.lang.length && grp('lang', '语言', f.lang.map(v => [v, v])),
+    presetRow,
+    hasGrps && grp('sub', '子类', f.subs.map(s => [s.id, s.name])),
+    hasGrps && f.area.length && grp('area', '地区(源扩展)', f.area.map(v => [v, v])),
+    hasGrps && f.year.length && grp('year', '年份', [...new Set([yr, ...f.year])].map(v => [v, v])),
+    hasGrps && f.lang.length && grp('lang', '语言', f.lang.map(v => [v, v])),
+    '<span class="muted" id="presetInfo" style="font-size:12px;white-space:nowrap;margin-left:6px"></span>',
   ].filter(Boolean).join('<span style="width:12px"></span>');
+  $('#presetInfo').textContent = Vod.presetInfo || '';
   el.onclick = e => {
     const b = e.target.closest('[data-f]'); if (!b) return;
-    const k = b.dataset.f;
-    if (k === 'sub') { Vod.sub = b.dataset.v; }
-    else Vod[k] = b.dataset.v;
-    Vod.showFilters = false; // 筛选生效后收起，再点分类标签可重新展开修改
-    drawSubRow();
+    if (b.classList.contains('off')) { toast('该源分类未收录此地区内容'); return; }
+    const k = b.dataset.f, v = b.dataset.v;
+    if (k === 'preset') {
+      const entry = (presets || []).find(p => p[0] === v);
+      if (!v || !entry || !entry[1].length || Vod.preset === v) { Vod.preset = ''; Vod.pSrv = null; } // 全部/再点同项=取消
+      else { Vod.preset = v; Vod.pSrv = presetIds(entry[1]) || null; } // 三级 (a)：树里有地区分类走服务端合并
+    } else if (k === 'sub') { Vod.sub = v; }
+    else { if (Vod[k] === v) Vod[k] = ''; else Vod[k] = v; } // 同项再按=取消（TVBox 交互）
+    drawSubRow(); // R8 改版：不再收起，焦点归位可连续调整
     loadVod(1);
   };
+  if (pf) { const target = [...el.querySelectorAll('[data-f]')].find(x => x.dataset.f === pf[0] && x.dataset.v === pf[1]); if (target) Focus.set(target); }
 }
 
 /* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想 */

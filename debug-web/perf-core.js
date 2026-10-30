@@ -296,6 +296,43 @@
       .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine };
+  /* ===== 地区分类中间件（docs/2026-10-30-遥控可用性复盘与优化方案.md R8）=====
+     条目级地区判定的纯函数，信号优先级：叶子 type_name > vod_area > type/class 分词。
+     地区枚举：DOM(大陆+港澳台，港台算国内) / EUUS(欧美，美国统一归此) / JP / KR / OTHER(东南亚印度等) / UNKNOWN(无信号，保守剔除) */
+  const REGION_PAT = [
+    ['DOM', ['大陆', '内地', '国产', '中国', '华语', '粤语', '香港', '港剧', '港产', '港台', '澳门', '台湾', '台剧', '台影']],
+    ['EUUS', ['欧美', '美国', '美剧', '英剧', '英国', '欧洲', '法国', '德国', '意大利', '西班牙', '俄罗斯', '加拿大', '澳大利亚', '新西兰', '好莱坞']],
+    ['JP', ['日本', '日剧', '日影', '日韩']],
+    ['KR', ['韩国', '韩剧', '韩影', '日韩']],
+    ['OTHER', ['泰国', '泰剧', '马来', '菲律宾', '越南', '印度', '新加坡', '印尼', '东南亚', '拉丁', '非洲', '中东']],
+  ];
+  const AREA_MAP = {};
+  for (const [lab, ws] of REGION_PAT) for (const w of ws) if (!(w in AREA_MAP)) AREA_MAP[w] = lab;
+  Object.assign(AREA_MAP, { 国产剧: 'DOM', 港: 'DOM', 台: 'DOM', 澳: 'DOM', 美: 'EUUS', 英: 'EUUS', 日: 'JP', 韩: 'KR', 其它: 'OTHER', 其他: 'OTHER' });
+  // 命中的所有地区标签（多命中按表序，如「日韩综艺」→[JP,KR]）
+  function regionLabels(name) { const s = String(name || ''); return REGION_PAT.filter(([, ws]) => ws.some(w => s.includes(w))).map(([lab]) => lab); }
+  // 单条 vod_area：按分隔符拆 token，精确 AREA_MAP 优先，其次整词 regionLabels；全空返回 null
+  function regionOfArea(a) {
+    for (const t of String(a || '').split(/[,，、/;；|]+/).map(x => x.trim()).filter(Boolean)) {
+      if (AREA_MAP[t]) return AREA_MAP[t];
+      const h = regionLabels(t); if (h.length) return h[0];
+    }
+    return null;
+  }
+  // 条目地区：typeName > area > type/class；无信号 UNKNOWN（渲染期保守剔除并计数）
+  function classifyVod(it) {
+    const n1 = it && it.typeName; if (n1) { const h = regionLabels(n1); if (h.length) return h[0]; }
+    const r = regionOfArea(it && it.area); if (r) return r;
+    const n3 = it && (it.type || it.class); if (n3) { const h = regionLabels(String(n3)); if (h.length) return h[0]; }
+    return 'UNKNOWN';
+  }
+  // 三类海报墙预设（用户定稿语义：港台归国内、美国归欧美）；[] = 全部
+  const VOD_FILTERS = {
+    电影: [['全部', []], ['国内', ['DOM']], ['国外', ['EUUS', 'JP', 'KR', 'OTHER']], ['日影', ['JP']], ['韩影', ['KR']], ['欧美', ['EUUS']]],
+    电视剧: [['全部', []], ['国内', ['DOM']], ['欧美剧', ['EUUS']], ['日剧', ['JP']], ['韩剧', ['KR']], ['小语种', ['OTHER']]],
+    综艺: [['全部', []], ['国内', ['DOM']], ['国外', ['EUUS', 'JP', 'KR', 'OTHER']], ['日本', ['JP']], ['韩国', ['KR']]],
+  };
+
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

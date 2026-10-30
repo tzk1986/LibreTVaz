@@ -31,6 +31,7 @@ if (!await waitUp()) {
 const firstCmsApi = () => 'https://cj.ffzyapi.com/api.php/provide/vod';
 
 const jobs = [
+  ['classify', ['test/classify.test.mjs'], {}],
   ['cache-inval', ['test/cache-inval.test.mjs'], {}],
   ['proxy', ['test/proxy.test.mjs', String(PORT)], {}],
   ['remote', ['test/remote.test.mjs', String(PORT)], {}],
