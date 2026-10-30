@@ -739,6 +739,7 @@ function cardHtml(it, i, opts = {}) {
     <div class="pic"><div class="ph">${esc(it.name)}</div>${picHtml(it.pic)}
       ${it.year ? `<span class="year">${esc(it.year)}</span>` : ''}
       ${opts.showSite && it.source ? `<span class="site">${esc(it.source.name)}</span>` : ''}
+      ${it.updated ? '<span class="upd"></span>' : ''}
       ${it.remarks ? `<span class="remark">${esc(it.remarks)}</span>` : ''}</div>
     <div class="name">${esc(it.name)}</div></div>`;
 }
@@ -754,12 +755,13 @@ function bindGrid(el, items, onPick, onDel) {
 const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), aggMode: localStorage.getItem('fongmi_agg') === '1', types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
 function renderHome() {
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]);
+  const keepAll = LS('fongmi_keep', []); const keepNu = keepAll.filter(x => x.updated).length;
   body.innerHTML = `<main id="scroller">
     <div class="funcs" id="funcs">
       <div class="func" data-focus data-nav="vod"><b>点播</b><i>VodActivity</i></div>
       <div class="func" data-focus data-nav="live"><b>直播</b><i>LiveActivity</i></div>
       <div class="func" data-focus data-nav="search"><b>搜索</b><i>SearchActivity</i></div>
-      <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${LS('fongmi_keep', []).length} 部</i></div>
+      <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${keepAll.length} 部${keepNu ? ' · ' + keepNu + ' 部更新' : ''}</i></div>
       <div class="func" data-focus data-nav="probe"><b>连接</b><i>源测速探活</i></div>
       <div class="func" data-focus data-nav="sources"><b>源管理</b><i>导入订阅/源设置</i></div>
       <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
@@ -1365,7 +1367,7 @@ async function openDetail(item) {
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
     const at = k.findIndex(x => x.id === d.id && x.si === si);
-    if (at >= 0) { k.splice(at, 1); toast('已取消收藏'); } else { k.unshift({ id: d.id, name: d.title, pic: d.pic, si }); toast('已加入收藏'); }
+    if (at >= 0) { k.splice(at, 1); toast('已取消收藏'); } else { k.unshift({ id: d.id, name: d.title, pic: d.pic, si, eps: d.episodes[line]?.list.length || 0, flag: d.episodes[line]?.flag || '', last: d.remarks || d.notes || '', ts: Date.now() }); toast('已加入收藏'); }
     localStorage.setItem('fongmi_keep', JSON.stringify(k.slice(0, 50)));
     $('#keepBtn').classList.toggle('on', at < 0);
   };
@@ -1588,10 +1590,46 @@ function renderKeep() {
   const keep = LS('fongmi_keep', []);
   body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>焦点按 ×(Enter) 取消</small></div>
     <div class="grid" id="keepGrid">${keep.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">空空如也</p>'}</div></main>`;
-  bindGrid($('#keepGrid'), keep, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
+  bindGrid($('#keepGrid'), keep, h => {
+    const k = LS('fongmi_keep', []); const x = k.find(y => y.id === h.id && y.si === h.si);
+    if (x && x.updated) { x.updated = false; localStorage.setItem('fongmi_keep', JSON.stringify(k)); } // 进详情即清角标
+    openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] });
+  }, i => {
     const k = LS('fongmi_keep', []); k.splice(i, 1);
     localStorage.setItem('fongmi_keep', JSON.stringify(k)); renderKeep();
   });
+  checkKeeps(keep);
+}
+/* O3a 追剧更新检测（docs/2026-10-30-O1-O3播放与直播体验方案.md）：仅收藏页触发非轮询；
+   keepchk 分片 30min SWR；比对同线路集数增长或 remarks 变化；旧项无基线首次仅记基线；单源失败静默 */
+const KEEPCHK_TTL = 30 * 60 * 1000;
+let keepChkSeq = 0;
+async function checkKeeps(items) {
+  const tk = ++keepChkSeq;
+  const results = [];
+  await pMap(items.filter(x => x && x.id && SRC.vod[x.si]), async it => {
+    const s = SRC.vod[it.si];
+    const ck = `keepchk:${it.id}|${it.si}`;
+    const c = cacheRaw(ck);
+    if (c && Date.now() - c.t < KEEPCHK_TTL) { results.push({ it, ...c.d, fresh: false }); return; }
+    const d = parseDetail(await httpGet(listUrl(s.url, `ac=videolist&ids=${encodeURIComponent(it.id)}`), 8000), s);
+    const maxEps = Math.max(0, ...d.episodes.map(g => g.list.length));
+    const eps = it.flag ? (d.episodes.find(g => g.flag === it.flag)?.list.length ?? maxEps) : maxEps;
+    const last = d.remarks || d.notes || '';
+    const u = it.eps == null ? false : (eps > (it.eps || 0) || (!!last && !!it.last && last !== it.last));
+    cacheSet(ck, { eps, last, u });
+    results.push({ it, eps, last, u, fresh: true });
+  }, 3);
+  if (tk !== keepChkSeq) return; // 新一轮检测已启动，丢弃旧结果
+  if (!results.length || !results.some(r => !!r.u !== !!r.it.updated || (r.fresh && r.it.eps == null))) return;
+  const k = LS('fongmi_keep', []);
+  for (const r of results) {
+    const x = k.find(y => y.id === r.it.id && y.si === r.it.si); if (!x) continue;
+    if (x.eps == null && r.fresh) { x.eps = r.eps; x.last = r.last; x.ts = Date.now(); }
+    x.updated = !!r.u;
+  }
+  localStorage.setItem('fongmi_keep', JSON.stringify(k));
+  if (App.view === 'keep') renderKeep(); // 二次进入全走缓存、changed=false 不再循环
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
