@@ -1,0 +1,57 @@
+{
+  "recordedAt": "2026-10-30T02:02:56.243Z",
+  "kw": "庆余年",
+  "top": 8,
+  "firstTab": 687,
+  "allDone": 10772,
+  "per": [
+    {
+      "name": "非凡资源",
+      "ms": 853,
+      "hits": 8,
+      "err": null
+    },
+    {
+      "name": "量子资源",
+      "ms": 797,
+      "hits": 3,
+      "err": null
+    },
+    {
+      "name": "360采集",
+      "ms": 718,
+      "hits": 3,
+      "err": null
+    },
+    {
+      "name": "索尼采集",
+      "ms": 5526,
+      "hits": 0,
+      "err": "Unexpected token '暂', \"暂不支持搜索\" is not va"
+    },
+    {
+      "name": "天天采集",
+      "ms": 646,
+      "hits": 7,
+      "err": null
+    },
+    {
+      "name": "茅台采集",
+      "ms": 1543,
+      "hits": 0,
+      "err": null
+    },
+    {
+      "name": "火狐采集",
+      "ms": 10729,
+      "hits": 0,
+      "err": "HTTP 502"
+    },
+    {
+      "name": "无尽资源",
+      "ms": 10730,
+      "hits": 0,
+      "err": "HTTP 502"
+    }
+  ]
+}
