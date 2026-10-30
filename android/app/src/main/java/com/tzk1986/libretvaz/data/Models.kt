@@ -27,6 +27,12 @@ data class VodSummary(
     val isAdult: Boolean = false,
 )
 
+/** 一集：名称 + 播放地址（对应 web episodes[line].list 元素） */
+data class PlayEpisode(val name: String, val link: String)
+
+/** 一条线路（flag 如「极速」+ 全部剧集，对齐 web 多线路结构） */
+data class PlayLine(val flag: String, val list: List<PlayEpisode>)
+
 data class VideoDetail(
     val title: String,
     val cover: String? = null,
@@ -37,7 +43,7 @@ data class VideoDetail(
     val actor: String? = null,
     val director: String? = null,
     val sourceName: String,
-    val episodes: List<String>,
+    val lines: List<PlayLine>,
 )
 
 data class VodType(

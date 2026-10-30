@@ -156,36 +156,47 @@ object CmsParser {
         }
     }
 
-    /** 源1$$$源2，集1$URL1#集2$URL2 → 优先含 .m3u8 直链的线路，均无则回退第一条 */
-    fun extractEpisodesFromPlayUrl(playUrl: String): List<String> {
+    /** 源1$$$源2，集1$URL1#集2$URL2 → 保留每条线路（flag+剧集），对齐 web 多线路结构；
+     *  flag 优先取 vod_play_from 第 i 段，其次组内「flag:」前缀（冒号须在首个 http 前，防切进协议头） */
+    fun extractLinesFromPlayUrl(playUrl: String, playFrom: String = ""): List<PlayLine> {
         if (playUrl.isBlank()) return emptyList()
         // 线路分隔符为三个美元符；"$$" 在 Kotlin 中是转义，需显式拼接
-        val groups = playUrl.split("$".repeat(3))
-            .map { group ->
-                group.split("#").mapNotNull { ep ->
-                    val parts = ep.split("$")
-                    val url = if (parts.size > 1) parts[1].trim() else ""
-                    url.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        val fromFlags = playFrom.split("$".repeat(3)).map { it.trim() }
+        return playUrl.split("$".repeat(3)).mapIndexedNotNull { gi, group ->
+            var flag = fromFlags.getOrNull(gi).orEmpty()
+            var body = group
+            if (flag.isEmpty()) {
+                val ci = group.indexOf(':')
+                val hi = group.indexOf("http")
+                if (ci >= 0 && (hi < 0 || ci < hi)) {
+                    flag = group.substring(0, ci).trim()
+                    body = group.substring(ci + 1)
                 }
             }
-            .filter { it.isNotEmpty() }
-        if (groups.isEmpty()) return emptyList()
-        return groups.firstOrNull { eps -> eps.any { it.contains(".m3u8") } } ?: groups[0]
+            val eps = body.split("#").mapIndexedNotNull { idx, ep ->
+                val parts = ep.split("$")
+                val url = if (parts.size > 1) parts[1].trim() else ""
+                if (url.startsWith("http://") || url.startsWith("https://"))
+                    PlayEpisode(parts[0].trim().ifBlank { "第${idx + 1}集" }, url)
+                else null
+            }
+            if (eps.isEmpty()) null else PlayLine(flag.ifBlank { "默认线路" }, eps)
+        }
     }
 
-    fun extractM3u8FromText(text: String): List<String> {
+    fun extractM3u8LinesFromText(text: String): List<PlayLine> {
         if (text.isBlank()) return emptyList()
         val m = M3U8_IN_TEXT.matcher(text)
-        val out = mutableListOf<String>()
-        while (m.find()) out.add(m.group().removePrefix("$"))
-        return out
+        val out = mutableListOf<PlayEpisode>()
+        while (m.find()) out.add(PlayEpisode("简介直链", m.group().removePrefix("$")))
+        return if (out.isEmpty()) emptyList() else listOf(PlayLine("简介直链", out))
     }
 
     fun parseDetail(data: JSONObject, source: VodSource): VideoDetail? {
         val arr = data.optJSONArray("list")
         val vod = arr?.optJSONObject(0) ?: return null
-        var episodes = extractEpisodesFromPlayUrl(vod.optString("vod_play_url"))
-        if (episodes.isEmpty()) episodes = extractM3u8FromText(vod.optString("vod_content"))
+        var lines = extractLinesFromPlayUrl(vod.optString("vod_play_url"), vod.optString("vod_play_from"))
+        if (lines.isEmpty()) lines = extractM3u8LinesFromText(vod.optString("vod_content"))
         return VideoDetail(
             title = vod.optString("vod_name"),
             cover = vod.optString("vod_pic").ifBlank { null },
@@ -196,7 +207,7 @@ object CmsParser {
             actor = vod.optString("vod_actor").ifBlank { null },
             director = vod.optString("vod_director").ifBlank { null },
             sourceName = source.name,
-            episodes = episodes,
+            lines = lines,
         )
     }
 }
