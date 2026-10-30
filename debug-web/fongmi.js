@@ -1057,6 +1057,13 @@ const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { c
 /* 单个源在聚合墙中贡献的数据：cat=null 取全量最新，否则按名称匹配其父分类并取前 3 个子类首页。
    cat.rlabs（地区预设，如 日剧）：只拉区命中子类（每源前4个）；源无区子类→回落父类混拉靠条目 area/typeName 客户端过滤。
    实测 360/非凡/量子/天天/茅台/速播 电视剧子树均含日剧子类，但默认 slice(0,3) 拉不到——按地区定向抓取修复 */
+/* 源的分类树里是否存在命中 cat.rlabs 的地区子类（=该源「收录」了该区资源），聚合墙据此排优先级 */
+function hasRegionKid(types, cat) {
+  if (!cat || !cat.rlabs) return false;
+  const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
+  if (!p) return false;
+  return types.some(c => c.pid === p.id && c.id !== p.id && PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
+}
 async function fetchAggSource(s, cat) {
   if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []);
   const types = await getSrcTypes(s);
@@ -1092,18 +1099,27 @@ async function runAggWall(cat) {
     drawVodGrid();
     return true;
   };
-  const need = [];
+  let need = [];
   for (const s of pool) {
     const v = cacheRaw(aggKey(s, cat));
     if (!(v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < AGG_TTL)) need.push(s);
   }
-  if (!merge() && need.length) grid.innerHTML = `<p class="muted">正在聚合各源${cat ? '「' + cat.key + '」' : '最新'}，拉到即显示…</p>`;
+  let mergedOnce = merge(); // 本次运行内是否有过分片合并（全失败时据此给空态，不让网格永久停在「正在聚合…」）
+  if (!mergedOnce && need.length) grid.innerHTML = `<p class="muted">正在聚合各源${cat ? '「' + cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}，拉到即显示…</p>`;
+  if (cat && cat.rlabs && need.length > 1) { // 地区预设：分类树收录该区的源排前优先拉，先出海报墙（分类树 typesCache 已缓存，不额外增开销）
+    const caps = new Map();
+    await Promise.all(need.map(async s => caps.set(s.url, hasRegionKid(await getSrcTypes(s), cat))));
+    if (!alive()) return;
+    need = need.sort((a, b) => (caps.get(b.url) ? 1 : 0) - (caps.get(a.url) ? 1 : 0));
+    const hitN = need.filter(s => caps.get(s.url)).length;
+    if (!hitN && !mergedOnce) { grid.innerHTML = `<p class="muted">聚合无数据：「${cat.key}·${Vod.preset}」聚合池 ${pool.length} 源均未收录该地区分类，可选「全部」或换源重试<br><span class="muted" style="font-size:12px">聚合池：${esc(pool.map(s => s.name).join('、'))}</span></p>`; toast('聚合无数据'); return; }
+  }
   await pMap(need, async s => {
     const fresh = await fetchAggSource(s, cat);
     if (fresh.length) cacheSet(aggKey(s, cat), fresh);
-    if (alive()) merge();
+    if (alive()) mergedOnce = merge() || mergedOnce; // 一源返回就重画，新数据去重后增量上墙
   }, 5);
-  if (alive() && !Vod.items.length) { // 无数据也要有明确提示：网格不能停留在「正在聚合…」或空白（分类/筛选行本就保持显示）
+  if (alive() && !mergedOnce) { // 无数据也要有明确提示：网格不能停留在「正在聚合…」或空白（分类/筛选行本就保持显示）
     grid.innerHTML = `<p class="muted">聚合无数据：${pool.length} 个源均未返回「${cat ? cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}」（源无此地区分类或拉取超时），可选「全部」或换源重试<br><span class="muted" style="font-size:12px">已尝试源：${esc(pool.map(s => s.name).join('、')) || '（聚合池为空，请先在源设置中导入点播源）'}</span></p>`;
     toast('聚合无数据');
   }
@@ -1294,7 +1310,8 @@ function drawSubRow() {
   const presetRow = presets && presets.length ? '<span class="muted" style="font-size:12px;white-space:nowrap">地区</span>' +
     presets.map(([label, labs]) => {
       let off = false;
-      if (labs.length && !presetIds(labs)) off = Vod.items.length > 0 && !Vod.items.some(it => labs.includes(rgOf(it)) || rgOf(it) === 'UNKNOWN');
+      // 聚合墙不置灰：默认墙只拉每源前 3 子类，浅采样必然误判欧美/日/韩「未收录」反而挡死点击入口（聚合模式点谁都能触发定向抓取，真无数据由空态提示兜底）
+      if (!Vod.agg && labs.length && !presetIds(labs)) off = Vod.items.length > 0 && !Vod.items.some(it => labs.includes(rgOf(it)) || rgOf(it) === 'UNKNOWN');
       const on = !Vod.preset ? label === '全部' : Vod.preset === label;
       return `<button class="chip${on ? ' on' : ''}${off ? ' off' : ''}" data-focus data-f="preset" data-v="${esc(label)}">${esc(label)}</button>`;
     }).join('') : '';
