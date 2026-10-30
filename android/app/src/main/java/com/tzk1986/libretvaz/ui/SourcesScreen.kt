@@ -30,6 +30,22 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
         liveList = store.liveSources()
     }
 
+    fun doImport(target: String) {
+        if (target.isBlank() || busy) return
+        busy = true
+        message = null
+        scope.launch {
+            message = runCatching {
+                val r = store.importFromUrl(target)
+                refresh()
+                "已导入（${r.format}）：点播 +${r.vodAdded} · 直播 +${r.liveAdded}" +
+                    (if (r.repos > 0) " · 仓库 ${r.repos - r.reposFailed}/${r.repos}" else "") +
+                    if (r.skipped > 0) "，跳过 ${r.skipped} 个不支持条目（Spider/XML 等）" else ""
+            }.getOrElse { e -> "导入失败：${e.message}" }
+            busy = false
+        }
+    }
+
     BackHandler { onBack() }
 
     Column(modifier = modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -48,23 +64,16 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
-            Button(
-                enabled = !busy,
-                onClick = {
-                    busy = true
-                    message = null
-                    scope.launch {
-                        message = runCatching {
-                            val r = store.importFromUrl(importUrl)
-                            refresh()
-                            "已导入（${r.format}）：点播 +${r.vodAdded} · 直播 +${r.liveAdded}" +
-                                (if (r.repos > 0) " · 仓库 ${r.repos - r.reposFailed}/${r.repos}" else "") +
-                                if (r.skipped > 0) "，跳过 ${r.skipped} 个不支持条目（Spider/XML 等）" else ""
-                        }.getOrElse { e -> "导入失败：${e.message}" }
-                        busy = false
-                    }
-                }
-            ) { Text(if (busy) "导入中…" else "导入") }
+            Button(enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
+        }
+        // 订阅仓库预设（与 Web 端源管理一致）：点击即填入并导入，免手输长 URL
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PRESETS.forEach { (pname, purl) ->
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { importUrl = purl; doImport(purl) },
+                ) { Text(pname, style = MaterialTheme.typography.labelMedium) }
+            }
         }
         message?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
@@ -126,3 +135,11 @@ private fun SourceRow(name: String, url: String, adult: Boolean = false, onDelet
         TextButton(onClick = onDelete) { Text("删除") }
     }
 }
+
+/** 订阅仓库预设，与 Web 端 fongmi.js PRESETS 对齐（tvyuan=master 分支，main 已 404） */
+private val PRESETS = listOf(
+    "noimank 多仓" to "https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json",
+    "Liucn 单仓" to "https://raw.liucn.cc/box/m.json",
+    "Qist 综合" to "https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json",
+    "tvyuan 体检聚合" to "https://gh-proxy.com/https://raw.githubusercontent.com/25175/tvyuan/master/tvbox_collect.json",
+)
