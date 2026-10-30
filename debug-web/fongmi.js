@@ -1125,7 +1125,7 @@ function renderSearch() {
     <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
-      <button class="btn" data-focus data-kb="C">清空</button>
+      <button class="btn" data-focus data-kb="CLR">清空</button>
       <div id="srchQr" style="margin-left:auto"></div>
     </div>
     <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
@@ -1180,8 +1180,8 @@ function renderSearch() {
     if (kb) {
       const inp = $('#kw'); const v = inp.value;
       if (kb.dataset.kb === '⌫') inp.value = v.slice(0, -1);
-      else if (kb.dataset.kb === 'C') inp.value = '';
-      else inp.value = v + kb.dataset.kb;
+      else if (kb.dataset.kb === 'CLR') inp.value = '';
+      else inp.value = v + kb.dataset.kb.toLowerCase();
       drawSug(); return;
     }
     const w = e.target.closest('[data-w]');
