@@ -111,8 +111,34 @@ async function pipeStream(req, res, r) {
   node.pipe(res);
 }
 
-/* 扫码远程输入：手机页面 POST 进来，TV 页面轮询取走（每个 sid 一份暂存） */
-const remoteBox = new Map();
+/* 扫码远程输入（P1/P2，docs/2026-10-30-二维码扫码输入调研与优化方案.md）：
+   TV 经 open/poll 注册会话 → 手机 send 校验在线（否则 tv_offline）→ 长轮询挂起请求即时唤醒 → ack 回执供手机页显示送达 */
+const remoteBox = new Map();    // sid -> {mode,text,t,seq} 待投递
+const remoteSess = new Map();   // sid -> {lastSeen, ackedSeq}
+const remoteWaiters = new Map();// sid -> {res, timer} TV 挂起的长轮询
+let remoteSeq = 0;
+const REMOTE_ONLINE_MS = 40000; // 长轮询挂 30s，lastSeen 40s 内视为在线
+function touchSess(sid) {
+  const s = remoteSess.get(sid) || { lastSeen: 0, ackedSeq: 0 };
+  s.lastSeen = Date.now(); remoteSess.set(sid, s); return s;
+}
+function remoteOnline(sid) {
+  const s = remoteSess.get(sid);
+  return remoteWaiters.has(sid) || (!!s && Date.now() - s.lastSeen < REMOTE_ONLINE_MS);
+}
+const freshHit = sid => { const h = remoteBox.get(sid); return h && Date.now() - h.t < 120000 ? h : null; };
+function remoteJson(res, obj) {
+  res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+  res.end(JSON.stringify(obj));
+}
+function deliver(sid, res) {
+  const h = freshHit(sid);
+  if (!h) return remoteJson(res, {});
+  remoteBox.delete(sid);
+  const s = remoteSess.get(sid) || touchSess(sid);
+  s.ackedSeq = Math.max(s.ackedSeq, h.seq);
+  remoteJson(res, h);
+}
 function lanHost() {
   for (const list of Object.values(networkInterfaces())) {
     for (const n of list || []) if (n.family === 'IPv4' && !n.internal) return n.address;
@@ -132,31 +158,58 @@ button.go{width:100%;margin-top:12px;padding:12px;border:none;border-radius:8px;
 #msg{margin-top:10px;color:#81c995;min-height:22px;font-size:14px}.hint{color:#9aa0a6;font-size:13px;margin-top:10px}
 </style></head><body>
 <h2>LibreTVaz · 远程输入</h2>
+<div id="state" class="hint">正在检测电视连接…</div>
 <div class="tabs"><div class="tab on" data-m="search">搜索关键词</div><div class="tab" data-m="sub">订阅配置链接</div></div>
 <div id="p-search"><textarea id="t-search" placeholder="输入片名或拼音关键词，发送到电视直接搜索"></textarea></div>
 <div id="p-sub" style="display:none"><textarea id="t-sub" placeholder="粘贴订阅地址（.json / TVBox 多仓），发送到电视自动导入"></textarea></div>
 <button class="go" id="send">发送到电视</button>
 <div id="msg"></div>
-<p class="hint">电视端搜索页与源管理共用本页面（同一个二维码），切换上方 Tab 即可，无需重复扫码。</p>
+<p class="hint">电视端搜索页与源管理共用本页面（同一个二维码），切换上方 Tab 即可，无需重复扫码。电视页面关闭或刷新后二维码会失效，请回电视端重新扫码。</p>
 <script>
 const q = new URLSearchParams(location.search), sid = q.get('id') || '';
+const $ = s => document.getElementById(s);
 let mode = 'search';
+const setMsg = (text, ok) => { const m = $('msg'); m.style.color = ok === false ? '#f28b82' : '#81c995'; m.textContent = text; };
+const setState = st => {
+  const el = $('state');
+  if (!sid) { el.textContent = '⚠ 地址缺少会话 id，请重新扫描电视上的二维码'; el.style.color = '#f28b82'; return; }
+  if (st === true) { el.textContent = '● 电视已连接，可直接发送'; el.style.color = '#81c995'; }
+  else if (st === false) { el.textContent = '● 电视未在线（页面已关闭或刷新，请重新扫码）'; el.style.color = '#f28b82'; }
+  else { el.textContent = '正在检测电视连接…'; el.style.color = '#9aa0a6'; }
+};
+const getStatus = async () => { try { return await (await fetch('/api/remote/status?sid=' + encodeURIComponent(sid))).json(); } catch { return null; } };
+const refresh = () => { if (sid && !document.hidden) getStatus().then(j => j && setState(j.online)); };
+refresh(); setInterval(refresh, 3000);
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   mode = t.dataset.m;
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  document.getElementById('p-search').style.display = mode === 'search' ? '' : 'none';
-  document.getElementById('p-sub').style.display = mode === 'sub' ? '' : 'none';
+  $('p-search').style.display = mode === 'search' ? '' : 'none';
+  $('p-sub').style.display = mode === 'sub' ? '' : 'none';
 });
-document.getElementById('send').onclick = async () => {
-  const text = document.getElementById(mode === 'search' ? 't-search' : 't-sub').value.trim();
-  const msg = document.getElementById('msg');
-  if (!text) { msg.style.color = '#f28b82'; msg.textContent = '内容为空'; return; }
-  msg.style.color = '#81c995';
+async function waitAck(seq) {
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    const j = await getStatus();
+    if (j && j.ackedSeq >= seq) { setMsg('✓ 电视已收到 ' + new Date().toTimeString().slice(0, 8)); return; }
+  }
+  setMsg('已发送但电视未取走：若电视刚刷新过，请重新扫码', false);
+}
+$('send').onclick = async () => {
+  const text = $(mode === 'search' ? 't-search' : 't-sub').value.trim();
+  if (!text) { setMsg('内容为空', false); return; }
+  if (!sid) { setMsg('地址缺少会话 id，请重新扫码', false); return; }
+  setMsg('发送中…', true);
   try {
-    const r = await fetch('/api/remote/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sid, mode, text }) });
-    const j = await r.json();
-    msg.textContent = j.ok ? (mode === 'search' ? '已发送，电视将直接搜索' : '已发送，电视将自动导入') : '失败：电视页面未打开或已刷新';
-  } catch (e) { msg.style.color = '#f28b82'; msg.textContent = '发送失败 ' + e.message; }
+    const j = await (await fetch('/api/remote/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sid, mode, text }) })).json();
+    if (!j.ok) {
+      if (j.reason === 'tv_offline') { setMsg('电视未在线（已关闭或刷新），请回电视端重新扫码', false); setState(false); }
+      else if (j.reason === 'rate') setMsg('发送过于频繁，请稍候再试', false);
+      else setMsg('发送失败', false);
+      return;
+    }
+    setMsg('已发送，等待电视接收…', true);
+    waitAck(j.seq);
+  } catch (e) { setMsg('发送失败 ' + e.message, false); }
 };
 </script></body></html>`;
 }
@@ -172,26 +225,57 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
     return res.end(JSON.stringify({ host: lanHost(), port: +PORT }));
   }
+  if (url.pathname === '/api/remote/open' && req.method === 'POST') {
+    let raw = '';
+    req.on('data', c => { raw += c; if (raw.length > 1e4) req.destroy(); });
+    req.on('end', () => {
+      try { const { sid } = JSON.parse(raw); if (sid) touchSess(String(sid)); } catch { /* 非法 body 忽略 */ }
+      remoteJson(res, { ok: true });
+    });
+    return;
+  }
   if (url.pathname === '/api/remote/send' && req.method === 'POST') {
     let raw = '';
     req.on('data', c => { raw += c; if (raw.length > 1e6) req.destroy(); });
     req.on('end', () => {
-      let ok = false;
+      let out = { ok: false, reason: 'bad' };
       try {
         const { sid, mode, text } = JSON.parse(raw);
-        if (sid && text) { remoteBox.set(String(sid), { mode: mode === 'sub' ? 'sub' : 'search', text: String(text).slice(0, 4000), t: Date.now() }); ok = true; }
+        if (sid && text) {
+          const k = String(sid);
+          if (!remoteOnline(k)) out = { ok: false, reason: 'tv_offline' };
+          else {
+            const seq = ++remoteSeq;
+            remoteBox.set(k, { mode: mode === 'sub' ? 'sub' : 'search', text: String(text).slice(0, 4000), t: Date.now(), seq });
+            out = { ok: true, seq };
+            const w = remoteWaiters.get(k); // 唤醒 TV 挂起的长轮询，秒级送达
+            if (w) { remoteWaiters.delete(k); clearTimeout(w.timer); deliver(k, w.res); }
+          }
+        }
       } catch { /* 忽略非法 body */ }
-      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-      res.end(JSON.stringify({ ok }));
+      remoteJson(res, out);
     });
     return;
   }
   if (url.pathname === '/api/remote/poll') {
     const sid = url.searchParams.get('id') || '';
-    const hit = remoteBox.get(sid);
-    if (hit && Date.now() - hit.t < 120000) remoteBox.delete(sid);
-    res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-    return res.end(JSON.stringify(hit && Date.now() - hit.t < 120000 ? hit : {}));
+    touchSess(sid); // 轮询兼作心跳；未 open 的旧 TV 页 poll 也算注册
+    if (freshHit(sid)) return deliver(sid, res);
+    if (url.searchParams.has('nowait')) return remoteJson(res, {}); // 兼容旧「立即返回」语义
+    const prev = remoteWaiters.get(sid); // 同 sid 重复轮询（重连竞态）：旧请求先空回
+    if (prev) { clearTimeout(prev.timer); try { remoteJson(prev.res, {}); } catch { /* 已断开 */ } }
+    const waiter = { res, timer: setTimeout(() => {
+      if (remoteWaiters.get(sid) !== waiter) return;
+      remoteWaiters.delete(sid);
+      if (!res.writableEnded) remoteJson(res, {});
+    }, 30000) };
+    remoteWaiters.set(sid, waiter);
+    res.on('close', () => { if (remoteWaiters.get(sid) === waiter) { clearTimeout(waiter.timer); remoteWaiters.delete(sid); } });
+    return;
+  }
+  if (url.pathname === '/api/remote/status') {
+    const sid = url.searchParams.get('sid') || url.searchParams.get('id') || '';
+    return remoteJson(res, { online: remoteOnline(sid), ackedSeq: remoteSess.get(sid)?.ackedSeq || 0 });
   }
 
   if (url.pathname === '/proxy') {

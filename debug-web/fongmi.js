@@ -146,7 +146,10 @@ async function remoteInit() {
   } catch { RemoteIn.base = location.origin; }
   RemoteIn.url = `${RemoteIn.base}/remote?id=${RemoteIn.sid}`;
   drawQr($('#srchQr')); drawQr($('#smQr'));
-  setInterval(remotePoll, 1500);
+  try { // 注册会话：手机页据此显示在线状态，send 未注册直接拒（tv_offline）
+    await fetch(`${RemoteIn.base}/api/remote/open`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sid: RemoteIn.sid }) });
+  } catch { /* 轮询本身兼作注册，失败不致命 */ }
+  remoteLoop();
 }
 // 原引用的 qrcode@1.5.4/build/qrcode.min.js 在 npm 包里根本不存在（jsdelivr 恒 404），码从未画出——换 qrcode-generator 自绘
 function drawQr(el) {
@@ -167,18 +170,23 @@ function drawQr(el) {
     } catch { /* 画不出时留下方链接兜底 */ }
   }
 }
-async function remotePoll() {
-  if (!RemoteIn.base) return;
-  let hit = null;
-  try { hit = await (await fetch(`${RemoteIn.base}/api/remote/poll?id=${RemoteIn.sid}`)).json(); } catch { return; }
-  if (!hit || !hit.text) return;
-  if (hit.mode === 'sub') {
-    toast('收到远程订阅链接，开始导入…');
-    const inp = $('#subUrl'); if (inp) inp.value = hit.text;
-    doImport(hit.text);
-  } else {
-    if (App.view !== 'search') switchView('search');
-    setTimeout(() => RemoteIn.onSearch && RemoteIn.onSearch(hit.text), 80);
+const rsleep = ms => new Promise(r => setTimeout(r, ms));
+async function remoteLoop() { // 长轮询：服务端挂起≤30s，send 即唤醒秒级送达；页面隐藏暂停续轮省资源
+  while (RemoteIn.base) {
+    if (document.hidden) { await rsleep(2000); continue; }
+    let hit = null;
+    try {
+      hit = await (await fetch(`${RemoteIn.base}/api/remote/poll?id=${RemoteIn.sid}`, { signal: AbortSignal.timeout(35000) })).json();
+    } catch { await rsleep(3000); continue; } // 断连/超时：短暂退避后续轮
+    if (!hit || !hit.text) continue;
+    if (hit.mode === 'sub') {
+      toast('收到远程订阅链接，开始导入…');
+      const inp = $('#subUrl'); if (inp) inp.value = hit.text;
+      doImport(hit.text);
+    } else {
+      if (App.view !== 'search') switchView('search');
+      setTimeout(() => RemoteIn.onSearch && RemoteIn.onSearch(hit.text), 80);
+    }
   }
 }
 function splitPlayUrl(url) {
