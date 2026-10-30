@@ -1054,19 +1054,25 @@ const getSrcTypes = s => {
   return typesCache.get(s.url);
 };
 const dedupByName = arr => { const seen = new Set(); return arr.filter(it => { const k = normalizeTitle(it.name); return k && !seen.has(k) && seen.add(k); }); };
-/* 单个源在聚合墙中贡献的数据：cat=null 取全量最新，否则按名称匹配其父分类并取前 3 个子类首页 */
+/* 单个源在聚合墙中贡献的数据：cat=null 取全量最新，否则按名称匹配其父分类并取前 3 个子类首页。
+   cat.rlabs（地区预设，如 日剧）：只拉区命中子类（每源前4个）；源无区子类→回落父类混拉靠条目 area/typeName 客户端过滤。
+   实测 360/非凡/量子/天天/茅台/速播 电视剧子树均含日剧子类，但默认 slice(0,3) 拉不到——按地区定向抓取修复 */
 async function fetchAggSource(s, cat) {
   if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []);
   const types = await getSrcTypes(s);
   const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
   if (!p) return [];
   const kids = types.filter(c => c.pid === p.id && c.id !== p.id);
-  const qs = kids.length ? kids.slice(0, 3) : [p];
+  let qs;
+  if (cat.rlabs) {
+    const reg = kids.filter(c => PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
+    qs = reg.length ? reg.slice(0, 4) : [p];
+  } else qs = kids.length ? kids.slice(0, 3) : [p];
   const sub = await pMap(qs, c =>
     httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`)).then(raw => parseList(raw, s)), 3);
   return sub.flat();
 }
-const aggKey = (s, cat) => 'aggs:' + s.url + '|' + (cat ? cat.key : 'latest');
+const aggKey = (s, cat) => 'aggs:' + s.url + '|' + (cat ? cat.key + (cat.rlabs ? '@' + cat.rlabs.join(',') : '') : 'latest');
 /* 聚合墙（按源分片缓存 + 渐进渲染）：
    ① 先用各源上次分片立即拼出整墙（秒开）② 逐源拉新，一源返回就重画一次，不等最慢源
    ③ 全部分片 3 分钟内新鲜则跳过请求；渲染完后台低并发预取其余分类，切分类同样秒开 */
@@ -1097,7 +1103,10 @@ async function runAggWall(cat) {
     if (fresh.length) cacheSet(aggKey(s, cat), fresh);
     if (alive()) merge();
   }, 5);
-  if (alive() && !Vod.items.length) toast(`聚合无数据：各源均无「${cat ? cat.key : '最新'}」`);
+  if (alive() && !Vod.items.length) { // 无数据也要有明确提示：网格不能停留在「正在聚合…」或空白（分类/筛选行本就保持显示）
+    grid.innerHTML = `<p class="muted">聚合无数据：各源均未返回「${cat ? cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}」（源无此地区分类或拉取超时），可选「全部」或换源重试</p>`;
+    toast('聚合无数据');
+  }
   if (alive() && !cat) aggPrefetch(rid, token, cat);
   else if (alive() && cat) aggPrefetch(rid, token, null);
 }
@@ -1309,8 +1318,14 @@ function drawSubRow() {
     } else if (k === 'sub') { Vod.sub = v; }
     else { if (Vod[k] === v) Vod[k] = ''; else Vod[k] = v; } // 同项再按=取消（TVBox 交互）
     drawSubRow(); // R8 改版：不再收起，焦点归位可连续调整
-    if (Vod.agg) drawVodGrid(); // 聚合墙数据已全部在前端：地区预设纯重绘过滤（无服务端路径）
-    else loadVod(1);
+    if (Vod.agg) { // R8(agg)：地区预设按各源区域子类定向抓取（默认墙只拉前3子类，日剧/欧美等排在后面拉不到）
+      const base = AGG_CATS.find(c => c.key === (Vod.tab && Vod.tab.name));
+      if (!base) drawVodGrid();
+      else {
+        const e2 = Vod.preset ? (presets || []).find(p => p[0] === Vod.preset) : null;
+        loadAggCat(e2 && e2[1].length ? { ...base, rlabs: e2[1] } : base);
+      }
+    } else loadVod(1);
   };
   if (pf) { const target = [...el.querySelectorAll('[data-f]')].find(x => x.dataset.f === pf[0] && x.dataset.v === pf[1]); if (target) Focus.set(target); }
 }
