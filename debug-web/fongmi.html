@@ -120,6 +120,8 @@
   .sbox { display: flex; gap: 10px; padding: 10px 28px; flex: none; }
   .sbox input { flex: 1; background: var(--bg2); border: 2px solid #3a3f44; border-radius: 6px; padding: 8px 14px; outline: none; }
   .sbox input.focus { border-color: #fff; }
+  /* 两段式：选中=白框，编辑=accent 描边+发光（区分「选中框」与「正在输入」） */
+  input.editing { border-color: var(--accent) !important; box-shadow: 0 0 12px rgba(62,166,255,.45); }
   .colhead { padding: 6px 28px 0; font-size: 18px; font-weight: 600; flex: none; }
 
   #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); background: rgba(0,0,0,.8); border-radius: 6px; padding: 8px 22px; font-size: 14px; display: none; z-index: 60; }
@@ -133,7 +135,7 @@
     <span class="clock" id="clock"></span>
   </header>
   <div id="body"></div>
-  <div class="hint">遥控器模拟：方向键移动焦点 · Enter 确认 · Esc 返回 · 数字键换台(直播) · 也可直接鼠标点击</div>
+  <div class="hint">遥控器模拟：方向键选焦点 · Enter 确认（输入框需再按 Enter 开始打字） · Esc：退出输入→关闭弹窗→返回 · 数字键换台(直播) · 也可直接鼠标点击</div>
 </div>
 <div class="modal" id="siteModal"><div class="sitegrid" id="siteGrid"></div></div>
 <div class="modal" id="findModal"><div style="max-width:760px;margin:10vh auto 0;padding:0 20px">

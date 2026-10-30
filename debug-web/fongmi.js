@@ -224,6 +224,9 @@ const Focus = {
   el: null,
   set(el) {
     if (this.el === el) return;
+    /* 选中变化即退出输入态：编辑中切到别的控件时 blur，防 IME/光标残留（editing 类由 focusout 清） */
+    const ae = document.activeElement;
+    if (ae && ae !== el && isEditable(ae)) ae.blur();
     this.el?.classList.remove('focus');
     this.el = el || null;
     if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
@@ -257,12 +260,19 @@ const Focus = {
 };
 const toast = (() => { let t; return msg => { $('#toast').textContent = msg; $('#toast').style.display = 'block'; clearTimeout(t); t = setTimeout(() => $('#toast').style.display = 'none', 2200); }; })();
 
-/* ================= 按键路由 ================= */
+/* ================= 按键路由 =================
+   两段式（docs/2026-10-30-遥控可用性复盘与优化方案.md R1，对齐 Leanback/Kodi/Samsung 模型）：
+   选中≠编辑——Focus.set 只画选中框；Enter 才 enterEdit 进输入态；Esc 第一层退编辑（选中框保留），
+   编辑态方向键归光标原生放行；鼠标点输入框仍一步进编辑（原生 focus，click 委托只挪选中框） */
 const LiveKey = { num: '', timer: null };
+const isEditable = el => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+function enterEdit(el) { if (!isEditable(el)) return; el.focus(); el.classList.add('editing'); }
+document.addEventListener('focusout', e => { if (isEditable(e.target)) e.target.classList.remove('editing'); });
 document.addEventListener('keydown', e => {
+  const editing = isEditable(document.activeElement);
   if ($('#siteModal').classList.contains('open')) {
     if (e.key === 'Escape') { closeSiteDialog(); return; }
-  } else if (App.view === 'live' && document.activeElement?.tagName !== 'INPUT') {
+  } else if (App.view === 'live' && !editing) {
     if (Live.panelOpen) { /* 面板开时方向键走通用焦点 */ }
     else if (e.key === 'ArrowUp') { chanStep(-1); e.preventDefault(); return; }
     else if (e.key === 'ArrowDown') { chanStep(1); e.preventDefault(); return; }
@@ -270,10 +280,20 @@ document.addEventListener('keydown', e => {
     else if (e.key === 'Enter') { togglePanel(true); e.preventDefault(); return; }
     else if (/^[0-9]$/.test(e.key)) { inputDigit(e.key); e.preventDefault(); return; }
   }
-  if (e.key === 'Escape') { onEsc(); return; }
-  if (e.key === 'Enter' && document.activeElement?.tagName !== 'INPUT') { Focus.el?.click(); e.preventDefault(); }
+  if (e.key === 'Escape') {
+    if (editing) { document.activeElement.blur(); e.preventDefault(); return; } // 退编辑，Focus.el 选中框保留
+    onEsc(); return;
+  }
+  if (e.key === 'Enter') {
+    if (editing) return; // 输入框内 Enter 由控件自身处理（搜索/导入/全源搜索）
+    if (isEditable(Focus.el)) { enterEdit(Focus.el); e.preventDefault(); return; }
+    Focus.el?.click(); e.preventDefault();
+  }
   const D = { ArrowLeft: 'L', ArrowRight: 'R', ArrowUp: 'U', ArrowDown: 'D' }[e.key];
-  if (D && document.activeElement?.tagName !== 'INPUT') { Focus.move(D); e.preventDefault(); }
+  if (D) {
+    if (editing) return; // 编辑态方向键=光标/选区，放行原生
+    Focus.move(D); e.preventDefault();
+  }
 });
 document.addEventListener('click', e => { const t = e.target.closest('[data-focus]'); if (t) Focus.set(t); });
 function onEsc() {
@@ -608,7 +628,6 @@ function drawSrcMgr() {
     const rl = e.target.closest('[data-rml]'); if (rl) { SRC.live.splice(+rl.dataset.rml, 1); saveSrc(); if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0; drawSrcMgr(); }
   };
   $('#smQrBtn').onclick = () => openQrModal('sub');
-  setTimeout(() => $('#subUrl')?.focus(), 50);
 }
 
 /* 订阅导入：解析器从完整调试台 app.js 移植（jsonLoose/parseRoot/parseExpanded） */
@@ -812,6 +831,7 @@ function renderHome() {
   };
   $('#scroller').addEventListener('scroll', onScroll);
   loadRec();
+  Focus.set($('#funcs').querySelector('[data-focus]')); // 初始焦点=功能行首项（R7，换页第一下按键可预期）
 }
 function onScroll() {
   const sc = $('#scroller'); if (!sc) return;
@@ -862,6 +882,7 @@ function renderVod() {
   bindBack('vodBack', () => switchView('home'));
   $('#scroller').addEventListener('scroll', onScroll);
   loadTypes();
+  Focus.set($('#typeRow').querySelector('[data-focus]') || $('#vodBack')); // R7：分类 chips 已缓存则直达首 chip，否则返回钮
 }
 function loadSiteData() { Vod.reqId++; Home.reqId++; }
 /* 有子类的父分类一律聚合子类展示（非凡/量子等 CMS 父 id 直查为空壳或仅 1~3 条杂项） */
@@ -904,6 +925,7 @@ async function loadTypes() {
     const cur = Vod.tab?.id ?? '';
     const row = $('#typeRow'); if (!row || App.view !== 'vod') return;
     row.innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
+    if (!document.contains(Focus.el) || Focus.el?.id === 'vodBack') Focus.set(row.querySelector('[data-focus]') || Focus.el); // 重绘后焦点归位首 chip（R7）
     row.onclick = e => {
       const b = e.target.closest('[data-tid]'); if (!b) return;
       const id = b.dataset.tid;
@@ -913,10 +935,10 @@ async function loadTypes() {
         document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
         loadVod(1); return;
       }
-      if (Vod.tab && Vod.tab.id === id) { // 再次点击当前分类：展开/收起二级筛选（影视仓式）
+      if (Vod.tab && Vod.tab.id === id) { // 再次点击当前分类：展开/收起二级筛选，焦点随行进/归位（两段式统一用 Focus.set）
         Vod.showFilters = !Vod.showFilters;
         drawSubRow();
-        if (Vod.showFilters) setTimeout(() => $('#subRow')?.querySelector('[data-focus]')?.focus(), 30);
+        Focus.set(Vod.showFilters ? ($('#subRow')?.querySelector('[data-focus]') || b) : b);
         return;
       }
       Vod.tab = Vod.types.find(t => t.id === id) || null;
@@ -1252,10 +1274,7 @@ function renderSearch() {
   let sugTimer = null;
   const onKwInput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => { drawSug(); drawCand(); }, 80); }; // 80ms 防抖：连打不卡
   RemoteIn.onSearch = t => { const inp = $('#kw'); if (!inp) return; inp.value = t; drawSug(); run(); };
-  $('#kw').onkeydown = e => {
-    if (e.key === 'Enter') return run();
-    if (e.key === 'ArrowDown') { Focus.set($('#qrBtn')); e.preventDefault(); } // 输入框内按下键 → 落到紧邻的「远程输入」按钮
-  };
+  $('#kw').onkeydown = e => { if (e.key === 'Enter') return run(); }; // 两段式：编辑态方向键归光标，退编辑靠 Esc，无需再特例跳按钮
   $('#kw').oninput = onKwInput;
   body.onclick = e => {
     const kb = e.target.closest('[data-kb]');
@@ -1273,7 +1292,7 @@ function renderSearch() {
   $('#qrBtn').onclick = () => openQrModal('search');
   drawCand();
   seedVocab().then(() => { if (App.view === 'search') { drawCand(); drawSug(); } });
-  setTimeout(() => $('#kw').focus(), 50);
+  Focus.set($('#kw')); // 仅选中不弹键盘：OK 才进编辑（两段式 R1）
 }
 
 /* ================= 搜索结果页（CollectActivity：一源一 Tab 渐进追加） =================
@@ -1340,6 +1359,7 @@ function renderCollect() {
   const [first, rest] = PerfCore.splitBatches(sources, 8);
   first.forEach(fire);
   if (rest.length) setTimeout(() => { if (ep === Collect.epoch) rest.forEach(fire); }, 1200);
+  Focus.set($('#cTabs').querySelector('[data-focus]')); // R7：结果页初始焦点=Tab「全部」
 }
 function drawCollectTab() {
   const grid = $('#cGrid'); if (!grid) return;
@@ -1587,7 +1607,7 @@ function openFindBox(title, getState) {
   };
   $('#findGo').onclick = runFind;
   kw.onkeydown = e => { if (e.key === 'Enter') runFind(); };
-  kw.focus(); kw.select();
+  Focus.set(kw); // 两段式 R1：仅选中；OK 进编辑（编辑态 Enter 触发全源搜索）
   if (title) runFind();
 }
 async function doChangeSource() {
@@ -1616,6 +1636,7 @@ function renderProbe() {
   $('#probeGo').onclick = () => probeAll();
   bindBack('probeBack', () => switchView('home'));
   drawProbeRows();
+  Focus.set($('#probeGo')); // R7
   if (!Probe.rows) probeAll();
 }
 const probeCls = st => /^OK/.test(st) ? 'ok' : /失败|失效|为空/.test(st) ? 'err' : 'muted';
@@ -1664,6 +1685,7 @@ function renderKeep() {
     const k = LS('fongmi_keep', []); k.splice(i, 1);
     localStorage.setItem('fongmi_keep', JSON.stringify(k)); renderKeep();
   });
+  Focus.set($('#keepGrid').querySelector('[data-focus]') || $('#keepBack')); // R7+R2：初始/删后焦点=网格首卡，空则返回钮
   checkKeeps(keep);
 }
 /* O3a 追剧更新检测（docs/2026-10-30-O1-O3播放与直播体验方案.md）：仅收藏页触发非轮询；
@@ -1723,6 +1745,7 @@ function renderHist() {
     renderHist();
   });
   bindBack('histBack', () => switchView('home'));
+  Focus.set($('#histAllGrid').querySelector('[data-focus]') || $('#histBack')); // R7：初始/删后焦点=网格首卡，空则返回钮
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
