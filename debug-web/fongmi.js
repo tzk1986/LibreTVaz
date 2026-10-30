@@ -55,8 +55,18 @@ const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); retu
 // CMS 无参/简化列表不返回 vod_pic，海报墙必须带 ac=videolist；源 api 自带 ac= 时先剔除避免重复
 const listUrl = (u, query) => apiUrl(norm(u).replace(/([?&])ac=[^&#]*/gi, '$1').replace(/[?&]+$/, ''), query);
 
+/* ============ 源响应解码扩展注册表（预留缝，docs/2026-10-30-源解码扩展待办与预留缝.md L2 路线） ============
+   条目 { id, match(source), decode(text, source) }：把非标准源响应转成标准 CMS JSON 文本再走现有解析。
+   默认空数组=空转零开销；对接规则写 perf-core.js 纯函数保证 node 可测；不加载 jar 本体 */
+const RESP_CODECS = [];
+function decodeResp(text, source) {
+  for (const c of RESP_CODECS) {
+    try { if (c.match(source)) { const t = c.decode(text, source); if (typeof t === 'string') return t; } } catch { /* 解码失败静默跳过，走原解析 */ }
+  }
+  return text;
+}
 function parseList(text, source) {
-  const j = JSON.parse(text);
+  const j = JSON.parse(decodeResp(text, source));
   return (j.list || []).map(v => ({
     id: String(v.vod_id ?? ''), name: v.vod_name || '', pic: v.vod_pic || '',
     remarks: v.vod_remarks || null, year: v.vod_year || null, area: v.vod_area || null,
@@ -169,7 +179,7 @@ function splitPlayUrl(url) {
   }).filter(Boolean);
 }
 function parseDetail(text, source) {
-  const j = JSON.parse(text); const v = (j.list || [])[0] || {};
+  const j = JSON.parse(decodeResp(text, source)); const v = (j.list || [])[0] || {};
   const flags = String(v.vod_play_from || '').split('$$$');
   const groups = String(v.vod_play_url || '').split('$$$');
   const episodes = flags.map((f, i) => ({ flag: f || `第${i + 1}线路`, list: splitPlayUrl(groups[i] || '') }));
@@ -253,11 +263,27 @@ function onEsc() {
    直链(mp4 等)同样 error 后切 /proxy 一次；再失败明确提示换线，不再无限转圈；起播前显示「缓冲中…」 */
 let hls = null, playCleanup = null;
 function stopHls() { if (hls) { hls.destroy(); hls = null; } if (playCleanup) { playCleanup(); playCleanup = null; } }
-function playInto(video, url, title) {
+/* 播放链接解码注册表（异步预留缝，同上待办文档 L2/L3 路线）：条目 { id, match(link), resolve(link)→真实地址 }。
+   默认空数组时 playInto 不进入 await 分支，行为与同步版完全一致；非空时 playSeq 防解码期竞态 */
+const PLAY_CODECS = [];
+async function resolvePlay(link) {
+  for (const c of PLAY_CODECS) {
+    try { if (c.match(link)) { const u = await c.resolve(link); if (typeof u === 'string' && u) return u; } } catch { /* 失败回落下一条或原链 */ }
+  }
+  return link;
+}
+let playSeq = 0;
+async function playInto(video, url, title) {
+  const seq = ++playSeq;
   stopHls();
   video.pause(); video.removeAttribute('src');
   const t = $('#vtitle'); const base = title || '';
   const mark = on => { if (t) t.textContent = base + (on ? ' · 缓冲中…' : ''); };
+  if (PLAY_CODECS.length) {
+    mark(true);
+    url = await resolvePlay(url);
+    if (seq !== playSeq) return; // 解码期间被新的播放/停止顶掉，丢弃本次
+  }
   const px = '/proxy?url=' + encodeURIComponent(url);
   const dead = () => { stopHls(); mark(false); toast('该线路无法播放，请换线路或换源'); };
   if (/\.(m3u8|mpd)/i.test(url) && window.Hls && Hls.isSupported()) {
@@ -290,7 +316,7 @@ function playInto(video, url, title) {
     video.src = url; video.play().catch(() => {});
   }
 }
-function stopPlayer() { stopHls(); document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
+function stopPlayer() { playSeq++; stopHls(); document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
 
 /* ================= 视图框架 ================= */
 const App = { view: 'home', videoBack: 'vod' };
