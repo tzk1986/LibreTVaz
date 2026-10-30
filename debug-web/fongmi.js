@@ -1925,4 +1925,5 @@ switchView('home');
 setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）
 setTimeout(seedVocab, 2500);   // 后台预取片名，进搜索页即有候选词
 $('#qrModal').onclick = e => { if (e.target === $('#qrModal')) closeQrModal(); }; // 点遮罩关窗
+$('#qrClose').onclick = closeQrModal; // 关闭按钮（此前只给了焦点漏绑事件，点/Enter 无效）
 remoteInit(); // 扫码远程输入（sid 共用，弹窗按场景生成带 m 参数的码）
