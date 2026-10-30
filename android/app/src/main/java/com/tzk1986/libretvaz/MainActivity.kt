@@ -7,8 +7,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.tzk1986.libretvaz.data.Http
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.VideoDetail
+import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.ui.BrowseScreen
 import com.tzk1986.libretvaz.ui.DetailScreen
@@ -26,7 +29,17 @@ sealed class Screen {
     data object Search : Screen()
     data object Browse : Screen()
     data class Detail(val item: VodSummary, val backTo: Screen) : Screen()
+    /** 播放页携带完整多线路上下文，页内直接换集/换线/搜本作（对齐 web openDetail 闭包） */
+    /** 直播等单地址场景的轻量播放页 */
     data class Player(val url: String, val backTo: Screen) : Screen()
+    data class Play(
+        val item: VodSummary,
+        val source: VodSource,
+        val detail: VideoDetail,
+        val startLine: Int,
+        val startEp: Int,
+        val backTo: Screen,
+    ) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -34,6 +47,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val sourceStore = SourceStore(this)
         val settingsStore = SettingsStore(this)
+        Http.proxyUrl = settingsStore.proxyUrl // 全局 HTTP/播放数据源共用可选代理
+        Http.applyGlobalProxy()
         setContent {
             LibreTVazTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -62,7 +77,17 @@ class MainActivity : ComponentActivity() {
                         is Screen.Detail -> DetailScreen(
                             item = current.item,
                             onBack = { screen = current.backTo },
-                            onPlay = { url -> screen = Screen.Player(url, current) },
+                            onPlay = { picked, src, detail, line, ep ->
+                                screen = Screen.Play(picked, src, detail, line, ep, current.backTo)
+                            },
+                        )
+                        is Screen.Play -> PlayerScreen(
+                            item = current.item,
+                            source = current.source,
+                            detail = current.detail,
+                            startLine = current.startLine,
+                            startEp = current.startEp,
+                            onBack = { screen = current.backTo },
                         )
                         is Screen.Player -> PlayerScreen(
                             url = current.url,
