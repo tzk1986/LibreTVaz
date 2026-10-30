@@ -66,7 +66,7 @@ const selfJson = proxyPath(`${BASE}/api/remote/base`);
   const u = proxyPath(`${BASE}/api/remote/base`);
   await rawGet(u); // 先确保已有缓存
   const r = await rawGet(u + '&nc=1');
-  ok(['off', undefined, 'nc'].includes(r.headers['x-proxy-cache']), 'nc-bypass', `got ${r.headers['x-proxy-cache']}`);
+  ok(r.headers['x-proxy-cache'] === 'nc', 'nc-bypass', `got ${r.headers['x-proxy-cache']}`);
   const r2 = await rawGet(u); // 旁路请求不应污染
   ok(r2.headers['x-proxy-cache'] !== 'miss', 'nc-no-pollute', `got ${r2.headers['x-proxy-cache']}`);
 }

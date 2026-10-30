@@ -141,7 +141,7 @@ const server = createServer(async (req, res) => {
     }
     const fail = e => { res.writeHead(502, { 'access-control-allow-origin': '*', 'content-type': 'text/plain; charset=utf-8' }); res.end('proxy error: ' + (e.message || e)); };
     if (!PROXY_CACHE || url.searchParams.get('nc') === '1') { // 关闭/旁路：直连
-      try { send(req, res, await fetchTarget(target), { cache: PROXY_CACHE ? 'nc' : '' }); } catch (e) { fail(e); }
+      try { send(req, res, { ...(await fetchTarget(target)), cache: PROXY_CACHE ? 'nc' : undefined }); } catch (e) { fail(e); }
       return;
     }
     const hit = pcGet(target);
