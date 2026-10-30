@@ -376,7 +376,8 @@ const server = createServer(async (req, res) => {
       res.writeHead(206, { 'content-type': ct, 'content-range': `bytes ${start}-${end}/${total}`, 'accept-ranges': 'bytes', 'content-length': end - start + 1 });
       return res.end(req.method === 'HEAD' ? undefined : data.subarray(start, end + 1));
     }
-    send(req, res, { contentType: ct, body: data }, { cors: false });
+    // 调试台前端必须即时生效：静态文件统一 no-store，防浏览器启发式缓存旧 JS/CSS（局域网日剧/样式不更新根因）
+    send(req, res, { contentType: ct, body: data, extra: { 'cache-control': 'no-store' } }, { cors: false });
   } catch {
     res.writeHead(404); res.end('not found');
   }

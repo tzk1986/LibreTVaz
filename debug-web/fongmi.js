@@ -1104,7 +1104,7 @@ async function runAggWall(cat) {
     if (alive()) merge();
   }, 5);
   if (alive() && !Vod.items.length) { // 无数据也要有明确提示：网格不能停留在「正在聚合…」或空白（分类/筛选行本就保持显示）
-    grid.innerHTML = `<p class="muted">聚合无数据：各源均未返回「${cat ? cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}」（源无此地区分类或拉取超时），可选「全部」或换源重试</p>`;
+    grid.innerHTML = `<p class="muted">聚合无数据：${pool.length} 个源均未返回「${cat ? cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}」（源无此地区分类或拉取超时），可选「全部」或换源重试<br><span class="muted" style="font-size:12px">已尝试源：${esc(pool.map(s => s.name).join('、')) || '（聚合池为空，请先在源设置中导入点播源）'}</span></p>`;
     toast('聚合无数据');
   }
   if (alive() && !cat) aggPrefetch(rid, token, cat);
