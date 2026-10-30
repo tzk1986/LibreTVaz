@@ -33,6 +33,7 @@ const firstCmsApi = () => 'https://cj.ffzyapi.com/api.php/provide/vod';
 const jobs = [
   ['cache-inval', ['test/cache-inval.test.mjs'], {}],
   ['proxy', ['test/proxy.test.mjs', String(PORT)], {}],
+  ['remote', ['test/remote.test.mjs', String(PORT)], {}],
 ];
 if (args.includes('--record-baseline')) jobs.push(['search-perf(record)', ['test/search-perf.test.mjs', '--record', String(PORT)], {}]);
 else jobs.push(['search-perf', ['test/search-perf.test.mjs', String(PORT)], {}]);
