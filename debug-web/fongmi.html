@@ -100,6 +100,11 @@
   .lpanel .col { overflow-y: auto; border-left: 1px solid #333; scrollbar-width: thin; }
   .lpanel .li { padding: 8px 12px; cursor: pointer; font-size: 13px; border-left: 3px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lpanel .li.on { background: #2c3136; color: var(--accent); border-left-color: var(--accent); }
+  .lpanel .li { position: relative; }
+  #colChan .li { padding-right: 30px; }
+  .fav { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: #6d7378; padding: 0 4px; }
+  .fav.on { color: #ffd700; }
+  .lpanel .li .epg-desc { white-space: normal; font-size: 12px; color: var(--dim); margin-top: 3px; }
   .digital { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); font-size: 88px; font-weight: 700; color: #fff; text-shadow: 0 2px 12px #000; display: none; z-index: 9; }
 
   /* 详情/播放一体（VideoActivity 风格） */

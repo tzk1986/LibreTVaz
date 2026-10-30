@@ -1595,7 +1595,7 @@ function renderKeep() {
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
-const Live = { srcIdx: Math.max(0, LS('fongmi_live_idx', 0)), groups: [], cur: -1, chans: [], panelOpen: false, gi: 0 };
+const Live = { srcIdx: Math.max(0, LS('fongmi_live_idx', 0)), groups: [], cur: -1, chans: [], panelOpen: false, gi: 0, epgIndex: null, epgTimer: null };
 function parseLiveChannels(text) {
   const t = text.trim();
   const chans = [];
@@ -1623,6 +1623,79 @@ function parseLiveChannels(text) {
   }
   return chans;
 }
+/* ============ O2 直播 EPG + 上次频道 + 频道收藏（docs/2026-10-30-O1-O3播放与直播体验方案.md） ============
+   订阅 lives[i].epg 为 XMLTV 地址（可能 .gz：gzip 魔数走 DecompressionStream）；解析纯函数在 perf-core，可 node 测 */
+const LIVE_FAV_GROUP = '★收藏';
+const EPG_TTL = 5 * 60 * 1000;
+const liveFav = () => LS('fongmi_live_fav', []);
+async function fetchEpgText(url) {
+  // httpGet 对 '<' 开头判网页抛错，XMLTV 是合法 XML 文本，单独走原始取
+  const r = await fetch('/proxy?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  let buf = new Uint8Array(await r.arrayBuffer());
+  if (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    if (typeof DecompressionStream !== 'function') throw new Error('浏览器不支持 gzip EPG');
+    buf = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  }
+  const text = new TextDecoder('utf-8').decode(buf);
+  if (!/programme/i.test(text)) throw new Error('非 XMLTV 内容');
+  return text;
+}
+async function ensureEpg(src) {
+  Live.epgIndex = null;
+  const url = src && src.epg;
+  if (!url || typeof PerfCore === 'undefined' || !PerfCore.parseXmltv) { drawEpgCol(); return; }
+  const ck = 'fongmi_epg:' + url;
+  let text = null;
+  try { const c = JSON.parse(localStorage.getItem(ck)); if (c && Date.now() - c.t < EPG_TTL) text = c.d; } catch { /* 坏缓存忽略 */ }
+  if (!text) {
+    try { text = await fetchEpgText(url); } catch { return; } // 失败静默降级为占位
+    if (text.length < 2e6) { try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: text })); } catch { try { localStorage.removeItem(ck); } catch { /* 配额满即放弃缓存 */ } } }
+  }
+  if (App.view !== 'live' || SRC.live[Live.srcIdx]?.epg !== url) return;
+  try { Live.epgIndex = PerfCore.parseXmltv(text); } catch { Live.epgIndex = null; }
+  drawEpgCol();
+  updateEpgTop();
+}
+const epHm = n => { const s = String(n || '').padStart(14, '0'); return s.slice(8, 10) + ':' + s.slice(10, 12); };
+function updateEpgTop() {
+  const el = $('#ltEpg'); if (!el) return;
+  const c = Live.chans[Live.cur];
+  if (!c || !Live.epgIndex) { el.textContent = ''; return; }
+  const now = PerfCore.epgNow(PerfCore.epgFor(Live.epgIndex, c.name));
+  el.textContent = now ? `现在 · ${now.title} (${epHm(now.t)}–${now.s ? epHm(now.s) : '··'})` : '';
+}
+function drawEpgCol() {
+  const el = $('#colEpg'); if (!el) return;
+  const c = Live.chans[Live.cur];
+  if (!c || !Live.epgIndex) {
+    el.innerHTML = `<div class="li muted">EPG：${SRC.live[Live.srcIdx]?.epg ? '节目单未取到或本台无匹配' : '当前直播源未配置节目单'}<br>（订阅 lives 带 epg=XMLTV 地址后显示节目单；回看/时移依赖源能力）</div>`;
+    return;
+  }
+  const list = PerfCore.epgFor(Live.epgIndex, c.name);
+  if (!list.length) { el.innerHTML = '<div class="li muted">EPG：本频道无节目单</div>'; return; }
+  const now = PerfCore.epgNow(list);
+  el.innerHTML = list.map((p, i) => `<div class="li${p === now ? ' on' : ''}" data-focus data-e="${i}"><span>${epHm(p.t)} ${esc(p.title)}${p === now ? '<b style="color:#e53935"> ·正在</b>' : ''}</span>${p.desc ? `<div class="epg-desc" style="display:none">${esc(p.desc.slice(0, 300))}</div>` : ''}</div>`).join('');
+  el.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  el.onclick = e => {
+    const b = e.target.closest('[data-e]'); if (!b) return;
+    const d = b.querySelector('.epg-desc');
+    if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
+  };
+}
+function toggleLiveFav(i) {
+  const c = Live.chans[i]; if (!c) return;
+  const k = liveFav();
+  const at = k.findIndex(x => x.url === c.url && x.srcIdx === Live.srcIdx);
+  if (at >= 0) { k.splice(at, 1); toast('已取消收藏频道'); }
+  else { k.unshift({ name: c.name, url: c.url, group: c.group, srcIdx: Live.srcIdx }); if (k.length > 100) k.length = 100; toast('已收藏频道'); }
+  localStorage.setItem('fongmi_live_fav', JSON.stringify(k));
+  const has = k.some(x => x.srcIdx === Live.srcIdx);
+  if (has && !Live.groups.includes(LIVE_FAV_GROUP)) Live.groups.unshift(LIVE_FAV_GROUP);
+  if (!has) Live.groups = Live.groups.filter(g => g !== LIVE_FAV_GROUP);
+  if (Live.gi >= Live.groups.length) Live.gi = Math.max(0, Live.groups.length - 1);
+  drawPanel();
+}
 function renderLive() {
   const lives = SRC.live;
   body.innerHTML = `<div class="livewrap">
@@ -1630,11 +1703,14 @@ function renderLive() {
     <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span></div>
     <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span></div>
     <div class="lpanel" id="lPanel">
-      <div class="col" id="colGroup"></div><div class="col" id="colChan"></div><div class="col" id="colEpg"><div class="li muted">EPG：本直播源未配置节目单<br>(真实 FongMi 需订阅 lives 里带 epg，XMLTV 拉取后此处显示 18:00~19:00 节目名，点节目可回看)</div></div>
+      <div class="col" id="colGroup"></div><div class="col" id="colChan"></div><div class="col" id="colEpg"></div>
     </div>
     <div class="digital" id="digital"></div>
   </div>`;
   setInterval(() => { const el = $('#ltClock'); if (el) { const d = new Date(); el.textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0'); } }, 1000);
+  clearInterval(Live.epgTimer); // 每分钟刷新顶栏「现在·节目」
+  Live.epgTimer = setInterval(() => { if (App.view === 'live') updateEpgTop(); }, 60000);
+  drawEpgCol();
   if (!lives.length) { toast('无直播源，请到普通调试台导入含直播的订阅'); return; }
   if (lives.length > 1) {
     body.insertAdjacentHTML('afterbegin', `<div class="hrow" style="padding:6px 28px">${lives.map((x, i) => `<button class="chip${i === Live.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(x.name)}</button>`).join('')}</div>`);
@@ -1650,19 +1726,30 @@ async function loadLiveList() {
   if (App.view !== 'live') return;
   Live.chans = chans;
   Live.groups = [...new Set(chans.map(c => c.group))];
+  if (liveFav().some(x => x.srcIdx === Live.srcIdx)) Live.groups.unshift(LIVE_FAV_GROUP);
   Live.gi = 0;
   drawPanel();
-  if (chans.length) playChan(0, true);
+  ensureEpg(src); // 异步拉 EPG，不阻塞起播
+  if (chans.length) {
+    let start = 0; // O2 上次频道恢复：仅当上次台在本源，否则回落频道 0
+    const last = LS('fongmi_live_last', null);
+    if (last && last.srcIdx === Live.srcIdx) { const li = chans.findIndex(c => c.url === last.url); if (li >= 0) start = li; }
+    playChan(start, true);
+  }
   Focus.set($('#player'));
   toast('Enter 打开频道列表 · ↑↓ 换台 · 数字键输入频道号');
 }
 function drawPanel() {
   if (!$('#colGroup')) return;
   $('#colGroup').innerHTML = Live.groups.map((g, i) => `<div class="li${i === Live.gi ? ' on' : ''}" data-focus data-g="${i}">${esc(g)}</div>`).join('');
-  const list = Live.chans.map((c, i) => ({ c, i })).filter(x => x.c.group === Live.groups[Live.gi]);
-  $('#colChan').innerHTML = list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}</div>`).join('');
+  const favUrls = new Set(liveFav().filter(x => x.srcIdx === Live.srcIdx).map(x => x.url));
+  const list = Live.chans.map((c, i) => ({ c, i })).filter(x => Live.groups[Live.gi] === LIVE_FAV_GROUP ? favUrls.has(x.c.url) : x.c.group === Live.groups[Live.gi]);
+  $('#colChan').innerHTML = list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}<span class="fav${favUrls.has(x.c.url) ? ' on' : ''}" data-f="${x.i}">★</span></div>`).join('');
   $('#colGroup').onclick = e => { const b = e.target.closest('[data-g]'); if (b) { Live.gi = +b.dataset.g; drawPanel(); } };
-  $('#colChan').onclick = e => { const b = e.target.closest('[data-i]'); if (b) { playChan(+b.dataset.i); togglePanel(false); } };
+  $('#colChan').onclick = e => {
+    const f = e.target.closest('[data-f]'); if (f) { toggleLiveFav(+f.dataset.f); return; }
+    const b = e.target.closest('[data-i]'); if (b) { playChan(+b.dataset.i); togglePanel(false); }
+  };
 }
 function togglePanel(open) {
   Live.panelOpen = open ?? !Live.panelOpen;
@@ -1674,8 +1761,10 @@ function playChan(i, keepPanel) {
   const c = Live.chans[i]; if (!c) return;
   Live.cur = i;
   playInto($('#player'), c.url, c.name);
+  try { localStorage.setItem('fongmi_live_last', JSON.stringify({ srcIdx: Live.srcIdx, url: c.url })); } catch { /* 存储满忽略 */ }
   $('#ltTitle').textContent = c.name;
-  $('#ltEpg').textContent = '18:00 ~ 19:00 节目单需订阅配置 EPG 接口（模拟未含）';
+  updateEpgTop();
+  drawEpgCol();
   $('#lbNum').textContent = String(i + 1).padStart(3, '0');
   $('#lbName').textContent = c.name;
   $('#lbPlay').textContent = `正在播放：${c.name}`;
