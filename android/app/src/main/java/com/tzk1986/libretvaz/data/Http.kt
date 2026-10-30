@@ -29,9 +29,12 @@ object Http {
      * 会尊重 JVM 全局 ProxySelector——TV 盒无系统代理时用这个给播放也套上代理。
      * 局域网/本机地址恒直连，避免代理不可达时连自家服务器也断。
      */
+    // Android 的 okhttp 连接层不接受 null selector（报 proxySelector == null），须存原始值还原
+    private val systemSelector: ProxySelector? = ProxySelector.getDefault()
+
     fun applyGlobalProxy() {
         val spec = proxySpec()
-        if (spec == null) { ProxySelector.setDefault(null); return }
+        if (spec == null) { ProxySelector.setDefault(systemSelector); return }
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(spec.first, spec.second))
         ProxySelector.setDefault(object : ProxySelector() {
             override fun select(uri: URI): MutableList<Proxy> =
