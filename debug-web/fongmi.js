@@ -814,11 +814,15 @@ const AGG_CATS = [
   { key: '综艺', kw: ['综艺', '节目'] },
   { key: '动漫', kw: ['动漫', '动画', '番'] },
 ];
+/* 聚合墙源池：按测速排前 6，不排除失效源（死的自然沉底）；未测过的按中性 4s 排在快源之后 */
 const aggPool = () => {
-  const pool = SRC.vod.filter(s => (autoOn() ? !isDead(s.url) : true) && !s.isAdult);
-  const first = SRC.vod[Home.srcIdx];
-  if (first && !first.isAdult && !pool.includes(first)) pool.unshift(first);
-  return pool.slice(0, 12);
+  const ms = s => {
+    const h = healthOf(s.url);
+    if (!h) return 4000;
+    if (h.fails >= DEAD_FAILS) return 1e9;
+    return h.ms ?? 4000;
+  };
+  return SRC.vod.filter(s => !s.isAdult).sort((a, b) => ms(a) - ms(b)).slice(0, 6);
 };
 /* 各源分类树缓存：聚合分类墙按名称匹配每个源的父分类，再取其子类首页合并 */
 const typesCache = new Map();
@@ -1110,7 +1114,7 @@ function renderSearch() {
       drawSug(); return;
     }
     const w = e.target.closest('[data-w]');
-    if (w) { $('#kw').value = w.dataset.w; drawSug(); return; }
+    if (w) { $('#kw').value = w.dataset.w; run(); return; } // 点联想片名直接以其搜索
     const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); }
   };
   drawQr($('#srchQr'));
