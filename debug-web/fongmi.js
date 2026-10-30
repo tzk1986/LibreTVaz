@@ -87,30 +87,32 @@ function parseFilterMeta(text) {
     return null;
   } catch { return null; }
 }
-/* 拼音首字母：用 ICU 拼音排序与 22 个声母锚点字比较（Chrome/Edge 支持；不可用时联想退化为子串匹配） */
-const PIN_ANCHORS = [['A', '阿'], ['B', '八'], ['C', '嚓'], ['D', '多'], ['E', '讹'], ['F', '发'], ['G', '噶'], ['H', '哈'], ['J', '击'], ['K', '喀'], ['L', '垃'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '期'], ['R', '然'], ['S', '撒'], ['T', '塌'], ['X', '昔'], ['Y', '压'], ['Z', '匝']];
-let pinCollator = null;
-try { pinCollator = new Intl.Collator('zh-Hans-CN-u-co-pinyin'); } catch { /* 退化 */ }
-const _iniCache = {};
-function initialOf(ch) {
-  if (/[0-9a-z]/i.test(ch)) return ch.toLowerCase();
-  if (pinCollator && /[㐀-䶿一-鿿]/.test(ch)) {
-    if (_iniCache[ch]) return _iniCache[ch];
-    let res = '';
-    for (const [init, anchor] of PIN_ANCHORS) { if (pinCollator.compare(ch, anchor) >= 0) res = init; else break; }
-    _iniCache[ch] = res;
-    return res;
-  }
-  return '';
-}
-const initialsOf = s => Array.from(String(s)).map(initialOf).join('');
-/* 词库：浏览/搜索中见过的片名滚动持久化，供拼音首字母联想 */
-let VOCAB = LS('fongmi_words', []);
+/* 词库与拼音联想（docs/2026-10-30-图片播放与拼音候选提速方案.md ③.5）：
+   预计算索引在 PerfCore.createPinIndex（每词一次算首字母、多音字变体、前2字母分桶、词频权重）；
+   搜索出结果 +1 / 进详情 +2；持久化键不变 fongmi_words，权重新增 fongmi_wfreq；索引不可用时退化子串匹配 */
+const pinIndex = (typeof PerfCore !== 'undefined' && PerfCore.createPinIndex)
+  ? PerfCore.createPinIndex({ weights: LS('fongmi_wfreq', {}) }) : null;
+if (pinIndex) pinIndex.addMany(LS('fongmi_words', []));
+let VOCAB = pinIndex ? pinIndex.list() : LS('fongmi_words', []);
+const persistVocab = () => {
+  try {
+    if (pinIndex) { localStorage.setItem('fongmi_words', JSON.stringify(pinIndex.list())); localStorage.setItem('fongmi_wfreq', JSON.stringify(pinIndex.weights())); }
+    else localStorage.setItem('fongmi_words', JSON.stringify(VOCAB));
+  } catch { /* 满 */ }
+};
+let vocabSaveTimer = null;
+const persistSoon = () => { clearTimeout(vocabSaveTimer); vocabSaveTimer = setTimeout(persistVocab, 500); };
+const vocabSize = () => (pinIndex ? pinIndex.size() : VOCAB.length);
 const addWords = names => {
-  const set = new Set(VOCAB); let dirty = false;
-  for (const n of names) { if (n && !set.has(n)) { set.add(n); VOCAB.push(n); dirty = true; } }
-  if (VOCAB.length > 2000) VOCAB = VOCAB.slice(-2000);
-  if (dirty) { try { localStorage.setItem('fongmi_words', JSON.stringify(VOCAB)); } catch { /* 满 */ } }
+  if (pinIndex) {
+    for (const n of names) { if (!n) continue; pinIndex.add(n); pinIndex.bump(n, 1); }
+    persistSoon();
+  } else {
+    const set = new Set(VOCAB); let dirty = false;
+    for (const n of names) { if (n && !set.has(n)) { set.add(n); VOCAB.push(n); dirty = true; } }
+    if (VOCAB.length > 2000) VOCAB = VOCAB.slice(-2000);
+    if (dirty) persistSoon();
+  }
 };
 /* 扫码远程输入：搜索与订阅导入共用一个 session 二维码（手机页 Tab 切换，免重复扫码） */
 const RemoteIn = { sid: Math.random().toString(36).slice(2, 8), base: '', url: '', onSearch: null };
@@ -1094,8 +1096,8 @@ function drawSubRow() {
 
 /* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想 */
 let vocabSeeding = false;
-async function seedVocab(min = 300) {
-  if (vocabSeeding || VOCAB.length >= min) return;
+async function seedVocab(min = 600) {
+  if (vocabSeeding || vocabSize() >= min) return;
   vocabSeeding = true;
   try {
     const pool = SRC.vod.filter(s => !isDead(s.url) && !s.isAdult);
@@ -1107,12 +1109,12 @@ async function seedVocab(min = 300) {
       if (seen.has(norm(s.url))) continue;
       seen.add(norm(s.url)); uniq.push(s);
     }
-    await pMap(uniq, async s => { // 并发 3：词库尽早可用，不再串行 6×12s
-      if (VOCAB.length >= min) return;
-      try {
-        const names = parseList(await httpGet(listUrl(s.url, 'ac=videolist&pg=1')), s).map(it => it.name).filter(Boolean);
-        addWords(names);
-      } catch { /* 单源失败跳过 */ }
+    await pMap(uniq, async s => { // 并发 3：词库尽早可用；每源拉 2 页（方案③.5 扩词库）
+      for (const pg of [1, 2]) {
+        if (vocabSize() >= min) return;
+        try { addWords(parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), s), 12000).map(it => it.name).filter(Boolean)); }
+        catch { break; /* 单源失败跳过 */ }
+      }
     }, 3);
   } finally { vocabSeeding = false; }
 }
@@ -1144,11 +1146,8 @@ function renderSearch() {
     const q = inp.value.trim().toLowerCase();
     const row = $('#sugRow'); if (!row) return;
     if (!q) { row.innerHTML = ''; return; }
-    let hits = [];
-    if (/^[a-z]+$/.test(q) && pinCollator) {
-      hits = VOCAB.filter(w => initialsOf(w).toLowerCase().startsWith(q));
-    }
-    if (!hits.length) hits = VOCAB.filter(w => w.toLowerCase().includes(q));
+    let hits = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 30) : [];
+    if (!hits.length) hits = (pinIndex ? pinIndex.list() : VOCAB).filter(w => w.toLowerCase().includes(q));
     hits = [...new Set(hits)].slice(0, 30);
     row.innerHTML = hits.length
       ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join('')
@@ -1156,14 +1155,20 @@ function renderSearch() {
   };
   const drawCand = () => {
     const row = $('#candRow'); if (!row) return;
-    const words = [...new Set(VOCAB.slice(-600).reverse())].slice(0, 48);
+    const q = ($('#kw')?.value || '').trim().toLowerCase();
+    const pre = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 12) : [];
+    const words = pinIndex
+      ? [...new Set([...pre, ...pinIndex.top(48)])].slice(0, 48) // 高频 top48 + 当前输入前缀命中置顶
+      : [...new Set(VOCAB.slice(-600).reverse())].slice(0, 48);
     row.innerHTML = words.length
       ? `<span class="muted" style="font-size:12px;white-space:nowrap">资源候选词</span>` + words.map(w => `<button class="chip" data-focus data-k="${esc(w)}">${esc(w)}</button>`).join('')
       : '<span class="muted" style="font-size:12px">候选词加载中…（需有点播源）</span>';
   };
+  let sugTimer = null;
+  const onKwInput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => { drawSug(); drawCand(); }, 80); }; // 80ms 防抖：连打不卡
   RemoteIn.onSearch = t => { const inp = $('#kw'); if (!inp) return; inp.value = t; drawSug(); run(); };
   $('#kw').onkeydown = e => { if (e.key === 'Enter') run(); };
-  $('#kw').oninput = drawSug;
+  $('#kw').oninput = onKwInput;
   body.onclick = e => {
     const kb = e.target.closest('[data-kb]');
     if (kb) {
@@ -1253,6 +1258,7 @@ function drawCollectTab() {
 
 /* ================= 详情/播放一体页（VideoActivity） ================= */
 async function openDetail(item) {
+  if (item.name && pinIndex) { pinIndex.bump(item.name, 2); persistSoon(); } // 进详情 +2 权重（方案③.5）
   const s = item.source || SRC.vod[Home.srcIdx];
   App.videoBack = App.view === 'collect' ? 'collect' : (App.view === 'home' ? 'home' : App.view === 'keep' ? 'keep' : 'vod');
   App.view = 'video';

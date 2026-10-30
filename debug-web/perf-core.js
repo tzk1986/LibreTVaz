@@ -53,6 +53,92 @@
     return { bump: () => ++e, cur: () => e, stale: t => t !== e };
   }
 
+  /* 拼音首字母索引（docs/2026-10-30-图片播放与拼音候选提速方案.md ③.5）：
+     每词一次算首字母（ICU pinyin Collator + 22 声母锚点），多音字生成 ≤4 个变体；
+     前 2 字母分桶：≥2 字母查询只扫小桶；词频权重排序与淘汰；纯字符串比较，击键 <5ms */
+  const PIN_ANCHORS = [['A', '阿'], ['B', '八'], ['C', '嚓'], ['D', '多'], ['E', '讹'], ['F', '发'], ['G', '噶'], ['H', '哈'], ['J', '击'], ['K', '喀'], ['L', '垃'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '期'], ['R', '然'], ['S', '撒'], ['T', '塌'], ['X', '昔'], ['Y', '压'], ['Z', '匝']];
+  // 多音字全部读音首字母（与默认重合的自动跳过；zh/ch/sh 归入单字母 z/c/s）
+  const POLY_INITS = { 长: ['c', 'z'], 重: ['c', 'z'], 乐: ['l', 'y'], 行: ['x', 'h'], 朝: ['c', 'z'], 传: ['c', 'z'], 单: ['d', 's'], 解: ['j', 'x'], 调: ['d', 't'], 藏: ['c', 'z'], 参: ['c', 's'], 率: ['l', 's'], 差: ['c', 'z'], 系: ['x', 'j'], 曾: ['c', 'z'], 屏: ['p', 'b'], 弹: ['d', 't'] };
+
+  function createPinIndex({ max = 2000, weights = {} } = {}) {
+    let coll = null;
+    try { coll = new Intl.Collator('zh-Hans-CN-u-co-pinyin'); } catch { /* 无 ICU：py 为空，suggest 返回空由调用方退化子串匹配 */ }
+    const iniCache = {};
+    function initialOf(ch) {
+      if (/[0-9a-z]/i.test(ch)) return ch.toLowerCase();
+      if (coll && /[㐀-䶿一-鿿]/.test(ch)) {
+        if (iniCache[ch]) return iniCache[ch];
+        let res = '';
+        for (const [init, anchor] of PIN_ANCHORS) { if (coll.compare(ch, anchor) >= 0) res = init.toLowerCase(); else break; }
+        iniCache[ch] = res;
+        return res;
+      }
+      return '';
+    }
+    function variantsOf(word) {
+      const chars = Array.from(word);
+      const base = chars.map(initialOf).join('');
+      const out = [base];
+      for (let i = 0; i < chars.length && out.length < 4; i++) {
+        for (const a of POLY_INITS[chars[i]] || []) {
+          if (a === base[i]) continue;
+          const v = base.slice(0, i) + a + base.slice(i + 1);
+          if (!out.includes(v)) out.push(v);
+          if (out.length >= 4) break;
+        }
+      }
+      return out;
+    }
+    let words = [];
+    const py = new Map();      // word → 变体数组
+    const seq = new Map();     // word → 加入序（淘汰时同权重保新）
+    const wf = new Map();      // word → 词频权重
+    const buckets = new Map(); // 前2字母 → Set(word)
+    let order = 0;
+    for (const [w, n] of Object.entries(weights || {})) if (n) wf.set(w, +n || 0);
+    const bucketAdd = (w, v) => { const k = v.slice(0, 2) || '_'; let b = buckets.get(k); if (!b) buckets.set(k, b = new Set()); b.add(w); };
+    function evict() {
+      if (words.length <= max) return;
+      const sorted = [...words].sort((a, b) => ((wf.get(a) || 0) - (wf.get(b) || 0)) || (seq.get(a) - seq.get(b)));
+      const remove = new Set(sorted.slice(0, words.length - max));
+      words = words.filter(w => !remove.has(w));
+      for (const w of remove) {
+        for (const v of py.get(w) || []) { const b = buckets.get(v.slice(0, 2) || '_'); if (b) b.delete(w); }
+        py.delete(w); seq.delete(w); wf.delete(w);
+      }
+    }
+    function add(word) {
+      word = String(word || '').trim();
+      if (!word || py.has(word)) return false;
+      words.push(word); seq.set(word, ++order);
+      const vs = variantsOf(word); py.set(word, vs);
+      for (const v of vs) bucketAdd(word, v);
+      evict();
+      return true;
+    }
+    const rank = (a, b) => ((wf.get(b) || 0) - (wf.get(a) || 0)) || (seq.get(b) - seq.get(a));
+    return {
+      ok: !!coll,
+      add, addMany: list => { for (const w of list || []) add(w); },
+      bump(word, d = 1) { word = String(word || '').trim(); if (word) wf.set(word, (wf.get(word) || 0) + d); },
+      // 首字母前缀联想：≥2 字母只扫前缀桶；按权重降序、同权重新词优先，上限 limit
+      suggest(q, limit = 30) {
+        q = String(q || '').toLowerCase().trim();
+        if (!q || !/^[a-z]+$/.test(q) || !coll) return [];
+        const cand = q.length >= 2 ? (buckets.get(q.slice(0, 2)) || []) : words;
+        const hits = [];
+        for (const w of cand) { const vs = py.get(w); if (vs && vs.some(v => v.startsWith(q))) hits.push(w); }
+        hits.sort(rank);
+        return hits.slice(0, limit);
+      },
+      top: n => [...words].sort(rank).slice(0, n),
+      initials: word => Array.from(String(word || '')).map(initialOf).join(''),
+      list: () => words.slice(),
+      size: () => words.length,
+      weights: () => Object.fromEntries(wf),
+    };
+  }
+
   // m3u8 改写（对标主站 src/lib/m3u8.ts + proxy-handlers.ts:117-131）：
   // 分片行与 #EXT-X-KEY/#EXT-X-MAP 的 URI 解析为绝对地址后包成 /proxy?url=；base 用重定向后的 finalUrl；已代理 URI 不二次改写
   const PX_RE = /(^|[=/])proxy\?url=/i;
@@ -75,6 +161,6 @@
     }).join('\n');
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8 };
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);
