@@ -1148,9 +1148,15 @@ function renderSearch() {
     if (!q) { row.innerHTML = ''; return; }
     let hits = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 30) : [];
     if (!hits.length) hits = (pinIndex ? pinIndex.list() : VOCAB).filter(w => w.toLowerCase().includes(q));
-    hits = [...new Set(hits)].slice(0, 30);
+    hits = [...new Set(hits)];
+    let core = '';
+    if (hits.length >= 2 && typeof PerfCore !== 'undefined') { // 系列片截断：命中词的最短公共前缀（如「庆余年」）置顶，点它直接搜核心词
+      const cp = PerfCore.commonPrefix(hits);
+      if (cp && cp.length >= 2 && !hits.includes(cp)) { core = cp; hits.unshift(cp); }
+    }
+    hits = hits.slice(0, 30);
     row.innerHTML = hits.length
-      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join('')
+      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}${w === core ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
       : '<span class="muted" style="font-size:12px">没有匹配的片名，可点候选词或换字母试试</span>';
   };
   const drawCand = () => {

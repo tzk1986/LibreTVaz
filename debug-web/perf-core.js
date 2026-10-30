@@ -139,6 +139,17 @@
     };
   }
 
+  // 系列片名截断：['庆余年第一季 特别版','庆余年 第二季'] → '庆余年'（联想行以最短公共前缀补充核心词）
+  function commonPrefix(list) {
+    if (!list || !list.length) return '';
+    let p = String(list[0]);
+    for (const w of list.slice(1)) {
+      while (p && !String(w).startsWith(p)) p = p.slice(0, -1);
+      if (!p) break;
+    }
+    return p;
+  }
+
   // m3u8 改写（对标主站 src/lib/m3u8.ts + proxy-handlers.ts:117-131）：
   // 分片行与 #EXT-X-KEY/#EXT-X-MAP 的 URI 解析为绝对地址后包成 /proxy?url=；base 用重定向后的 finalUrl；已代理 URI 不二次改写
   const PX_RE = /(^|[=/])proxy\?url=/i;
@@ -161,6 +172,6 @@
     }).join('\n');
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex };
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, commonPrefix };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -136,5 +136,13 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   ok(q > 0, 'pin: 桶查询有命中');
 }
 
+// 8. commonPrefix：系列片名联想截断核心词
+{
+  eq(P.commonPrefix(['庆余年第一季 特别版', '庆余年 第二季', '庆余年，全世界都以为我是废物太子']), '庆余年', 'prefix: 庆余年系列截断');
+  eq(P.commonPrefix(['独行月球']), '独行月球', 'prefix: 单词即自身');
+  eq(P.commonPrefix(['甲方', '乙方']), '', 'prefix: 无公共前缀为空');
+  ok(P.commonPrefix([]) === '' && P.commonPrefix(null) === '', 'prefix: 空输入安全');
+}
+
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');
 process.exit(fails ? 1 : 0);
