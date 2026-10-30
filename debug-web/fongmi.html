@@ -122,6 +122,14 @@
   .vtop .content { margin-top: 6px; color: #c8ccd0; }
   .slabel { flex: none; width: 56px; color: var(--dim); font-size: 13px; padding-top: 8px; }
   .eprow { display: flex; align-items: center; padding: 4px 28px; gap: 8px; flex: none; }
+  /* 手机窄屏：视频定宽400px会把右侧详情/按钮列（返回/全屏/简介）挤成0宽不可见 → 纵向堆叠 */
+  @media (max-width: 720px) {
+    .vtop { flex-direction: column; gap: 8px; padding: 8px 12px; }
+    .vtop video { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+    .vtop .txt { max-height: none; }
+    .eprow { padding: 4px 12px; }
+    .sbox, .colhead { padding-left: 12px; padding-right: 12px; }
+  }
 
   /* 搜索 */
   .sbox { display: flex; gap: 10px; padding: 10px 28px; flex: none; }
