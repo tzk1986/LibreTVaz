@@ -1123,8 +1123,25 @@ function renderSearch() {
   setTimeout(() => $('#kw').focus(), 50);
 }
 
-/* ================= 搜索结果页（CollectActivity：一源一 Tab 渐进追加） ================= */
-const Collect = { kw: '', stop: false, done: 0, bySite: {}, tabIdx: '' };
+/* ================= 搜索结果页（CollectActivity：一源一 Tab 渐进追加） =================
+   提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
+   源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
+   SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
+const Collect = { kw: '', stop: false, done: 0, bySite: {}, tabIdx: '', epoch: 0 };
+function collectSources() {
+  const items = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
+  return PerfCore.orderSources(items, x => healthOf(x.s.url)?.ms ?? null, Home.srcIdx);
+}
+function searchShardSet(ck, u, items) { const v = cacheRaw(ck) || {}; v[u] = { t: Date.now(), d: items }; cacheSet(ck, v); }
+function addSiteTab(s, si, list) {
+  if (!list.length) return;
+  Collect.bySite[si] = list;
+  addWords(list.map(v => v.name));
+  const tabs = $('#cTabs'); if (!tabs) return;
+  let tab = tabs.querySelector(`[data-t="${si}"]`);
+  if (!tab) { tab = document.createElement('button'); tab.className = 'chip'; tab.dataset.focus = ''; tab.dataset.t = si; tabs.appendChild(tab); }
+  tab.textContent = `${s.name}(${list.length})`;
+}
 function renderCollect() {
   body.innerHTML = `<div class="colhead">“${esc(Collect.kw)}”的搜索结果 <span class="muted" style="font-size:13px">Esc 停止并返回</span></div>
     <div class="hrow" id="cTabs"><button class="chip on" data-focus data-t="">全部</button></div>
@@ -1135,24 +1152,34 @@ function renderCollect() {
     document.querySelectorAll('#cTabs .chip').forEach(c => c.classList.toggle('on', c === b));
     drawCollectTab();
   };
-  const sources = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
+  const ep = ++Collect.epoch;
+  Collect.bySite = {}; Collect.tabIdx = '';
+  const sources = collectSources();
   if (!sources.length) { $('#cGrid').innerHTML = '<p class="err">无点播源</p>'; return; }
-  sources.forEach(({ s, si }) => {
-    (async () => {
-      try {
-        const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`));
-        const list = parseList(t, s).filter(v => isRelevant(v.name, Collect.kw));
-        if (Collect.stop || !list.length || App.view !== 'collect') return;
-        addWords(list.map(v => v.name));
-        Collect.bySite[si] = list;
-        const tab = document.createElement('button');
-        tab.className = 'chip'; tab.dataset.focus = ''; tab.dataset.t = si; tab.textContent = `${s.name}(${list.length})`;
-        $('#cTabs')?.appendChild(tab);
-        if (Collect.tabIdx === '') drawCollectTab();
-      } catch { /* 单源失败静默，与 FongMi 一致 */ }
-      finally { Collect.done++; }
-    })();
-  });
+  const ck = PerfCore.searchKey(Collect.kw);
+  const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), PerfCore.SEARCH_TTL);
+  const siOf = new Map(sources.map(({ s, si }) => [normUrl(s.url), { s, si }]));
+  for (const [u, d] of [...Object.entries(fresh), ...Object.entries(stale)]) {
+    const x = siOf.get(u); if (x) addSiteTab(x.s, x.si, d);
+  }
+  if (Object.keys(Collect.bySite).length) {
+    $('#cGrid').innerHTML = '';
+    drawCollectTab();
+  }
+  const fire = ({ s, si }) => (async () => {
+    try {
+      const t = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(Collect.kw)}&pg=1`), 8000);
+      const list = parseList(t, s).filter(v => isRelevant(v.name, Collect.kw));
+      searchShardSet(ck, normUrl(s.url), list);
+      if (ep !== Collect.epoch || Collect.stop || App.view !== 'collect') return;
+      addSiteTab(s, si, list);
+      if (Collect.tabIdx === '') drawCollectTab();
+    } catch { /* 单源失败静默，与 FongMi 一致 */ }
+    finally { if (ep === Collect.epoch) Collect.done++; }
+  })();
+  const [first, rest] = PerfCore.splitBatches(sources, 8);
+  first.forEach(fire);
+  if (rest.length) setTimeout(() => { if (ep === Collect.epoch) rest.forEach(fire); }, 1200);
 }
 function drawCollectTab() {
   const grid = $('#cGrid'); if (!grid) return;
@@ -1246,26 +1273,53 @@ function openFindBox(title, getState) {
   m.onclick = e => { if (e.target === m) closeFindModal(); };
   const kw = $('#findKw'); kw.value = title || '';
   const res = $('#findRes'); res.innerHTML = '';
-  const runFind = async () => {
-    const q = kw.value.trim(); if (!q) return;
-    res.innerHTML = '<span class="muted" style="font-size:12px">全源搜索中…</span>';
-    const sources = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
-    const pages = await pMap(sources, ({ s }) =>
-      httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(q)}&pg=1`), 8000)
-        .then(raw => parseList(raw, s).filter(v => isRelevant(v.name, q)).map(v => ({ ...v, source: s }))).catch(() => []), 6);
-    if (!m.classList.contains('open')) return;
-    const found = pages.flat().slice(0, 30);
+  let runToken = 0, curFound = [];
+  const drawFind = (found, pending) => {
     res.innerHTML = found.length
-      ? found.map((f, i) => `<button class="chip" data-focus data-f="${i}">${esc(f.name)}｜${esc(f.source.name)}${f.remarks ? '·' + esc(f.remarks) : ''}</button>`).join('')
-      : '<span class="muted" style="font-size:12px">各源均无结果</span>';
-    res.onclick = e => {
-      const b = e.target.closest('[data-f]'); if (!b) return;
-      const it = found[+b.dataset.f];
-      const st = getState();
-      App.resume = { line: st.line, ep: st.ep, sec: st.sec };
-      closeFindModal();
-      openDetail(it);
+      ? found.map((f, i) => `<button class="chip" data-focus data-f="${i}">${esc(f.name)}｜${esc(f.source?.name || '')}${f.remarks ? '·' + esc(f.remarks) : ''}</button>`).join('') + (pending ? '<span class="muted" style="font-size:12px">陆续返回中…</span>' : '')
+      : `<span class="muted" style="font-size:12px">${pending ? '全源搜索中…' : '各源均无结果'}</span>`;
+  };
+  res.onclick = e => {
+    const b = e.target.closest('[data-f]'); if (!b) return;
+    const it = curFound[+b.dataset.f]; if (!it) return;
+    const st = getState();
+    App.resume = { line: st.line, ep: st.ep, sec: st.sec };
+    closeFindModal();
+    openDetail(it);
+  };
+  // 渐进渲染+SWR：缓存分片先上屏，每源返回即追加；分批防争抢，runToken 丢弃旧请求回调
+  const runFind = () => {
+    const q = kw.value.trim(); if (!q) return;
+    const tk = ++runToken;
+    curFound = [];
+    const sources = collectSources();
+    if (!sources.length) { drawFind([], false); return; }
+    const bySi = {};
+    let left = sources.length;
+    const flush = pending => {
+      if (tk !== runToken || !m.classList.contains('open')) return;
+      curFound = Object.values(bySi).flat().slice(0, 30);
+      drawFind(curFound, pending);
     };
+    const ck = PerfCore.searchKey(q);
+    const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), PerfCore.SEARCH_TTL);
+    const srcOf = new Map(sources.map(({ s, si }) => [normUrl(s.url), { s, si }]));
+    for (const [u, d] of [...Object.entries(fresh), ...Object.entries(stale)]) {
+      const x = srcOf.get(u); if (x && d.length) bySi[x.si] = d.map(v => ({ ...v, source: x.s }));
+    }
+    flush(true);
+    const fire = ({ s, si }) => (async () => {
+      try {
+        const raw = await httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(q)}&pg=1`), 8000);
+        const list = parseList(raw, s).filter(v => isRelevant(v.name, q)).map(v => ({ ...v, source: s }));
+        searchShardSet(ck, normUrl(s.url), list);
+        if (tk === runToken) { bySi[si] = list; flush(true); }
+      } catch { /* 单源失败静默 */ }
+      finally { if (tk === runToken && --left <= 0) flush(false); }
+    })();
+    const [first, rest] = PerfCore.splitBatches(sources, 8);
+    first.forEach(fire);
+    if (rest.length) setTimeout(() => { if (tk === runToken) rest.forEach(fire); }, 1200);
   };
   $('#findGo').onclick = runFind;
   kw.onkeydown = e => { if (e.key === 'Enter') runFind(); };
