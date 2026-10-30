@@ -295,7 +295,7 @@ document.addEventListener('keydown', e => {
     if (Live.panelOpen) { /* 面板开时方向键走通用焦点 */ }
     else if (e.key === 'ArrowUp') { chanStep(-1); e.preventDefault(); return; }
     else if (e.key === 'ArrowDown') { chanStep(1); e.preventDefault(); return; }
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { toast('当前直播源仅 1 条线路'); e.preventDefault(); return; }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { togglePanel(true); e.preventDefault(); return; } // R6：←→ 也开面板，回首页/收藏经面板可达（原 toast 死键）
     else if (e.key === 'Enter') { togglePanel(true); e.preventDefault(); return; }
     else if (/^[0-9]$/.test(e.key)) { inputDigit(e.key); e.preventDefault(); return; }
   }
@@ -306,15 +306,27 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     if (editing) return; // 输入框内 Enter 由控件自身处理（搜索/导入/全源搜索）
     if (isEditable(Focus.el)) { enterEdit(Focus.el); e.preventDefault(); return; }
+    if (Focus.el?.tagName === 'VIDEO') { togglePlayVideo(Focus.el); e.preventDefault(); return; } // R5：画面 OK=播放/暂停（click() 对 video 无效）
     Focus.el?.click(); e.preventDefault();
+  }
+  if (e.key === ' ' || e.code === 'Space') {
+    if (Focus.el?.tagName === 'VIDEO' && !editing) { togglePlayVideo(Focus.el); e.preventDefault(); } // Space=暂停，杜绝滚页
+    return;
   }
   const D = { ArrowLeft: 'L', ArrowRight: 'R', ArrowUp: 'U', ArrowDown: 'D' }[e.key];
   if (D) {
     if (editing) return; // 编辑态方向键=光标/选区，放行原生
+    if (Focus.el?.tagName === 'VIDEO' && App.view === 'video' && (D === 'L' || D === 'R')) { seekVideo(Focus.el, D === 'L' ? -15 : 15); e.preventDefault(); return; } // R5 详情 ←→=±15s
     Focus.move(D); e.preventDefault();
+    const fe = Focus.el; // 键盘移动后同样记录最后聚焦频道行（favCur 定位用）
+    if (App.view === 'live' && fe?.dataset?.i != null && fe.closest?.('#colChan')) Live.hi = Number(fe.dataset.i);
   }
 });
-document.addEventListener('click', e => { const t = e.target.closest('[data-focus]'); if (t) Focus.set(t); });
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-focus]'); if (!t) return;
+  Focus.set(t);
+  if (t.dataset.i != null && t.closest?.('#colChan')) Live.hi = Number(t.dataset.i); // R6：记录最后聚焦频道行，供面板顶 favCur 按钮定位
+});
 function onEsc() {
   if ($('#askModal').classList.contains('open')) return closeAsk(false);
   if ($('#qrModal').classList.contains('open')) return closeQrModal();
@@ -388,6 +400,24 @@ async function playInto(video, url, title, onDead) {
   }
 }
 function stopPlayer() { playSeq++; stopHls(); document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
+/* R5 遥控播控：焦点在画面时 Enter/Space=播放暂停 toggle，详情页 ←→=±15s seek（对标 Emby/ExoPlayer 键位） */
+function togglePlayVideo(v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
+function seekVideo(v, d) {
+  if (!isFinite(v.duration) || v.duration <= 0) { toast('快进/快退暂不可用（流未就绪）'); return; }
+  v.currentTime = Math.max(0, Math.min(v.duration - 1, (v.currentTime || 0) + d));
+  toast(d < 0 ? '« 15s' : '15s »');
+}
+/* 遥控全屏：OK 触发（键盘事件属有效用户手势，requestFullscreen 可用）；全屏内画面即焦点，
+   Enter/Space=暂停 ←→=seek Esc=浏览器原生退全屏 */
+function toggleFullscreen() {
+  const v = $('#player'); if (!v) return;
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+  if (!v.requestFullscreen) return toast('该浏览器不支持全屏');
+  v.requestFullscreen().then(() => Focus.set(v)).catch(() => toast('进入全屏失败'));
+}
+document.addEventListener('fullscreenchange', () => {
+  const b = $('#fsBtn'); if (b) b.textContent = document.fullscreenElement ? '⛶ 退出全屏' : '⛶ 全屏';
+});
 
 /* ================= 视图框架 ================= */
 const App = { view: 'home', videoBack: 'vod' };
@@ -1425,7 +1455,7 @@ async function openDetail(item) {
   hist.unshift({ id: String(item.id), name: item.name, pic: item.pic, si: SRC.vod.indexOf(s) });
   localStorage.setItem('fongmi_hist', JSON.stringify(hist.slice(0, 60))); // O3b 放宽 20→60 供历史页管理
   body.innerHTML = `<main id="scroller" style="overflow-y:auto">
-    <div class="vtop"><video id="player" controls autoplay></video>
+    <div class="vtop"><video id="player" controls autoplay data-focus></video>
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
     <div id="vrows"></div></main>`;
   // SWR 详情缓存：上次结果先上屏秒显（含起播），8s 内拉新成功且数据有变化才重绘；失败保留缓存
@@ -1467,7 +1497,8 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="vidBack" style="margin-left:auto">← 返回</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="vidBack" style="margin-left:auto">← 返回</button></div>`;
+  $('#fsBtn').onclick = toggleFullscreen;
   bindBack('vidBack', () => switchView(App.videoBack || 'vod'));
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
@@ -1767,7 +1798,7 @@ function renderHist() {
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
-const Live = { srcIdx: Math.max(0, LS('fongmi_live_idx', 0)), groups: [], cur: -1, chans: [], panelOpen: false, gi: 0, epgIndex: null, epgTimer: null };
+const Live = { srcIdx: Math.max(0, LS('fongmi_live_idx', 0)), groups: [], cur: -1, chans: [], panelOpen: false, gi: 0, epgIndex: null, epgTimer: null, hi: -1 };
 function parseLiveChannels(text) {
   const t = text.trim();
   const chans = [];
@@ -1866,12 +1897,14 @@ function toggleLiveFav(i) {
   if (has && !Live.groups.includes(LIVE_FAV_GROUP)) Live.groups.unshift(LIVE_FAV_GROUP);
   if (!has) Live.groups = Live.groups.filter(g => g !== LIVE_FAV_GROUP);
   if (Live.gi >= Live.groups.length) Live.gi = Math.max(0, Live.groups.length - 1);
+  const wasFav = Focus.el === $('#favCur'); // 经 favCur 按钮触发时重绘后焦点归位按钮，防 F7 式漂移
   drawPanel();
+  if (wasFav) Focus.set($('#favCur'));
 }
 function renderLive() {
   const lives = SRC.live;
   body.innerHTML = `<div class="livewrap">
-    <video id="player" autoplay controls></video>
+    <video id="player" autoplay controls data-focus></video>
     <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span><button class="btn" data-focus id="liveBack" style="pointer-events:auto">← 首页</button></div>
     <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span></div>
     <div class="lpanel" id="lPanel">
@@ -1910,16 +1943,26 @@ async function loadLiveList() {
     playChan(start, true);
   }
   Focus.set($('#player'));
-  toast('Enter 打开频道列表 · ↑↓ 换台 · 数字键输入频道号');
+  toast('Enter/←→ 打开频道列表 · ↑↓ 换台 · 数字键输入频道号');
 }
 function drawPanel() {
   if (!$('#colGroup')) return;
-  $('#colGroup').innerHTML = Live.groups.map((g, i) => `<div class="li${i === Live.gi ? ' on' : ''}" data-focus data-g="${i}">${esc(g)}</div>`).join('');
+  /* R6 遥控可达：分组列顶插「← 首页」行（面板关时 liveBack 不可达的替代通道）；频道列顶插收藏按钮，
+     目标=最后聚焦频道行（Live.hi），无则正在播出频道（Live.cur）；★/☆ 文案随目标收藏态 */
+  $('#colGroup').innerHTML = '<div class="li" data-focus data-home="1">← 首页</div>'
+    + Live.groups.map((g, i) => `<div class="li${i === Live.gi ? ' on' : ''}" data-focus data-g="${i}">${esc(g)}</div>`).join('');
   const favUrls = new Set(liveFav().filter(x => x.srcIdx === Live.srcIdx).map(x => x.url));
+  const ti = Live.chans[Live.hi] ? Live.hi : Live.cur;
+  const favOn = ti >= 0 && Live.chans[ti] && favUrls.has(Live.chans[ti].url);
   const list = Live.chans.map((c, i) => ({ c, i })).filter(x => Live.groups[Live.gi] === LIVE_FAV_GROUP ? favUrls.has(x.c.url) : x.c.group === Live.groups[Live.gi]);
-  $('#colChan').innerHTML = list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}<span class="fav${favUrls.has(x.c.url) ? ' on' : ''}" data-f="${x.i}">★</span></div>`).join('');
-  $('#colGroup').onclick = e => { const b = e.target.closest('[data-g]'); if (b) { Live.gi = +b.dataset.g; drawPanel(); } };
+  $('#colChan').innerHTML = `<div class="li"><button class="btn" data-focus id="favCur">${favOn ? '★ 取消收藏选中频道' : '☆ 收藏选中频道'}</button></div>`
+    + list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}<span class="fav${favUrls.has(x.c.url) ? ' on' : ''}" data-f="${x.i}">★</span></div>`).join('');
+  $('#colGroup').onclick = e => {
+    if (e.target.closest('[data-home]')) return switchView('home');
+    const b = e.target.closest('[data-g]'); if (b) { Live.gi = +b.dataset.g; drawPanel(); }
+  };
   $('#colChan').onclick = e => {
+    if (e.target.closest('#favCur')) { toggleLiveFav(Live.chans[Live.hi] ? Live.hi : Live.cur); return; }
     const f = e.target.closest('[data-f]'); if (f) { toggleLiveFav(+f.dataset.f); return; }
     const b = e.target.closest('[data-i]'); if (b) { playChan(+b.dataset.i); togglePanel(false); }
   };
@@ -1927,7 +1970,7 @@ function drawPanel() {
 function togglePanel(open) {
   Live.panelOpen = open ?? !Live.panelOpen;
   $('#lPanel')?.classList.toggle('open', Live.panelOpen);
-  if (Live.panelOpen) { Focus.set($('#colGroup')?.querySelector('[data-focus]') || $('#player')); drawPanel(); }
+  if (Live.panelOpen) { Focus.set($('#colGroup')?.querySelector('[data-g]') || $('#player')); drawPanel(); } // 落首分组而非「首页」行，↓↑ 即可回看首页行
   else Focus.set($('#player'));
 }
 function playChan(i, keepPanel) {

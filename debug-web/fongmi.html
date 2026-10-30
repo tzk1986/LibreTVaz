@@ -127,6 +127,10 @@
   .colhead { padding: 6px 28px 0; font-size: 18px; font-weight: 600; flex: none; }
 
   #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); background: rgba(0,0,0,.8); border-radius: 6px; padding: 8px 22px; font-size: 14px; display: none; z-index: 60; }
+
+  /* 画面等比不拉伸：object-fit contain 黑边信箱；全屏时铺满视口仍保比例（放最后压过 .vtop/.livewrap 同特异性规则） */
+  video { object-fit: contain; background: #000; }
+  video:fullscreen, video:-webkit-full-screen { width: 100vw; height: 100vh; object-fit: contain; }
 </style>
 </head>
 <body>
