@@ -148,14 +148,23 @@ async function remoteInit() {
   drawQr($('#srchQr')); drawQr($('#smQr'));
   setInterval(remotePoll, 1500);
 }
+// 原引用的 qrcode@1.5.4/build/qrcode.min.js 在 npm 包里根本不存在（jsdelivr 恒 404），码从未画出——换 qrcode-generator 自绘
 function drawQr(el) {
   if (!el) return;
-  el.innerHTML = `<div class="qrbox">${window.QRCode ? '<canvas></canvas>' : ''}
-    <div class="qrside"><p class="muted" style="font-size:12px">手机扫码远程输入：搜索关键词与订阅导入共用此码，手机页内 Tab 切换，无需重复扫码${window.QRCode ? '' : '<br>（二维码库未加载，请直接点击下方链接）'}</p>
+  el.innerHTML = `<div class="qrbox">${window.qrcode ? '<span class="qrc"></span>' : ''}
+    <div class="qrside"><p class="muted" style="font-size:12px">手机扫码远程输入：搜索关键词与订阅导入共用此码，手机页内 Tab 切换，无需重复扫码${window.qrcode ? '' : '<br>（二维码库未加载，请直接点击下方链接）'}</p>
     <a href="${esc(RemoteIn.url)}" target="_blank" style="color:var(--accent);font-size:11px;word-break:break-all">${esc(RemoteIn.url) || '初始化中…'}</a></div></div>`;
-  if (window.QRCode) {
-    const c = el.querySelector('canvas');
-    if (RemoteIn.url) QRCode.toCanvas(c, RemoteIn.url, { width: 130, margin: 1, color: { dark: '#e8eaed', light: '#14171a' } }).catch(() => {});
+  if (window.qrcode && RemoteIn.url) {
+    try {
+      const qr = window.qrcode(0, 'M'); qr.addData(RemoteIn.url); qr.make();
+      const n = qr.getModuleCount(), cell = Math.max(2, Math.floor(130 / (n + 2))), sz = cell * (n + 2);
+      const c = document.createElement('canvas'); c.width = c.height = sz;
+      const g = c.getContext('2d');
+      g.fillStyle = '#14171a'; g.fillRect(0, 0, sz, sz);
+      g.fillStyle = '#e8eaed';
+      for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) if (qr.isDark(r, q)) g.fillRect((q + 1) * cell, (r + 1) * cell, cell, cell);
+      el.querySelector('.qrc').replaceWith(c);
+    } catch { /* 画不出时留下方链接兜底 */ }
   }
 }
 async function remotePoll() {
