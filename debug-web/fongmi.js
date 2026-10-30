@@ -137,7 +137,7 @@ const addWords = names => {
   }
 };
 /* 扫码远程输入：搜索与订阅导入共用一个 session 二维码（手机页 Tab 切换，免重复扫码） */
-const RemoteIn = { sid: Math.random().toString(36).slice(2, 8), base: '', url: '', onSearch: null };
+const RemoteIn = { sid: Math.random().toString(36).slice(2, 10), base: '', url: '', onSearch: null };
 async function remoteInit() {
   try {
     const j = await (await fetch('/api/remote/base')).json();
@@ -180,9 +180,12 @@ async function remoteLoop() { // 长轮询：服务端挂起≤30s，send 即唤
     } catch { await rsleep(3000); continue; } // 断连/超时：短暂退避后续轮
     if (!hit || !hit.text) continue;
     if (hit.mode === 'sub') {
-      toast('收到远程订阅链接，开始导入…');
-      const inp = $('#subUrl'); if (inp) inp.value = hit.text;
-      doImport(hit.text);
+      // P4：默认 TV 端确认再导入（同网段任何人可推链接）；fongmi_qrauto=1 免确认保模拟便利
+      if (LS('fongmi_qrauto', 0) === 1 || confirm(`收到订阅链接，确认导入？\n${String(hit.text).slice(0, 160)}`)) {
+        toast('开始导入远程订阅…');
+        const inp = $('#subUrl'); if (inp) inp.value = hit.text;
+        doImport(hit.text);
+      } else toast('已忽略远程订阅导入');
     } else {
       if (App.view !== 'search') switchView('search');
       setTimeout(() => RemoteIn.onSearch && RemoteIn.onSearch(hit.text), 80);

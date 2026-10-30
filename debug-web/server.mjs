@@ -139,11 +139,29 @@ function deliver(sid, res) {
   s.ackedSeq = Math.max(s.ackedSeq, h.seq);
   remoteJson(res, h);
 }
-function lanHost() {
+function lanHost() { // P4：过滤虚拟网卡/链路本地地址，多网卡时二维码不再指错 IP
+  const skip = /vmware|virtualbox|vbox|hyper|veth|br[-_]|docker|wsl|loopback|tunnel|tap|hamachi|zerotier|npc|teredo|isatap/i;
+  for (const [name, list] of Object.entries(networkInterfaces())) {
+    if (skip.test(name)) continue;
+    for (const n of list || []) if (n.family === 'IPv4' && !n.internal && !n.address.startsWith('169.254.')) return n.address;
+  }
   for (const list of Object.values(networkInterfaces())) {
     for (const n of list || []) if (n.family === 'IPv4' && !n.internal) return n.address;
   }
   return 'localhost';
+}
+/* P4 清扫：废弃 sid 的消息/会话不再无限驻留；send 按 IP 限速 */
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, h] of remoteBox) if (now - h.t > 300000) remoteBox.delete(sid);
+  for (const [sid, s] of remoteSess) if (now - s.lastSeen > 600000 && !remoteWaiters.has(sid)) remoteSess.delete(sid);
+}, 300000).unref();
+const remoteRate = new Map(); // ip -> {n, t0}
+function rateOk(ip) {
+  const now = Date.now();
+  const h = remoteRate.get(ip);
+  if (!h || now - h.t0 > 60000) { remoteRate.set(ip, { n: 1, t0: now }); return true; }
+  return ++h.n <= 20;
 }
 function remotePage() {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
@@ -243,7 +261,8 @@ const server = createServer(async (req, res) => {
         const { sid, mode, text } = JSON.parse(raw);
         if (sid && text) {
           const k = String(sid);
-          if (!remoteOnline(k)) out = { ok: false, reason: 'tv_offline' };
+          if (!rateOk(req.socket.remoteAddress || '?')) out = { ok: false, reason: 'rate' };
+          else if (!remoteOnline(k)) out = { ok: false, reason: 'tv_offline' };
           else {
             const seq = ++remoteSeq;
             remoteBox.set(k, { mode: mode === 'sub' ? 'sub' : 'search', text: String(text).slice(0, 4000), t: Date.now(), seq });
