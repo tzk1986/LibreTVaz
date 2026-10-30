@@ -233,19 +233,50 @@ function onEsc() {
   if (App.view !== 'home') return switchView('home');
 }
 
-/* ================= 播放 ================= */
-let hls = null;
+/* ================= 播放 =================
+   渐进容错（docs/2026-10-30-图片播放与拼音候选提速方案.md ③）：
+   hls 配置对齐主站 player-shell（超时/重试/worker）；先直连，fatal 网络/清单错误升级 /proxy 重建一次；
+   直链(mp4 等)同样 error 后切 /proxy 一次；再失败明确提示换线，不再无限转圈；起播前显示「缓冲中…」 */
+let hls = null, playCleanup = null;
+function stopHls() { if (hls) { hls.destroy(); hls = null; } if (playCleanup) { playCleanup(); playCleanup = null; } }
 function playInto(video, url, title) {
-  if (hls) { hls.destroy(); hls = null; }
+  stopHls();
   video.pause(); video.removeAttribute('src');
+  const t = $('#vtitle'); const base = title || '';
+  const mark = on => { if (t) t.textContent = base + (on ? ' · 缓冲中…' : ''); };
+  const px = '/proxy?url=' + encodeURIComponent(url);
+  const dead = () => { stopHls(); mark(false); toast('该线路无法播放，请换线路或换源'); };
   if (/\.(m3u8|mpd)/i.test(url) && window.Hls && Hls.isSupported()) {
-    hls = new Hls({ maxBufferLength: 30 });
-    hls.loadSource(url); hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-  } else { video.src = url; video.play().catch(() => {}); }
-  const t = $('#vtitle'); if (t) t.textContent = title || '';
+    mark(true);
+    const start = usePx => {
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30, manifestLoadingTimeOut: 10000, fragLoadingTimeOut: 15000, manifestLoadingMaxRetry: 2, fragLoadingMaxRetry: 6, abrEwmaDefaultEstimate: 800000 });
+      hls.loadSource(usePx ? px : url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+      hls.on(Hls.Events.FRAG_BUFFERED, () => mark(false));
+      hls.on(Hls.Events.ERROR, (ev, data) => {
+        if (!data.fatal) return;
+        const upgrade = !usePx && (data.type === Hls.ErrorTypes.NETWORK_ERROR || data.type === Hls.ErrorTypes.MANIFEST_ERROR);
+        stopHls();
+        if (upgrade) start(true); else dead();
+      });
+    };
+    start(false);
+  } else {
+    mark(true);
+    let triedPx = false;
+    const onErr = () => {
+      if (!triedPx) { triedPx = true; video.removeAttribute('src'); video.src = px; video.play().catch(() => {}); return; }
+      dead();
+    };
+    const onOk = () => mark(false);
+    video.addEventListener('error', onErr);
+    video.addEventListener('canplay', onOk, { once: true });
+    playCleanup = () => video.removeEventListener('error', onErr);
+    video.src = url; video.play().catch(() => {});
+  }
 }
-function stopPlayer() { if (hls) { hls.destroy(); hls = null; } document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
+function stopPlayer() { stopHls(); document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
 
 /* ================= 视图框架 ================= */
 const App = { view: 'home', videoBack: 'vod' };
@@ -648,10 +679,23 @@ async function sourceGuard() {
 }
 
 /* ================= 卡片渲染（adapter_vod_rect 同款） ================= */
+/* 海报双向降级（docs/2026-10-30-图片播放与拼音候选提速方案.md ①）：
+   浏览器直连原图（可借系统代理规则、多域名并发不受同源 6 连接限）→ 失败切 /proxy（服务端补 Referer 解防盗链）→ 再错保留 .ph 片名占位 */
+function picHtml(pic) {
+  if (!pic) return '';
+  const p = esc(pic);
+  return `<img data-ox="${p}" data-pi="0" src="${p}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+}
+window.addEventListener('error', e => {
+  const img = e.target;
+  if (!img || img.tagName !== 'IMG' || img.dataset.pi == null) return;
+  if (img.dataset.pi === '0') { img.dataset.pi = '1'; img.src = '/proxy?url=' + encodeURIComponent(img.dataset.ox); }
+  else img.remove();
+}, true);
 function cardHtml(it, i, opts = {}) {
   return `<div class="card" data-focus data-i="${i}">
     ${opts.del ? '<button class="del" data-del="1">×</button>' : ''}
-    <div class="pic"><div class="ph">${esc(it.name)}</div>${it.pic ? `<img src="/proxy?url=${encodeURIComponent(it.pic)}" loading="lazy" onerror="this.remove()">` : ''}
+    <div class="pic"><div class="ph">${esc(it.name)}</div>${picHtml(it.pic)}
       ${it.year ? `<span class="year">${esc(it.year)}</span>` : ''}
       ${opts.showSite && it.source ? `<span class="site">${esc(it.source.name)}</span>` : ''}
       ${it.remarks ? `<span class="remark">${esc(it.remarks)}</span>` : ''}</div>
@@ -1243,7 +1287,11 @@ async function openDetail(item) {
     $('#keepBtn').classList.toggle('on', at < 0);
   };
   $('#changeBtn').onclick = doChangeSource;
-  let line = d.episodes.findIndex(g => g.list.length); if (line < 0) line = 0;
+  // 选线优先：首个含流后缀(.m3u8/.mp4 等)地址的线路，避免默认撞 HTML 壳页线路（方案③）
+  const isStreamLink = u => /\.(m3u8|mp4|flv|mkv|ts|mpd)(\?|$)/i.test(String(u));
+  let line = d.episodes.findIndex(g => g.list.length && g.list.some(x => isStreamLink(x.link)));
+  if (line < 0) line = d.episodes.findIndex(g => g.list.length);
+  if (line < 0) line = 0;
   let curEp = 0; // 当前播放集序号，跨源跳转后按它续播
   $('#findBtn').onclick = () => openFindBox(d.title, () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 }));
   const rows = $('#vrows');
