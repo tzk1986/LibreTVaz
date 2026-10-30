@@ -3,14 +3,23 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-async function httpGet(url, timeout = 12000) {
+/* 同 URL 并发请求合并（in-flight 去重）：底层共享一次 fetch（30s 上限），各调用方按自己的 timeout 竞速；
+   超时方放弃等待但请求结果仍可被复用——切 Tab/聚合与搜索重叠时不再重复打同一接口 */
+const rawGet = async url => {
   let r;
-  try { r = await fetch('/proxy?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(timeout) }); }
-  catch (e) { throw new Error(e?.name === 'TimeoutError' ? `请求超时（${timeout / 1000}s）` : '网络失败/域名无法解析'); }
+  try { r = await fetch('/proxy?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(30000) }); }
+  catch (e) { throw new Error(e?.name === 'TimeoutError' ? '上游 30s 无响应' : '网络失败/域名无法解析'); }
   const text = await r.text();
   if (!r.ok) throw new Error('HTTP ' + r.status);
   if (text.trimStart().startsWith('<')) throw new Error('源返回网页而非JSON（站点可能已失效）');
   return text;
+};
+const sharedGet = (typeof PerfCore !== 'undefined' ? PerfCore.createDedupe(rawGet) : rawGet);
+async function httpGet(url, timeout = 12000) {
+  let timer;
+  const to = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`请求超时（${timeout / 1000}s）`)), timeout); });
+  try { return await Promise.race([Promise.resolve().then(() => sharedGet(url)), to]); }
+  finally { clearTimeout(timer); }
 }
 
 /* ================= 数据层（与 CmsRepository 同规则） ================= */
@@ -598,15 +607,19 @@ async function refreshSubsIfStale() {
   if (SRC.vod.length && Date.now() - ts < SUBS_REFRESH_MS) return;
   localStorage.setItem('fongmi_subs_ts', String(Date.now()));
   let added = 0;
-  for (const sub of SRC.subs.slice(0, 5)) {
+  await pMap(SRC.subs.slice(0, 5), async sub => {
     try {
       const p = await parseExpanded(await httpGet(sub, 20000), u => httpGet(u, 20000));
       const have = new Set(SRC.vod.map(v => normUrl(v.url)));
       const nv = p.vod.filter(v => !have.has(normUrl(v.url)));
       if (nv.length) { SRC.vod = [...SRC.vod, ...nv].slice(0, 200); added += nv.length; }
     } catch { /* 订阅暂时不可达，下个周期再试 */ }
+  }, 3);
+  if (added) { // 并发去重：两个订阅同时返回同 URL 时只留一个
+    const seen = new Set();
+    SRC.vod = SRC.vod.filter(v => !seen.has(normUrl(v.url)) && seen.add(normUrl(v.url)));
+    saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源`);
   }
-  if (added) { saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源`); }
 }
 let guarding = false;
 async function sourceGuard() {
@@ -1044,16 +1057,19 @@ async function seedVocab(min = 300) {
     const pool = SRC.vod.filter(s => !isDead(s.url) && !s.isAdult);
     const order = [SRC.vod[Home.srcIdx], ...pool].filter(Boolean);
     const seen = new Set();
-    let rounds = 0;
+    const uniq = [];
     for (const s of order) {
-      if (VOCAB.length >= min || rounds >= 6) break;
+      if (uniq.length >= 6) break;
       if (seen.has(norm(s.url))) continue;
-      seen.add(norm(s.url)); rounds++;
+      seen.add(norm(s.url)); uniq.push(s);
+    }
+    await pMap(uniq, async s => { // 并发 3：词库尽早可用，不再串行 6×12s
+      if (VOCAB.length >= min) return;
       try {
         const names = parseList(await httpGet(listUrl(s.url, 'ac=videolist&pg=1')), s).map(it => it.name).filter(Boolean);
         addWords(names);
       } catch { /* 单源失败跳过 */ }
-    }
+    }, 3);
   } finally { vocabSeeding = false; }
 }
 /* ================= 搜索输入页（SearchActivity） ================= */
@@ -1204,11 +1220,13 @@ async function openDetail(item) {
     <div class="vtop"><video id="player" controls autoplay></video>
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
     <div id="vrows"></div></main>`;
-  let d;
-  try { d = parseDetail(await httpGet(listUrl(s.url, `ac=videolist&ids=${encodeURIComponent(item.id)}`)), s); }
-  catch (e) { $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">详情失败：${esc(e.message)}</p>`; return; }
-  if (!d.id) { $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">源未返回详情</p>`; return; }
-  if (App.view !== 'video') return;
+  // SWR 详情缓存：上次结果先上屏秒显（含起播），8s 内拉新成功且数据有变化才重绘；失败保留缓存
+  const dk = `detail:${normUrl(s.url)}|${item.id}`;
+  const cached = cacheGet(dk);
+  let painted = false;
+  const paint = d => {
+  if (!d || App.view !== 'video') return;
+  painted = true;
   const si = SRC.vod.indexOf(s);
   $('#vtxt').innerHTML = `
     <h2>${esc(d.title)} <small class="muted" style="font-size:12px">${esc(s.name)}</small></h2>
@@ -1263,6 +1281,15 @@ async function openDetail(item) {
   if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`);
   if (startEp > 0) toast(`已在新源第 ${startEp + 1} 集续播`);
   Focus.set($('#player'));
+  };
+  if (cached) paint(cached);
+  let d;
+  try { d = parseDetail(await httpGet(listUrl(s.url, `ac=videolist&ids=${encodeURIComponent(item.id)}`), 8000), s); }
+  catch (e) { if (!painted) $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">详情失败：${esc(e.message)}</p>`; return; }
+  if (!d.id) { if (!painted) $('#vtxt').innerHTML = `<h2>${esc(item.name)}</h2><p class="err">源未返回详情</p>`; return; }
+  cacheSet(dk, d);
+  if (painted && JSON.stringify(d) === JSON.stringify(cached)) return; // 数据未变不打断缓存首帧的播放
+  paint(d);
 }
 /* 播放页"搜本作"：弹窗（对应 FongMi 播放器菜单搜索对话框）→ 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
 function closeFindModal() { $('#findModal').classList.remove('open'); if (App.view === 'video') Focus.set($('#player')); }
@@ -1366,9 +1393,8 @@ async function probeAll() {
   Probe.running = true;
   Probe.rows = sources.map(s => ({ name: s.name, url: s.url, state: '检测中…' }));
   drawProbeRows();
-  for (let i = 0; i < sources.length; i++) {
-    const s = sources[i];
-    if (rid !== Probe.reqId || App.view !== 'probe') break;
+  await pMap(sources.map((s, i) => ({ s, i })), async ({ s, i }) => {
+    if (rid !== Probe.reqId || App.view !== 'probe') return;
     const t0 = performance.now();
     try {
       const types = parseTypes(await httpGet(listUrl(s.url, 'ac=list'), 12000));
@@ -1380,8 +1406,8 @@ async function probeAll() {
       Probe.rows[i] = { name: s.name, url: s.url, ms: Math.round(performance.now() - t0), state: '失败：' + (e.message || e) };
       recordFail(s, String(e.message || e).slice(0, 60));
     }
-    drawProbeRows();
-  }
+    drawProbeRows(); // 逐源完成即刷新表格（并发 4，不再串行拖满全屏）
+  }, 4);
   Probe.running = false;
 }
 
