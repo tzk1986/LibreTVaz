@@ -1193,12 +1193,11 @@ async function seedVocab(min = 600) {
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
   const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="searchBack">← 首页</button></div>
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="qrBtn">📱 远程输入</button><button class="btn" data-focus id="searchBack">← 首页</button></div>
     <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
       <button class="btn" data-focus data-kb="CLR">清空</button>
-      <button class="btn" data-focus id="qrBtn" style="margin-left:auto">📱 远程输入</button>
     </div>
     <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
     <div class="hrow" id="candRow" style="padding:0 28px 6px"></div>
@@ -1253,7 +1252,10 @@ function renderSearch() {
   let sugTimer = null;
   const onKwInput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => { drawSug(); drawCand(); }, 80); }; // 80ms 防抖：连打不卡
   RemoteIn.onSearch = t => { const inp = $('#kw'); if (!inp) return; inp.value = t; drawSug(); run(); };
-  $('#kw').onkeydown = e => { if (e.key === 'Enter') run(); };
+  $('#kw').onkeydown = e => {
+    if (e.key === 'Enter') return run();
+    if (e.key === 'ArrowDown') { Focus.set($('#qrBtn')); e.preventDefault(); } // 输入框内按下键 → 落到紧邻的「远程输入」按钮
+  };
   $('#kw').oninput = onKwInput;
   body.onclick = e => {
     const kb = e.target.closest('[data-kb]');
