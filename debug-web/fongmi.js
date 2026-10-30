@@ -188,12 +188,14 @@ async function remoteLoop() { // 长轮询：服务端挂起≤30s，send 即唤
     } catch { await rsleep(3000); continue; } // 断连/超时：短暂退避后续轮
     if (!hit || !hit.text) continue;
     if (hit.mode === 'sub') {
-      // 用户定调：扫码推送后自动导入/搜索；如需 TV 端先确认，设 localStorage fongmi_qrauto=0
-      if (LS('fongmi_qrauto', 1) === 1 || confirm(`收到订阅链接，确认导入？\n${String(hit.text).slice(0, 160)}`)) {
+      // 用户定调：扫码推送后自动导入/搜索；如需 TV 端先确认，设 localStorage fongmi_qrauto=0（页内 askModal，遥控可操作）
+      const runSub = () => {
         toast('开始导入远程订阅…');
         const inp = $('#subUrl'); if (inp) inp.value = hit.text;
         doImport(hit.text);
-      } else toast('已忽略远程订阅导入');
+      };
+      if (LS('fongmi_qrauto', 1) === 1) runSub();
+      else askYes(`收到订阅链接，确认导入？\n${String(hit.text).slice(0, 160)}`, runSub, () => toast('已忽略远程订阅导入'));
     } else {
       if (App.view !== 'search') switchView('search');
       setTimeout(() => RemoteIn.onSearch && RemoteIn.onSearch(hit.text), 80);
@@ -232,7 +234,9 @@ const Focus = {
     if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   },
   items() {
-    const scope = $('#qrModal').classList.contains('open') ? '#qrModal'
+    const scope = $('#askModal').classList.contains('open') ? '#askModal'
+      : $('#qrModal').classList.contains('open') ? '#qrModal'
+      : $('#findModal').classList.contains('open') ? '#findModal'
       : $('#siteModal').classList.contains('open') ? '#siteModal'
       : $('#srcModal').classList.contains('open') ? '#srcModal' : '#app';
     return [...document.querySelectorAll(`${scope} [data-focus]`)].filter(e => e.offsetParent !== null);
@@ -259,6 +263,21 @@ const Focus = {
   },
 };
 const toast = (() => { let t; return msg => { $('#toast').textContent = msg; $('#toast').style.display = 'block'; clearTimeout(t); t = setTimeout(() => $('#toast').style.display = 'none', 2200); }; })();
+
+/* 页内确认框（R4 替代原生 confirm()，TV 浏览器原生弹层遥控不可操作）：默认焦点=取消防误删；Esc/点遮罩=取消 */
+let askCb = null;
+function askYes(msg, onOk, onCancel) {
+  $('#askMsg').textContent = msg;
+  askCb = { onOk, onCancel };
+  $('#askModal').classList.add('open');
+  Focus.set($('#askCancel'));
+}
+function closeAsk(ok) {
+  if (!$('#askModal').classList.contains('open')) return;
+  $('#askModal').classList.remove('open');
+  const cb = askCb; askCb = null;
+  if (ok) cb?.onOk?.(); else cb?.onCancel?.();
+}
 
 /* ================= 按键路由 =================
    两段式（docs/2026-10-30-遥控可用性复盘与优化方案.md R1，对齐 Leanback/Kodi/Samsung 模型）：
@@ -297,6 +316,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('click', e => { const t = e.target.closest('[data-focus]'); if (t) Focus.set(t); });
 function onEsc() {
+  if ($('#askModal').classList.contains('open')) return closeAsk(false);
   if ($('#qrModal').classList.contains('open')) return closeQrModal();
   if ($('#srcModal').classList.contains('open')) return closeSrcMgr();
   if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
@@ -604,15 +624,14 @@ function drawSrcMgr() {
     SRC.vod = [...SRC.vod, ...add].slice(0, 200);
     saveSrc(); toast(`已添加 ${add.length} 个已测源`); drawSrcMgr(); refreshAfterSourceChange();
   };
-  $('#smClear').onclick = () => {
-    if (!confirm('确认清除所有点播源？\n（将同时关闭自动维护，避免订阅自动回填——方便手动测试导入；可在「自动维护」按钮再打开）')) return;
+  $('#smClear').onclick = () => askYes('确认清除所有点播源？\n（将同时关闭自动维护，避免订阅自动回填——方便手动测试导入；可在「自动维护」按钮再打开）', () => {
     localStorage.setItem('fongmi_auto', '0');
     syncSrc();
     SRC.vod = []; saveSrc();
     Home.srcIdx = 0; Home.items = []; Home.page = 1; Home.more = false; Home.tab = null;
     Vod.items = []; Vod.page = 1; Vod.more = false; Vod.tab = null;
     drawSrcMgr(); refreshAfterSourceChange();
-  };
+  });
   $('#smClose').onclick = closeSrcMgr;
   $('#smAuto').onclick = () => {
     localStorage.setItem('fongmi_auto', autoOn() ? '0' : '1');
@@ -1727,15 +1746,14 @@ function renderHist() {
   body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 最新在最前 · 选中卡片按 ↑ 再确定删除</small>
     <button class="btn" data-focus id="histBack" style="margin-left:auto">← 首页</button><button class="btn" data-focus id="histClear">清空全部</button></div>
     <div class="grid" id="histAllGrid">${hist.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">暂无观看历史</p>'}</div></main>`;
-  $('#histClear').onclick = () => {
-    if (!confirm('清空全部观看历史？收藏项的续播进度也会一并清除')) return;
+  $('#histClear').onclick = () => askYes('清空全部观看历史？收藏项的续播进度也会一并清除', () => {
     localStorage.removeItem('fongmi_hist');
     const prog = LS('fongmi_prog', {});
     const keep = new Set(LS('fongmi_keep', []).map(k => `${k.id}|${k.si}`));
     for (const pk in prog) { if (!keep.has(pk)) delete prog[pk]; }
     localStorage.setItem('fongmi_prog', JSON.stringify(prog));
     renderHist();
-  };
+  });
   bindGrid($('#histAllGrid'), hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
     const x = hist[i]; if (!x) return;
     localStorage.setItem('fongmi_hist', JSON.stringify(LS('fongmi_hist', []).filter(h => !(h.id === x.id && h.si === x.si))));
@@ -1951,4 +1969,7 @@ setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅
 setTimeout(seedVocab, 2500);   // 后台预取片名，进搜索页即有候选词
 $('#qrModal').onclick = e => { if (e.target === $('#qrModal')) closeQrModal(); }; // 点遮罩关窗
 $('#qrClose').onclick = closeQrModal; // 关闭按钮（此前只给了焦点漏绑事件，点/Enter 无效）
+$('#askOk').onclick = () => closeAsk(true);
+$('#askCancel').onclick = () => closeAsk(false);
+$('#askModal').onclick = e => { if (e.target === $('#askModal')) closeAsk(false); };
 remoteInit(); // 扫码远程输入（sid 共用，弹窗按场景生成带 m 参数的码）
