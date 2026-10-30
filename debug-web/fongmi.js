@@ -322,6 +322,8 @@ function stopPlayer() { playSeq++; stopHls(); document.querySelectorAll('video')
 /* ================= 视图框架 ================= */
 const App = { view: 'home', videoBack: 'vod' };
 const body = $('#body');
+/* 遥控友好返回：非首页视图都在头部放可聚焦「← 首页/返回」按钮（实体遥控器没有 Esc 键，需可选中点确认） */
+const bindBack = (id, fn) => { const b = $('#' + id); if (b) b.onclick = fn; };
 function switchView(v) {
   stopPlayer();
   $('#siteModal').classList.remove('open');
@@ -763,12 +765,12 @@ function renderHome() {
       <div class="func" data-focus data-nav="live"><b>直播</b><i>LiveActivity</i></div>
       <div class="func" data-focus data-nav="search"><b>搜索</b><i>SearchActivity</i></div>
       <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${keepAll.length} 部${keepNu ? ' · ' + keepNu + ' 部更新' : ''}</i></div>
+      <div class="func" data-focus data-nav="hist"><b>历史</b><i>${hist.length} 部</i></div>
       <div class="func" data-focus data-nav="probe"><b>连接</b><i>源测速探活</i></div>
       <div class="func" data-focus data-nav="sources"><b>源管理</b><i>导入订阅/源设置</i></div>
       <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
       <div class="func" data-focus data-nav="server" style="display:none"><b>服务器模式</b><i>打开调试台</i></div>
     </div>
-    ${hist.length ? `<div class="rowhead">最近观看 <small>焦点按 ×(Enter) 删除</small><button class="btn" data-focus id="histAll" style="margin-left:auto">全部 ▸</button></div><div class="grid" id="histGrid">${hist.map((h, i) => cardHtml(h, i, { del: true })).join('')}</div>` : ''}
     <div class="rowhead">更新推荐 <small>来自源「${esc(SRC.vod[Home.srcIdx]?.name || '无')}」无参请求，滚动到底自动加载</small></div>
     <div class="grid" id="recGrid"><p class="muted">加载中…</p></div></main>`;
   $('#funcs').onclick = e => {
@@ -778,12 +780,6 @@ function renderHome() {
     if (nav === 'server') return void window.open('/', '_blank');
     if (nav) switchView(nav);
   };
-  const hg = $('#histGrid');
-  if (hg) bindGrid(hg, hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
-    const list = LS('fongmi_hist', []); list.splice(i, 1); localStorage.setItem('fongmi_hist', JSON.stringify(list)); renderHome();
-  });
-  const ha = $('#histAll');
-  if (ha) ha.onclick = () => switchView('hist'); // O3b 独立历史页入口
   $('#scroller').addEventListener('scroll', onScroll);
   loadRec();
 }
@@ -829,9 +825,11 @@ async function loadRec(pg = 1) {
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
 const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false };
 function renderVod() {
-  body.innerHTML = `<div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
+  body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="vodBack">← 首页</button></div>
+    <div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
     <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
     <main id="scroller"><div class="grid" id="vodGrid"></div></main>`;
+  bindBack('vodBack', () => switchView('home'));
   $('#scroller').addEventListener('scroll', onScroll);
   loadTypes();
 }
@@ -1165,7 +1163,7 @@ async function seedVocab(min = 600) {
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
   const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus></div>
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="searchBack">← 首页</button></div>
     <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
@@ -1178,6 +1176,7 @@ function renderSearch() {
       ${LS('fongmi_kw', []).length ? `<div class="rowhead">搜索历史</div><div class="hrow">${LS('fongmi_kw', []).map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}
       <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方实时联想当前源里的片名，遥控选中即填入。候选词进入本页时自动从当前源拉取积累；手机扫码可与电视同步输入。</p>
     </main>`;
+  bindBack('searchBack', () => switchView('home'));
   const run = () => {
     const kw = $('#kw').value.trim(); if (!kw) return;
     const h = LS('fongmi_kw', []).filter(x => x !== kw); h.unshift(kw);
@@ -1265,9 +1264,10 @@ function addSiteTab(s, si, list) {
   tab.textContent = `${s.name}(${list.length})`;
 }
 function renderCollect() {
-  body.innerHTML = `<div class="colhead">“${esc(Collect.kw)}”的搜索结果 <span class="muted" style="font-size:13px">Esc 停止并返回</span></div>
+  body.innerHTML = `<div class="colhead" style="display:flex;align-items:center;gap:10px">“${esc(Collect.kw)}”的搜索结果 <span class="muted" style="font-size:13px;font-weight:400">Esc 停止并返回</span><button class="btn" data-focus id="collectBack" style="margin-left:auto">← 返回</button></div>
     <div class="hrow" id="cTabs"><button class="chip on" data-focus data-t="">全部</button></div>
     <main id="cGrid"><p class="muted" style="padding:20px 0">等待各源返回…</p></main>`;
+  bindBack('collectBack', () => { Collect.stop = true; switchView('search'); });
   $('#cTabs').onclick = e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
     Collect.tabIdx = b.dataset.t;
@@ -1396,7 +1396,8 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="vidBack" style="margin-left:auto">← 返回</button></div>`;
+  bindBack('vidBack', () => switchView(App.videoBack || 'vod'));
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
     const at = k.findIndex(x => x.id === d.id && x.si === si);
@@ -1582,8 +1583,9 @@ async function doChangeSource() {
 const Probe = { rows: null, running: false, reqId: 0 };
 function renderProbe() {
   body.innerHTML = `<div class="colhead">连接 · 点播源测速 <small class="muted" style="font-size:13px;font-weight:400">逐源请求 ac=list + 首分类列表</small></div>
-    <main style="flex:1;overflow-y:auto;padding:6px 28px"><div class="hrow" style="margin-bottom:8px"><button class="btn" data-focus id="probeGo">重新检测</button></div><div id="probeTable"></div></main>`;
+    <main style="flex:1;overflow-y:auto;padding:6px 28px"><div class="hrow" style="margin-bottom:8px"><button class="btn" data-focus id="probeGo">重新检测</button><button class="btn" data-focus id="probeBack" style="margin-left:auto">← 首页</button></div><div id="probeTable"></div></main>`;
   $('#probeGo').onclick = () => probeAll();
+  bindBack('probeBack', () => switchView('home'));
   drawProbeRows();
   if (!Probe.rows) probeAll();
 }
@@ -1621,8 +1623,10 @@ async function probeAll() {
 /* ================= 收藏页（KeepActivity） ================= */
 function renderKeep() {
   const keep = LS('fongmi_keep', []);
-  body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>焦点按 ×(Enter) 取消</small></div>
+  body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>焦点按 ×(Enter) 取消收藏</small>
+    <button class="btn" data-focus id="keepBack" style="margin-left:auto">← 首页</button></div>
     <div class="grid" id="keepGrid">${keep.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">空空如也</p>'}</div></main>`;
+  bindBack('keepBack', () => switchView('home'));
   bindGrid($('#keepGrid'), keep, h => {
     const k = LS('fongmi_keep', []); const x = k.find(y => y.id === h.id && y.si === h.si);
     if (x && x.updated) { x.updated = false; localStorage.setItem('fongmi_keep', JSON.stringify(k)); } // 进详情即清角标
@@ -1667,9 +1671,10 @@ async function checkKeeps(items) {
 
 /* ================= 历史页（O3b：首页「最近观看·全部」进入，grid 管理+清空，删除连带清续播位） ================= */
 function renderHist() {
+  // （入口在首页「历史」功能按钮；返回/删除均可遥控点选）
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]).map(h => ({ ...h, source: SRC.vod[h.si] }));
-  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 点进可自动续播</small>
-    <button class="btn" data-focus id="histClear" style="margin-left:auto">清空全部</button></div>
+  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 最新在最前 · 焦点到卡片按 ×(Enter) 删除</small>
+    <button class="btn" data-focus id="histBack" style="margin-left:auto">← 首页</button><button class="btn" data-focus id="histClear">清空全部</button></div>
     <div class="grid" id="histAllGrid">${hist.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">暂无观看历史</p>'}</div></main>`;
   $('#histClear').onclick = () => {
     if (!confirm('清空全部观看历史？收藏项的续播进度也会一并清除')) return;
@@ -1688,6 +1693,7 @@ function renderHist() {
     localStorage.setItem('fongmi_prog', JSON.stringify(prog));
     renderHist();
   });
+  bindBack('histBack', () => switchView('home'));
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
@@ -1796,7 +1802,7 @@ function renderLive() {
   const lives = SRC.live;
   body.innerHTML = `<div class="livewrap">
     <video id="player" autoplay controls></video>
-    <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span></div>
+    <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span><button class="btn" data-focus id="liveBack" style="pointer-events:auto">← 首页</button></div>
     <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span></div>
     <div class="lpanel" id="lPanel">
       <div class="col" id="colGroup"></div><div class="col" id="colChan"></div><div class="col" id="colEpg"></div>
@@ -1807,6 +1813,7 @@ function renderLive() {
   clearInterval(Live.epgTimer); // 每分钟刷新顶栏「现在·节目」
   Live.epgTimer = setInterval(() => { if (App.view === 'live') updateEpgTop(); }, 60000);
   drawEpgCol();
+  bindBack('liveBack', () => switchView('home'));
   if (!lives.length) { toast('无直播源，请到普通调试台导入含直播的订阅'); return; }
   if (lives.length > 1) {
     body.insertAdjacentHTML('afterbegin', `<div class="hrow" style="padding:6px 28px">${lives.map((x, i) => `<button class="chip${i === Live.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(x.name)}</button>`).join('')}</div>`);
