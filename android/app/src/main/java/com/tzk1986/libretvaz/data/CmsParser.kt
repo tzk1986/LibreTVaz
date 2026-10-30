@@ -16,10 +16,19 @@ object CmsParser {
         "91视频", "自拍偷拍", "mini传媒",
     )
 
-    private val PUNCT_SPACE = Pattern.compile("[\\s\\p{P}\\p{S}]+", Pattern.UNICODE_CHARACTER_CLASS)
+    // Android 的 java.util.regex 不支持 UNICODE_CHARACTER_CLASS（静态初始化会抛 IllegalArgumentException），
+    // 改逐字符 Unicode 类别过滤，JVM 与 Android 行为一致，等价 web 端 /[\s\p{P}\p{S}]+/gu
+    private val PUNCT_SYMBOL_TYPES = setOf(
+        Character.CONNECTOR_PUNCTUATION, Character.DASH_PUNCTUATION, Character.END_PUNCTUATION,
+        Character.INITIAL_QUOTE_PUNCTUATION, Character.FINAL_QUOTE_PUNCTUATION, Character.OTHER_PUNCTUATION,
+        Character.MATH_SYMBOL, Character.CURRENCY_SYMBOL, Character.MODIFIER_SYMBOL, Character.OTHER_SYMBOL,
+    ).map { it.toInt() }.toSet()
+
+    private fun isPunctOrSymbol(c: Char): Boolean =
+        Character.getType(c.code).toInt() in PUNCT_SYMBOL_TYPES
 
     fun normalizeTitle(s: String): String =
-        PUNCT_SPACE.matcher(s.lowercase()).replaceAll("")
+        s.lowercase().filterNot { it.isWhitespace() || isPunctOrSymbol(it) }
 
     fun isAdultType(typeName: String?): Boolean =
         typeName != null && ADULT_KEYWORDS.any { typeName.contains(it) }
