@@ -303,7 +303,8 @@ document.addEventListener('keydown', e => {
     if (editing) { document.activeElement.blur(); e.preventDefault(); return; } // 退编辑，Focus.el 选中框保留
     if (App.view === 'vod' && Vod.showFilters && Focus.el && $('#subRow')?.contains(Focus.el)) { // R8：筛选行内 Esc=收起并回到当前分类 chip
       Vod.showFilters = false; drawSubRow();
-      const chip = [...document.querySelectorAll('#typeRow [data-tid]')].find(c => c.dataset.tid === String(Vod.tab?.id ?? ''));
+      const want = Vod.agg && Vod.tab ? 'cat:' + Vod.tab.id : String(Vod.tab?.id ?? '');
+      const chip = [...document.querySelectorAll('#typeRow [data-tid]')].find(c => c.dataset.tid === want);
       Focus.set(chip || $('#typeRow').querySelector('[data-focus]') || $('#vodBack'));
       e.preventDefault(); return;
     }
@@ -960,9 +961,16 @@ async function loadTypes() {
     $('#typeRow').onclick = e => {
       const b = e.target.closest('[data-tid]'); if (!b) return;
       const id = b.dataset.tid;
-      if ((Vod.tab && 'cat:' + Vod.tab.id === id) || (!Vod.tab && id === '')) return;
+      if ((Vod.tab && 'cat:' + Vod.tab.id === id) || (!Vod.tab && id === '')) { // R8(agg)：再点当前分类=展开/收起地区筛选行（数据在客户端，只重绘不重拉）
+        if (!id || !PerfCore.VOD_FILTERS[Vod.tab.name]) return;
+        Vod.showFilters = !Vod.showFilters;
+        drawSubRow();
+        Focus.set(Vod.showFilters ? ($('#subRow')?.querySelector('[data-focus]') || b) : b);
+        return;
+      }
       document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
       $('#subRow').innerHTML = '';
+      Vod.showFilters = false; resetFilterVals();
       if (id === '') { Vod.tab = null; loadAgg(); }
       else { const cat = AGG_CATS.find(c => 'cat:' + c.key === id); Vod.tab = { id: cat.key, name: cat.key }; loadAggCat(cat); }
     };
@@ -1113,9 +1121,10 @@ async function aggPrefetch(rid, token, skip) {
 }
 const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; Vod.preset = ''; Vod.pSrv = null; Vod.presetInfo = ''; };
 /* ===== R8 地区预设筛选（docs/2026-10-30-遥控可用性复盘与优化方案.md）=====
-   预设族识别：当前分类沿 pid 上溯根，根名+本名匹配 电影/电视剧/综艺；聚合墙本轮不加（返回 null） */
+   预设族识别：聚合墙 tab.name 即分类键直配 VOD_FILTERS；单源沿 pid 上溯根，根名+本名匹配预设族 */
 function presetKeyForTab() {
-  if (Vod.agg || !Vod.tab) return null;
+  if (Vod.agg) return Vod.tab && PerfCore.VOD_FILTERS[Vod.tab.name] ? Vod.tab.name : null;
+  if (!Vod.tab) return null;
   let cur = Vod.tab, root = null, hop = 0;
   while (cur && hop++ <= 5) { root = cur; const p = cur.pid; cur = p && p !== '0' && p !== '' && p !== 'null' ? Vod.types.find(t => t.id === p) : null; }
   const nm = ((root && root.name) || '') + '|' + Vod.tab.name;
@@ -1241,7 +1250,7 @@ function drawVodGrid() {
   if (Vod.preset) {
     Vod.presetInfo = Vod.pSrv
       ? `地区「${Vod.preset}」：服务端 ${Vod.pSrv.length} 个分类合并`
-      : `地区「${Vod.preset}」：已拉 ${Vod.page} 页 ${Vod.items.length} 部，筛出 ${shown.length} 部${unknown ? ` · ${unknown} 部无地区信息未显示` : ''}${Vod.page >= 10 ? ' · 已拉满 10 页上限' : ''}`;
+      : `地区「${Vod.preset}」：${Vod.agg ? '聚合' : `已拉 ${Vod.page} 页`} ${Vod.items.length} 部，筛出 ${shown.length} 部${unknown ? ` · ${unknown} 部无地区信息未显示` : ''}${!Vod.agg && Vod.page >= 10 ? ' · 已拉满 10 页上限' : ''}`;
   } else Vod.presetInfo = '';
   grid.innerHTML = shown.length
     ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
@@ -1300,7 +1309,8 @@ function drawSubRow() {
     } else if (k === 'sub') { Vod.sub = v; }
     else { if (Vod[k] === v) Vod[k] = ''; else Vod[k] = v; } // 同项再按=取消（TVBox 交互）
     drawSubRow(); // R8 改版：不再收起，焦点归位可连续调整
-    loadVod(1);
+    if (Vod.agg) drawVodGrid(); // 聚合墙数据已全部在前端：地区预设纯重绘过滤（无服务端路径）
+    else loadVod(1);
   };
   if (pf) { const target = [...el.querySelectorAll('[data-f]')].find(x => x.dataset.f === pf[0] && x.dataset.v === pf[1]); if (target) Focus.set(target); }
 }
@@ -1434,7 +1444,7 @@ function addSiteTab(s, si, list) {
 function renderCollect() {
   body.innerHTML = `<div class="colhead" style="display:flex;align-items:center;gap:10px">“${esc(Collect.kw)}”的搜索结果 <span class="muted" style="font-size:13px;font-weight:400">Esc 停止并返回</span><button class="btn" data-focus id="collectBack" style="margin-left:auto">← 返回</button></div>
     <div class="hrow" id="cTabs"><button class="chip on" data-focus data-t="">全部</button></div>
-    <main id="cGrid"><p class="muted" style="padding:20px 0">等待各源返回…</p></main>`;
+    <main id="scroller"><div class="grid" id="cGrid"><p class="muted" style="padding:20px 0">等待各源返回…</p></div></main>`;
   bindBack('collectBack', () => { Collect.stop = true; switchView('search'); });
   $('#cTabs').onclick = e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
@@ -1508,8 +1518,8 @@ function drawCollectTab() {
     };
     return;
   }
-  grid.innerHTML = `<div class="grid">${items.map((it, i) => cardHtml(it, i, { showSite: Collect.tabIdx === '' })).join('')}</div>`;
-  bindGrid(grid.querySelector('.grid'), items, it => { App.videoBack = 'collect'; openDetail(it); });
+  grid.innerHTML = items.map((it, i) => cardHtml(it, i, { showSite: Collect.tabIdx === '' })).join('');
+  bindGrid(grid, items, it => { App.videoBack = 'collect'; openDetail(it); });
 }
 
 /* ================= 详情/播放一体页（VideoActivity） ================= */

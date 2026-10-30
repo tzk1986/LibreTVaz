@@ -331,6 +331,7 @@
     电影: [['全部', []], ['国内', ['DOM']], ['国外', ['EUUS', 'JP', 'KR', 'OTHER']], ['日影', ['JP']], ['韩影', ['KR']], ['欧美', ['EUUS']]],
     电视剧: [['全部', []], ['国内', ['DOM']], ['欧美剧', ['EUUS']], ['日剧', ['JP']], ['韩剧', ['KR']], ['小语种', ['OTHER']]],
     综艺: [['全部', []], ['国内', ['DOM']], ['国外', ['EUUS', 'JP', 'KR', 'OTHER']], ['日本', ['JP']], ['韩国', ['KR']]],
+    动漫: [['全部', []], ['国产', ['DOM']], ['日漫', ['JP']], ['韩漫', ['KR']], ['欧美', ['EUUS']]],
   };
 
   const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };

@@ -43,6 +43,7 @@ eq(abroad.slice().sort(), ['EUUS', 'JP', 'KR', 'OTHER'].sort(), '电影「国外
 ok(P.VOD_FILTERS.电视剧.find(x => x[0] === '小语种')[1].join() === 'OTHER', '电视剧「小语种」=OTHER');
 eq(P.VOD_FILTERS.电影.find(x => x[0] === '全部')[1], [], '「全部」=空数组');
 ok(!P.VOD_FILTERS.电影.some(x => x[0] === '美国'), '预设中无独立「美国」（已并入欧美）');
+ok(P.VOD_FILTERS.动漫 && P.VOD_FILTERS.动漫[0][0] === '全部' && P.VOD_FILTERS.动漫.some(x => x[0] === '日漫'), '动漫预设存在（聚合墙动漫 tab 用）');
 
 console.log(fails ? `\n${fails} 个断言失败` : '\n分类中间件全部通过');
 process.exit(fails ? 1 : 0);
