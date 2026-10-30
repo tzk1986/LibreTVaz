@@ -1614,11 +1614,15 @@ async function openDetail(item) {
   hist.unshift({ id: String(item.id), name: item.name, pic: item.pic, si: SRC.vod.indexOf(s) });
   localStorage.setItem('fongmi_hist', JSON.stringify(hist.slice(0, 60))); // O3b 放宽 20→60 供历史页管理
   body.innerHTML = `<main id="scroller" style="overflow-y:auto">
-    <div class="eprow"><button class="btn" data-focus id="vidBack">← 返回</button></div>
+    <div class="eprow"><button class="btn" data-focus id="vidBack">← 返回</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>
     <div class="vtop"><video id="player" controls autoplay data-focus></video>
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
     <div id="vrows"></div></main>`;
   bindBack('vidBack', () => switchView(App.videoBack || 'vod')); // 常驻返回：加载失败/超时态也能退出，不必刷新
+  // 常驻搜本作：详情失败/加载中的源也能直接跨源搜同名片续播；paint 成功后升级为精确片名与当前线路/集号/进度
+  let findTitle = item.name || '';
+  let findState = () => ({ line: 0, ep: 0, sec: 0 });
+  $('#findBtn').onclick = () => openFindBox(findTitle, findState);
   // SWR 详情缓存：上次结果先上屏秒显（含起播），8s 内拉新成功且数据有变化才重绘；失败保留缓存
   const dk = `detail:${normUrl(s.url)}|${item.id}`;
   const cached = cacheGet(dk);
@@ -1658,7 +1662,7 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="prevEp">« 上一集</button><button class="btn" data-focus id="nextEp">下一集 »</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="prevEp">« 上一集</button><button class="btn" data-focus id="nextEp">下一集 »</button></div>`;
   $('#fsBtn').onclick = toggleFullscreen;
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
@@ -1676,7 +1680,8 @@ async function openDetail(item) {
   let curEp = 0; // 当前播放集序号，跨源跳转/跨会话续播按它归属
   progEp = () => curEp;
   let tried = new Set(); // O1b 本次失败换链中已试过的线路下标（手动换线/选集会重置）
-  $('#findBtn').onclick = () => openFindBox(d.title, () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 }));
+  findTitle = d.title;
+  findState = () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 });
   const rows = $('#vrows');
   rows.innerHTML = `
     <div class="eprow"><span class="slabel">线路</span><div class="hrow" id="flagRow" style="flex:1"></div></div>
