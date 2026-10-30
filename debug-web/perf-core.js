@@ -284,6 +284,18 @@
     return null;
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow };
+  // O1b 自动换线纯逻辑：流后缀判断 + 候选线路选择（docs/2026-10-30-O1-O3播放与直播体验方案.md）
+  function isStreamLink(u) { return /\.(m3u8|mp4|flv|mkv|ts|mpd)(\?|$)/i.test(String(u)); }
+  // 候选=未试过≠当前且有地址，按同集优先、流后缀优先排序；返回空数组即无可换（tried 封顶=线路数）
+  function pickNextLine(episodes, opts = {}) {
+    const { line = -1, curEp = 0, tried = new Set() } = opts;
+    const t = tried instanceof Set ? tried : new Set(tried || []);
+    return (episodes || [])
+      .map((g, i) => ({ i, u: g.list[curEp] || g.list[0] }))
+      .filter(x => x.i !== line && !t.has(x.i) && x.u)
+      .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
+  }
+
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

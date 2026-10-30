@@ -197,5 +197,43 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   eq(P.epgFor(null, 'x'), [], 'epg: 空索引安全');
 }
 
+// 10. isStreamLink/pickNextLine：O1b 自动换线候选选择与收敛上限（用户要求测试脚本验证换线功能）
+{
+  ok(P.isStreamLink('https://a/x.m3u8'), 'autoline: .m3u8 命中');
+  ok(P.isStreamLink('http://a/x.mp4?tk=1'), 'autoline: .mp4+query 命中');
+  ok(!P.isStreamLink('https://a/play.html'), 'autoline: HTML 壳页非流');
+  ok(!P.isStreamLink(''), 'autoline: 空串安全');
+  const mk = (...lines) => lines.map(([flag, ...links]) => ({ flag, list: links.map((u, i) => ({ name: '第' + (i + 1) + '集', link: u })) }));
+  const G = mk(
+    ['当前线', 'https://a/dead.m3u8'],
+    ['壳页线', 'https://b/p.html'],
+    ['非凡线', 'https://c/v.m3u8'],
+    ['量子线', 'https://d/v.mp4'],
+    ['空线'],
+  );
+  eq(P.pickNextLine(G, { line: 0, tried: new Set([0]) }).map(x => x.i), [2, 3, 1], 'autoline: 排除当前/已试/空线，流后缀优先且同级保线路序');
+  eq(P.pickNextLine([G[0]], { line: 0, tried: new Set([0]) }), [], 'autoline: 仅 1 条线路无候选（不触发）');
+  eq(P.pickNextLine([G[0], G[3]], { line: 0, tried: new Set([0]) }).map(x => x.i), [1], 'autoline: 2 条线路互跳到另一条');
+  eq(P.pickNextLine([G[0], G[3]], { line: 1, tried: new Set([0, 1]) }), [], 'autoline: 2 条都试过即收敛（上限=线路数-1）');
+  { // 模拟 4 条可用线路全部播挂：逐跳推进，必须在 线路数-1 次内收敛，无死循环
+    const eps = [G[0], G[1], G[2], G[3]];
+    let line = 0, tried = new Set([0]), hops = 0, guard = 0;
+    for (;;) {
+      const cand = P.pickNextLine(eps, { line, curEp: 0, tried });
+      if (!cand.length) break;
+      line = cand[0].i; tried.add(line); hops++;
+      if (++guard > 50) break; // 守卫触发即测试失败
+    }
+    ok(hops === 3 && guard <= 50 && tried.size === 4, `autoline: 4 条全挂连换 ${hops} 次后收敛（上限=线路数-1，无死循环）`);
+    eq(P.pickNextLine(eps, { line, tried, curEp: 0 }), [], 'autoline: 收敛后持续返回空（重复调用不复活）');
+  }
+  const eps2 = [
+    { flag: 'A', list: [{ name: '第一集', link: 'a1.m3u8' }, { name: '第二集', link: 'a2.m3u8' }] },
+    { flag: 'B', list: [{ name: '第一集', link: 'b1.m3u8' }] },
+  ];
+  eq(P.pickNextLine(eps2, { line: 0, curEp: 1, tried: [0] }).map(x => x.u.link), ['b1.m3u8'], 'autoline: 目标线集数不齐回落第1集（tried 兼容数组）');
+  eq(P.pickNextLine(null, { line: 0 }), [], 'autoline: 空线路表安全');
+}
+
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');
 process.exit(fails ? 1 : 0);

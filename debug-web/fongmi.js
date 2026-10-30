@@ -1407,7 +1407,7 @@ async function openDetail(item) {
   };
   $('#changeBtn').onclick = doChangeSource;
   // 选线优先：首个含流后缀(.m3u8/.mp4 等)地址的线路，避免默认撞 HTML 壳页线路（方案③）
-  const isStreamLink = u => /\.(m3u8|mp4|flv|mkv|ts|mpd)(\?|$)/i.test(String(u));
+  const isStreamLink = PerfCore.isStreamLink;
   let line = d.episodes.findIndex(g => g.list.length && g.list.some(x => isStreamLink(x.link)));
   if (line < 0) line = d.episodes.findIndex(g => g.list.length);
   if (line < 0) line = 0;
@@ -1443,10 +1443,7 @@ async function openDetail(item) {
      重试上限=线路数（tried 集天然封顶）；fongmi_autoline=0 关闭回退原 toast */
   const nextLine = () => {
     if (LS('fongmi_autoline', 1) === 0) return false;
-    const cand = d.episodes
-      .map((g, i) => ({ i, u: g.list[curEp] || g.list[0] }))
-      .filter(x => x.i !== line && !tried.has(x.i) && x.u)
-      .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
+    const cand = PerfCore.pickNextLine(d.episodes, { line, curEp, tried });
     if (!cand.length) return false;
     const ni = cand[0].i;
     tried.add(ni);
