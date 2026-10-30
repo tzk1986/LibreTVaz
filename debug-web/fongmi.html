@@ -35,6 +35,8 @@
 
   /* 网格卡片（Fongmi adapter_vod_rect：remark 名称在上、图、年/源角标） */
   .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  /* 走查统一：网格内的加载/空态/错误提示占整行，不再被当成 1/5 单元格撑歪行高 */
+  .grid > p { grid-column: 1 / -1; }
   @media (max-width: 1100px) { .grid { grid-template-columns: repeat(4, 1fr); } }
   .card { cursor: pointer; border-radius: 8px; padding: 3px; border: 2px solid transparent; position: relative; }
   .card .pic { aspect-ratio: 2/3; border-radius: 6px; background: var(--card); overflow: hidden; position: relative; }
@@ -67,7 +69,8 @@
 
   /* 遥控器焦点 */
   .focus { border-color: #fff !important; transform: scale(1.05); box-shadow: 0 0 14px rgba(255,255,255,.35); position: relative; z-index: 5; }
-  .chip.focus, .btn.focus { background: #fff; color: #000; }
+  .chip.focus, .btn.focus { background: #fff; color: #000; transform: none; } /* 反色已足够醒目，放大反而整行抖动错位（走查统一） */
+  .lpanel .li.focus, .srcrow.focus { transform: none; } /* 列表行横向缩放会溢出列宽 */
 
   .muted { color: var(--dim); } .err { color: #f28b82; } .ok { color: #81c995; }
   .hint { color: #6d7378; font-size: 12px; padding: 4px 28px 8px; flex: none; }
