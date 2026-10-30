@@ -186,7 +186,7 @@ button.go{width:100%;margin-top:12px;padding:12px;border:none;border-radius:8px;
 <script>
 const q = new URLSearchParams(location.search), sid = q.get('id') || '';
 const $ = s => document.getElementById(s);
-let mode = 'search';
+let mode = q.get('m') === 'sub' ? 'sub' : 'search'; // 电视端不同入口的码带 m 参数，扫码直达对应输入框
 const setMsg = (text, ok) => { const m = $('msg'); m.style.color = ok === false ? '#f28b82' : '#81c995'; m.textContent = text; };
 const setState = st => {
   const el = $('state');
@@ -198,12 +198,14 @@ const setState = st => {
 const getStatus = async () => { try { return await (await fetch('/api/remote/status?sid=' + encodeURIComponent(sid))).json(); } catch { return null; } };
 const refresh = () => { if (sid && !document.hidden) getStatus().then(j => j && setState(j.online)); };
 refresh(); setInterval(refresh, 3000);
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  mode = t.dataset.m;
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+const applyTab = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.m === mode));
   $('p-search').style.display = mode === 'search' ? '' : 'none';
   $('p-sub').style.display = mode === 'sub' ? '' : 'none';
-});
+};
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => { mode = t.dataset.m; applyTab(); });
+applyTab();
+if (sid) setTimeout(() => { const ta = $('t-' + mode); if (ta) ta.focus(); }, 300);
 async function waitAck(seq) {
   for (let i = 0; i < 12; i++) {
     await new Promise(r => setTimeout(r, 1000));

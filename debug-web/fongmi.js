@@ -136,40 +136,48 @@ const addWords = names => {
     if (dirty) persistSoon();
   }
 };
-/* 扫码远程输入：搜索与订阅导入共用一个 session 二维码（手机页 Tab 切换，免重复扫码） */
-const RemoteIn = { sid: Math.random().toString(36).slice(2, 10), base: '', url: '', onSearch: null };
+/* 扫码远程输入：「远程输入」按钮弹大码窗（同一 sid，URL 带 m=search/sub，手机扫码直达对应输入框并聚焦） */
+const RemoteIn = { sid: Math.random().toString(36).slice(2, 10), base: '', onSearch: null };
 async function remoteInit() {
   try {
     const j = await (await fetch('/api/remote/base')).json();
-    const host = /^(\d+\.\d+\.\d+\.\d+|[a-f0-9:.]+)$/i.test(location.hostname) ? location.hostname : j.host;
+    const hn = location.hostname;
+    const loop = /^(127\.|::1$|0\.0\.0\.0|localhost$)/i.test(hn); // TV 用 127.0.0.1 打开时 QR 必须回落实例局域网 IP，否则手机打不开
+    const host = (/^(\d+\.\d+\.\d+\.\d+|[a-f0-9:.]+)$/i.test(hn) && !loop) ? hn : (j.host || 'localhost');
     RemoteIn.base = `http://${host}:${j.port || 8787}`;
   } catch { RemoteIn.base = location.origin; }
-  RemoteIn.url = `${RemoteIn.base}/remote?id=${RemoteIn.sid}`;
-  drawQr($('#srchQr')); drawQr($('#smQr'));
   try { // 注册会话：手机页据此显示在线状态，send 未注册直接拒（tv_offline）
     await fetch(`${RemoteIn.base}/api/remote/open`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sid: RemoteIn.sid }) });
   } catch { /* 轮询本身兼作注册，失败不致命 */ }
   remoteLoop();
 }
-// 原引用的 qrcode@1.5.4/build/qrcode.min.js 在 npm 包里根本不存在（jsdelivr 恒 404），码从未画出——换 qrcode-generator 自绘
-function drawQr(el) {
-  if (!el) return;
-  el.innerHTML = `<div class="qrbox">${window.qrcode ? '<span class="qrc"></span>' : ''}
-    <div class="qrside"><p class="muted" style="font-size:12px">手机扫码远程输入：搜索关键词与订阅导入共用此码，手机页内 Tab 切换，无需重复扫码${window.qrcode ? '' : '<br>（二维码库未加载，请直接点击下方链接）'}</p>
-    <a href="${esc(RemoteIn.url)}" target="_blank" style="color:var(--accent);font-size:11px;word-break:break-all">${esc(RemoteIn.url) || '初始化中…'}</a></div></div>`;
-  if (window.qrcode && RemoteIn.url) {
-    try {
-      const qr = window.qrcode(0, 'M'); qr.addData(RemoteIn.url); qr.make();
-      const n = qr.getModuleCount(), cell = Math.max(2, Math.floor(130 / (n + 2))), sz = cell * (n + 2);
-      const c = document.createElement('canvas'); c.width = c.height = sz;
-      const g = c.getContext('2d');
-      g.fillStyle = '#14171a'; g.fillRect(0, 0, sz, sz);
-      g.fillStyle = '#e8eaed';
-      for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) if (qr.isDark(r, q)) g.fillRect((q + 1) * cell, (r + 1) * cell, cell, cell);
-      el.querySelector('.qrc').replaceWith(c);
-    } catch { /* 画不出时留下方链接兜底 */ }
-  }
+const remoteUrl = mode => `${RemoteIn.base}/remote?id=${RemoteIn.sid}&m=${mode}`;
+// qrcode-generator 自绘（原 CDN qrcode@1.5.4 build 恒 404，码从未画出过）
+function qrCanvas(text, px) {
+  try {
+    const qr = window.qrcode(0, 'M'); qr.addData(text); qr.make();
+    const n = qr.getModuleCount(), cell = Math.max(2, Math.floor(px / (n + 2))), sz = cell * (n + 2);
+    const c = document.createElement('canvas'); c.width = c.height = sz;
+    const g = c.getContext('2d');
+    g.fillStyle = '#14171a'; g.fillRect(0, 0, sz, sz);
+    g.fillStyle = '#e8eaed';
+    for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) if (qr.isDark(r, q)) g.fillRect((q + 1) * cell, (r + 1) * cell, cell, cell);
+    return c;
+  } catch { return null; }
 }
+function openQrModal(mode) {
+  const url = remoteUrl(mode);
+  $('#qrHint').textContent = mode === 'sub'
+    ? '手机相机扫码 → 粘贴/输入订阅地址发送，电视收到后自动导入'
+    : '手机相机扫码 → 输入关键词发送，电视收到后自动搜索';
+  const a = $('#qrUrl'); a.href = url; a.textContent = url;
+  const big = $('#qrBig'); big.innerHTML = '';
+  const c = window.qrcode ? qrCanvas(url, 300) : null;
+  if (c) big.appendChild(c); else big.innerHTML = '<p class="err">二维码库未加载，请点击上方链接在手机浏览器打开</p>';
+  $('#qrModal').classList.add('open');
+  Focus.set($('#qrClose'));
+}
+const closeQrModal = () => $('#qrModal').classList.remove('open');
 const rsleep = ms => new Promise(r => setTimeout(r, ms));
 async function remoteLoop() { // 长轮询：服务端挂起≤30s，send 即唤醒秒级送达；页面隐藏暂停续轮省资源
   while (RemoteIn.base) {
@@ -180,8 +188,8 @@ async function remoteLoop() { // 长轮询：服务端挂起≤30s，send 即唤
     } catch { await rsleep(3000); continue; } // 断连/超时：短暂退避后续轮
     if (!hit || !hit.text) continue;
     if (hit.mode === 'sub') {
-      // P4：默认 TV 端确认再导入（同网段任何人可推链接）；fongmi_qrauto=1 免确认保模拟便利
-      if (LS('fongmi_qrauto', 0) === 1 || confirm(`收到订阅链接，确认导入？\n${String(hit.text).slice(0, 160)}`)) {
+      // 用户定调：扫码推送后自动导入/搜索；如需 TV 端先确认，设 localStorage fongmi_qrauto=0
+      if (LS('fongmi_qrauto', 1) === 1 || confirm(`收到订阅链接，确认导入？\n${String(hit.text).slice(0, 160)}`)) {
         toast('开始导入远程订阅…');
         const inp = $('#subUrl'); if (inp) inp.value = hit.text;
         doImport(hit.text);
@@ -221,7 +229,8 @@ const Focus = {
     if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   },
   items() {
-    const scope = $('#siteModal').classList.contains('open') ? '#siteModal'
+    const scope = $('#qrModal').classList.contains('open') ? '#qrModal'
+      : $('#siteModal').classList.contains('open') ? '#siteModal'
       : $('#srcModal').classList.contains('open') ? '#srcModal' : '#app';
     return [...document.querySelectorAll(`${scope} [data-focus]`)].filter(e => e.offsetParent !== null);
   },
@@ -268,6 +277,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('click', e => { const t = e.target.closest('[data-focus]'); if (t) Focus.set(t); });
 function onEsc() {
+  if ($('#qrModal').classList.contains('open')) return closeQrModal();
   if ($('#srcModal').classList.contains('open')) return closeSrcMgr();
   if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
   if ($('#findModal').classList.contains('open')) return closeFindModal();
@@ -562,7 +572,7 @@ function drawSrcMgr() {
       ${PRESETS.map(p => `<button class="btn" data-focus data-preset="${esc(p.url)}">${esc(p.name)}</button>`).join('')}
     </div>
     <p id="impMsg" class="muted" style="margin:6px 0;min-height:20px"></p>
-    <div id="smQr" style="margin:4px 0 10px"></div>
+    <div style="margin:4px 0 10px"><button class="btn" data-focus id="smQrBtn">📱 手机推送订阅</button></div>
     <h3>点播源（${SRC.vod.length}/200）</h3>
     ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span>${hb(s)}<span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
     <h3>直播源（${SRC.live.length}）</h3>
@@ -597,7 +607,7 @@ function drawSrcMgr() {
     const rv = e.target.closest('[data-rmv]'); if (rv) { SRC.vod.splice(+rv.dataset.rmv, 1); saveSrc(); if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0; drawSrcMgr(); refreshAfterSourceChange(); }
     const rl = e.target.closest('[data-rml]'); if (rl) { SRC.live.splice(+rl.dataset.rml, 1); saveSrc(); if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0; drawSrcMgr(); }
   };
-  drawQr($('#smQr'));
+  $('#smQrBtn').onclick = () => openQrModal('sub');
   setTimeout(() => $('#subUrl')?.focus(), 50);
 }
 
@@ -1188,7 +1198,7 @@ function renderSearch() {
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
       <button class="btn" data-focus data-kb="CLR">清空</button>
-      <div id="srchQr" style="margin-left:auto"></div>
+      <button class="btn" data-focus id="qrBtn" style="margin-left:auto">📱 远程输入</button>
     </div>
     <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
     <div class="hrow" id="candRow" style="padding:0 28px 6px"></div>
@@ -1258,7 +1268,7 @@ function renderSearch() {
     if (w) { $('#kw').value = w.dataset.w; run(); return; } // 点联想片名直接以其搜索
     const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); }
   };
-  drawQr($('#srchQr'));
+  $('#qrBtn').onclick = () => openQrModal('search');
   drawCand();
   seedVocab().then(() => { if (App.view === 'search') { drawCand(); drawSug(); } });
   setTimeout(() => $('#kw').focus(), 50);
@@ -1914,4 +1924,5 @@ function inputDigit(k) {
 switchView('home');
 setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）
 setTimeout(seedVocab, 2500);   // 后台预取片名，进搜索页即有候选词
-remoteInit(); // 扫码远程输入（搜索/订阅导入共用一个码）
+$('#qrModal').onclick = e => { if (e.target === $('#qrModal')) closeQrModal(); }; // 点遮罩关窗
+remoteInit(); // 扫码远程输入（sid 共用，弹窗按场景生成带 m 参数的码）
