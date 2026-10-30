@@ -291,7 +291,7 @@ document.addEventListener('keydown', e => {
   const editing = isEditable(document.activeElement);
   if ($('#siteModal').classList.contains('open')) {
     if (e.key === 'Escape') { closeSiteDialog(); return; }
-  } else if (App.view === 'live' && !editing) {
+  } else if (App.view === 'live' && !editing && !document.fullscreenElement && (!Focus.el || Focus.el.tagName === 'VIDEO')) { // 仅画面/无焦点时劫持键位；焦点在控件（返回/全屏/源chip）放行通用 Enter 点击（补漏#5）；全屏时放行=暂停/seek（补漏#2）
     if (Live.panelOpen) { /* 面板开时方向键走通用焦点 */ }
     else if (e.key === 'ArrowUp') { chanStep(-1); e.preventDefault(); return; }
     else if (e.key === 'ArrowDown') { chanStep(1); e.preventDefault(); return; }
@@ -316,7 +316,7 @@ document.addEventListener('keydown', e => {
   const D = { ArrowLeft: 'L', ArrowRight: 'R', ArrowUp: 'U', ArrowDown: 'D' }[e.key];
   if (D) {
     if (editing) return; // 编辑态方向键=光标/选区，放行原生
-    if (Focus.el?.tagName === 'VIDEO' && App.view === 'video' && (D === 'L' || D === 'R')) { seekVideo(Focus.el, D === 'L' ? -15 : 15); e.preventDefault(); return; } // R5 详情 ←→=±15s
+    if (Focus.el?.tagName === 'VIDEO' && (App.view === 'video' || document.fullscreenElement) && (D === 'L' || D === 'R')) { seekVideo(Focus.el, D === 'L' ? -15 : 15); e.preventDefault(); return; } // R5 详情/全屏 ←→=±15s
     Focus.move(D); e.preventDefault();
     const fe = Focus.el; // 键盘移动后同样记录最后聚焦频道行（favCur 定位用）
     if (App.view === 'live' && fe?.dataset?.i != null && fe.closest?.('#colChan')) Live.hi = Number(fe.dataset.i);
@@ -405,7 +405,8 @@ function togglePlayVideo(v) { if (v.paused) v.play().catch(() => {}); else v.pau
 function seekVideo(v, d) {
   if (!isFinite(v.duration) || v.duration <= 0) { toast('快进/快退暂不可用（流未就绪）'); return; }
   v.currentTime = Math.max(0, Math.min(v.duration - 1, (v.currentTime || 0) + d));
-  toast(d < 0 ? '« 15s' : '15s »');
+  const fmt = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  toast((d < 0 ? '« 15s ' : '15s » ') + fmt(v.currentTime) + ' / ' + fmt(v.duration)); // 审计补漏#3：带当前位置/总时长
 }
 /* 遥控全屏：OK 触发（键盘事件属有效用户手势，requestFullscreen 可用）；全屏内画面即焦点，
    Enter/Space=暂停 ←→=seek Esc=浏览器原生退全屏 */
@@ -415,8 +416,9 @@ function toggleFullscreen() {
   if (!v.requestFullscreen) return toast('该浏览器不支持全屏');
   v.requestFullscreen().then(() => Focus.set(v)).catch(() => toast('进入全屏失败'));
 }
-document.addEventListener('fullscreenchange', () => {
-  const b = $('#fsBtn'); if (b) b.textContent = document.fullscreenElement ? '⛶ 退出全屏' : '⛶ 全屏';
+document.addEventListener('fullscreenchange', () => { // 审计补漏#4：详情/直播两处入口文案同步
+  const txt = document.fullscreenElement ? '⛶ 退出全屏' : '⛶ 全屏';
+  for (const id of ['fsBtn', 'liveFs']) { const b = $('#' + id); if (b) b.textContent = txt; }
 });
 
 /* ================= 视图框架 ================= */
@@ -1464,7 +1466,7 @@ async function openDetail(item) {
   let painted = false;
   /* O1a 跨会话进度（docs/2026-10-30-O1-O3播放与直播体验方案.md）：fongmi_prog { "<id>|<si>": {ep,sec,dur,ts} }
      timeupdate 5s 节流 / pause 即写 / ended 清除；写时顺带清理超 30 天或已脱离历史+收藏的孤儿项 */
-  let progKey = '', progEp = () => 0;
+  let progKey = '', progEp = () => 0, onEndedExtra = null; // onEndedExtra 由 paint 注入（连播/提示），监听只绑一次防重绘双触发
   const progSave = () => {
     if (!progKey) return;
     const v = $('#player'); if (!v) return;
@@ -1484,7 +1486,7 @@ async function openDetail(item) {
     const pv = $('#player'); let lastProg = 0;
     pv.addEventListener('timeupdate', () => { const n = Date.now(); if (n - lastProg >= 5000) { lastProg = n; progSave(); } });
     pv.addEventListener('pause', progSave);
-    pv.addEventListener('ended', progClear);
+    pv.addEventListener('ended', () => { progClear(); if (onEndedExtra) onEndedExtra(); });
   }
   const paint = d => {
   if (!d || App.view !== 'video') return;
@@ -1497,7 +1499,7 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="vidBack" style="margin-left:auto">← 返回</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="prevEp">« 上一集</button><button class="btn" data-focus id="nextEp">下一集 »</button><button class="btn" data-focus id="vidBack" style="margin-left:auto">← 返回</button></div>`;
   $('#fsBtn').onclick = toggleFullscreen;
   bindBack('vidBack', () => switchView(App.videoBack || 'vod'));
   $('#keepBtn').onclick = () => {
@@ -1558,6 +1560,24 @@ async function openDetail(item) {
       if (App.view === 'video' && line === ni) playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
     }, 3000);
     return true;
+  };
+  /* 播控补齐（用户批准）：上/下集按钮 + 本集播完自动连播下一集（fongmi_autonext=0 关闭自动，仅提示） */
+  const goEp = step => {
+    const g = d.episodes[line]; if (!g || !g.list.length) return;
+    const ni = curEp + step;
+    if (ni < 0) { toast('已是第一集'); return; }
+    if (ni >= g.list.length) { toast('已是最后一集'); return; }
+    curEp = ni; tried = new Set([line]);
+    draw(curEp);
+    playInto($('#player'), g.list[curEp].link, `${d.title} · ${g.list[curEp].name}`, nextLine);
+  };
+  $('#prevEp').onclick = () => goEp(-1);
+  $('#nextEp').onclick = () => goEp(1);
+  onEndedExtra = () => {
+    const g = d.episodes[line];
+    if (!g || curEp + 1 >= g.list.length) { toast('已播完全部剧集'); return; }
+    if (LS('fongmi_autonext', 1) === 0) { toast('本集结束（自动连播已关，按下集按钮继续）'); return; }
+    toast('本集结束，自动播放下一集'); goEp(1);
   };
   let startEp = 0, seekTo = 0, fromProg = false;
   if (App.resume) { // 从"搜本作"跨源跳转过来：尽力对齐线路/集号/进度（优先于跨会话进度）
@@ -1906,7 +1926,7 @@ function renderLive() {
   body.innerHTML = `<div class="livewrap">
     <video id="player" autoplay controls data-focus></video>
     <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span><button class="btn" data-focus id="liveBack" style="pointer-events:auto">← 首页</button></div>
-    <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span></div>
+    <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span><button class="btn" data-focus id="liveFs" style="pointer-events:auto;margin-left:auto">⛶ 全屏</button></div>
     <div class="lpanel" id="lPanel">
       <div class="col" id="colGroup"></div><div class="col" id="colChan"></div><div class="col" id="colEpg"></div>
     </div>
@@ -1917,6 +1937,7 @@ function renderLive() {
   Live.epgTimer = setInterval(() => { if (App.view === 'live') updateEpgTop(); }, 60000);
   drawEpgCol();
   bindBack('liveBack', () => switchView('home'));
+  $('#liveFs').onclick = toggleFullscreen; // 审计补漏#1：直播也有 OS 全屏入口（toggleFullscreen 认 #player，直播画面同为该 id）
   if (!lives.length) { toast('无直播源，请到普通调试台导入含直播的订阅'); return; }
   if (lives.length > 1) {
     body.insertAdjacentHTML('afterbegin', `<div class="hrow" style="padding:6px 28px">${lives.map((x, i) => `<button class="chip${i === Live.srcIdx ? ' on' : ''}" data-focus data-i="${i}">${esc(x.name)}</button>`).join('')}</div>`);
@@ -1950,6 +1971,8 @@ function drawPanel() {
   /* R6 遥控可达：分组列顶插「← 首页」行（面板关时 liveBack 不可达的替代通道）；频道列顶插收藏按钮，
      目标=最后聚焦频道行（Live.hi），无则正在播出频道（Live.cur）；★/☆ 文案随目标收藏态 */
   $('#colGroup').innerHTML = '<div class="li" data-focus data-home="1">← 首页</div>'
+    + '<div class="li" data-focus data-fs="1">⛶ 全屏播放</div>' // 补漏#1：面板关时底栏按钮键盘不可达（↑↓被换台劫持），全屏经面板可达
+    + (SRC.live.length > 1 ? SRC.live.map((x, i) => `<div class="li${i === Live.srcIdx ? ' on' : ''}" data-focus data-src="${i}">📡 ${esc(x.name)}</div>`).join('') : '') // 换源同样经面板可达（对齐 FongMi 直播菜单）
     + Live.groups.map((g, i) => `<div class="li${i === Live.gi ? ' on' : ''}" data-focus data-g="${i}">${esc(g)}</div>`).join('');
   const favUrls = new Set(liveFav().filter(x => x.srcIdx === Live.srcIdx).map(x => x.url));
   const ti = Live.chans[Live.hi] ? Live.hi : Live.cur;
@@ -1959,6 +1982,8 @@ function drawPanel() {
     + list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}<span class="fav${favUrls.has(x.c.url) ? ' on' : ''}" data-f="${x.i}">★</span></div>`).join('');
   $('#colGroup').onclick = e => {
     if (e.target.closest('[data-home]')) return switchView('home');
+    if (e.target.closest('[data-fs]')) { togglePanel(false); toggleFullscreen(); return; }
+    const sc = e.target.closest('[data-src]'); if (sc) { Live.srcIdx = +sc.dataset.src; localStorage.setItem('fongmi_live_idx', String(Live.srcIdx)); Live.cur = -1; renderLive(); return; }
     const b = e.target.closest('[data-g]'); if (b) { Live.gi = +b.dataset.g; drawPanel(); }
   };
   $('#colChan').onclick = e => {
