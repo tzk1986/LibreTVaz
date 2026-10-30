@@ -220,6 +220,70 @@
     }).join('\n');
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery };
+  /* ============ O2 直播 EPG：XMLTV 正则解析纯函数（node 无 DOMParser，格式可预测；docs/2026-10-30-O1-O3播放与直播体验方案.md） ============ */
+  // 频道名归一：去空白/大写/去清晰度尾缀/CCTV 连字符统一（cctv-1 ↔ CCTV1 ↔ CCTV 1 高清）
+  function normName(s) {
+    s = String(s || '').toUpperCase().replace(/\s+/g, '');
+    s = s.replace(/(高清|标清|超清|蓝光|FHD|HD|SD)$/, '');
+    s = s.replace(/^CCTV[-_—–]?/, 'CCTV');
+    return s;
+  }
+  // XMLTV 时间戳 "YYYYMMDDHHmmSS +ZZZZ" → 去非数字取 14 位转 Number（源多为本地时区，墙钟比较够用）
+  function tsNum(t) {
+    const d = String(t || '').replace(/[^0-9]/g, '').slice(0, 14);
+    return d.length >= 8 ? Number(d) : 0;
+  }
+  const pad2 = n => String(n).padStart(2, '0');
+  function nowNum(d = new Date()) {
+    return Number(`${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`);
+  }
+  const XML_ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+  function decodeXmlEnt(s) {
+    return String(s || '').replace(/&([a-z]+);/gi, (mm, e) => (XML_ENT[e.toLowerCase()] ?? mm));
+  }
+  function parseXmltv(text) {
+    const src = String(text || '');
+    const channels = {}; const progs = {}; let m;
+    const chRe = /<channel\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/channel>/g;
+    while ((m = chRe.exec(src))) {
+      const dn = /<display-name[^>]*>([^<]*)<\/display-name>/.exec(m[2]);
+      channels[m[1]] = decodeXmlEnt((dn ? dn[1] : m[1]).trim());
+    }
+    const pgRe = /<programme\b([^>]*?)(?:\/>|>([\s\S]*?)<\/programme>)/g;
+    while ((m = pgRe.exec(src))) {
+      const attrs = m[1] || ''; const inner = m[2] || '';
+      const ch = /channel="([^"]*)"/.exec(attrs)?.[1];
+      const t = tsNum(/start="([^"]*)"/.exec(attrs)?.[1]);
+      const s = tsNum(/stop="([^"]*)"/.exec(attrs)?.[1]);
+      if (!ch || !t) continue;
+      (progs[ch] = progs[ch] || []).push({
+        t, s,
+        title: decodeXmlEnt(/<title[^>]*>([^<]*)<\/title>/.exec(inner)?.[1] || '').trim(),
+        desc: decodeXmlEnt(/<desc[^>]*>([^<]*)<\/desc>/.exec(inner)?.[1] || '').trim(),
+      });
+    }
+    for (const k in progs) progs[k].sort((a, b) => a.t - b.t);
+    const byName = {};
+    for (const id in channels) { const n = normName(channels[id]); if (n && !(n in byName)) byName[n] = id; }
+    return { channels, progs, byName };
+  }
+  // 某频道某天的节目列表：优先频道名归一→id 匹配；退化① progs 直接以频道名为 key；② channels 值归一全比
+  function epgFor(index, chanName, dayNum) {
+    if (!index || !chanName) return [];
+    const nm = normName(chanName);
+    let list = index.progs[index.byName[nm]] || null;
+    if (!list) list = index.progs[chanName] || null;
+    if (!list) { for (const cid in index.channels) { if (normName(cid) === nm) { list = index.progs[cid]; break; } } }
+    if (!list) return [];
+    const day = String(dayNum || nowNum()).slice(0, 8);
+    return list.filter(p => String(p.t).slice(0, 8) === day);
+  }
+  function epgNow(list, n) {
+    n = n || nowNum();
+    for (const p of list || []) if (p.t <= n && (!p.s || p.s >= n)) return p;
+    return null;
+  }
+
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

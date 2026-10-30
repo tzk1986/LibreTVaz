@@ -172,5 +172,30 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   ok(!t.includes('复仇') && !t.includes('乐高'), 'trunc-align: 不再错截词首「复仇/乐高」(got ' + JSON.stringify(t) + ')');
 }
 
+// 9. parseXmltv/epgFor/epgNow：XMLTV 正则解析（O2 直播 EPG，docs/2026-10-30-O1-O3播放与直播体验方案.md）
+{
+  const xml = '<?xml version="1.0"?><tv>'
+    + '<channel id="cctv1"><display-name>CCTV-1</display-name><display-name>CCTV 1 高清</display-name></channel>'
+    + '<channel id="hunan"><display-name>湖南卫视</display-name></channel>'
+    + '<programme start="20261030060000 +0800" stop="20261030080000 +0800" channel="cctv1"><title>朝闻天下</title><desc>新闻节目</desc></programme>'
+    + '<programme start="20261030180000 +0800" stop="20261030193000 +0800" channel="cctv1"><title>晚间新闻</title></programme>'
+    + '<programme start="20261030230000 +0800" channel="cctv1"><title>影视&amp;点播</title></programme>'
+    + '<programme start="20261031200000 +0800" stop="20261031220000 +0800" channel="hunan"><title>周末午夜场</title><desc>综艺</desc></programme>'
+    + '</tv>';
+  const ix = P.parseXmltv(xml);
+  eq(ix.channels['cctv1'], 'CCTV-1', 'epg: channel 取首个 display-name');
+  ok(P.normName('CCTV 1 高清') === P.normName('cctv-1') && P.normName('CCTV1') === P.normName('CCTV-1'), 'epg: normName CCTV 连字符/清晰度归一');
+  ok(P.tsNum('20261030060000 +0800') === 20261030060000, 'epg: 时间戳去时区取 14 位');
+  const day = P.epgFor(ix, 'CCTV 1 高清', 20261030000000);
+  eq(day.map(p => p.title), ['朝闻天下', '晚间新闻', '影视&点播'], 'epg: 名→id 匹配+按天过滤+起始排序+实体还原');
+  eq(P.epgNow(day, 20261030070000).title, '朝闻天下', 'epg: 当前进行中命中');
+  eq(P.epgNow(day, 20261030235900).title, '影视&点播', 'epg: 无 stop 视为进行中');
+  ok(P.epgNow(day, 20261030194500) === null, 'epg: 空档时段不命中');
+  eq(P.epgFor(ix, 'hunan', 20261031000000).map(p => p.title), ['周末午夜场'], 'epg: progs 直接以 id 为名退化匹配');
+  eq(P.epgFor(ix, '湖南卫视', 20261031000000).length, 1, 'epg: 显示名归一匹配');
+  eq(P.epgFor(ix, '不存在频道', 20261030000000), [], 'epg: 无匹配空列表');
+  eq(P.epgFor(null, 'x'), [], 'epg: 空索引安全');
+}
+
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');
 process.exit(fails ? 1 : 0);
