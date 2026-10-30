@@ -90,9 +90,15 @@ function parseFilterMeta(text) {
 /* 词库与拼音联想（docs/2026-10-30-图片播放与拼音候选提速方案.md ③.5）：
    预计算索引在 PerfCore.createPinIndex（每词一次算首字母、多音字变体、前2字母分桶、词频权重）；
    搜索出结果 +1 / 进详情 +2；持久化键不变 fongmi_words，权重新增 fongmi_wfreq；索引不可用时退化子串匹配 */
+// ①核心词归一化：片名入库时同步派生核心词（复仇者联盟4：终局之战→复仇者联盟），简拼可直中本体
+const coreNameOf = n => (typeof PerfCore !== 'undefined' && PerfCore.coreName ? PerfCore.coreName(n) : '');
 const pinIndex = (typeof PerfCore !== 'undefined' && PerfCore.createPinIndex)
   ? PerfCore.createPinIndex({ weights: LS('fongmi_wfreq', {}) }) : null;
-if (pinIndex) pinIndex.addMany(LS('fongmi_words', []));
+if (pinIndex) { // 恢复存量词库时补派生一次，老 localStorage 立即可用核心词
+  const saved = LS('fongmi_words', []);
+  pinIndex.addMany(saved);
+  for (const w of saved) { const c = coreNameOf(w); if (c && c !== w) pinIndex.add(c); }
+}
 let VOCAB = pinIndex ? pinIndex.list() : LS('fongmi_words', []);
 const persistVocab = () => {
   try {
@@ -103,8 +109,6 @@ const persistVocab = () => {
 let vocabSaveTimer = null;
 const persistSoon = () => { clearTimeout(vocabSaveTimer); vocabSaveTimer = setTimeout(persistVocab, 500); };
 const vocabSize = () => (pinIndex ? pinIndex.size() : VOCAB.length);
-// ①核心词归一化：片名入库时同步派生核心词（复仇者联盟4：终局之战→复仇者联盟），简拼可直中本体
-const coreNameOf = n => (typeof PerfCore !== 'undefined' && PerfCore.coreName ? PerfCore.coreName(n) : '');
 const addWords = names => {
   if (pinIndex) {
     for (const n of names) {
