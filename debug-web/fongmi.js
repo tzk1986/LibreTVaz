@@ -217,6 +217,7 @@ document.addEventListener('click', e => { const t = e.target.closest('[data-focu
 function onEsc() {
   if ($('#srcModal').classList.contains('open')) return closeSrcMgr();
   if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
+  if ($('#findModal').classList.contains('open')) return closeFindModal();
   if (App.view === 'live' && Live.panelOpen) return togglePanel(false);
   if (App.view === 'video') return switchView(App.videoBack || 'vod');
   if (App.view === 'collect') { Collect.stop = true; return switchView('search'); }
@@ -1184,8 +1185,7 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>
-    <div id="findWrap"></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>`;
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
     const at = k.findIndex(x => x.id === d.id && x.si === si);
@@ -1233,21 +1233,23 @@ async function openDetail(item) {
   if (startEp > 0) toast(`已在新源第 ${startEp + 1} 集续播`);
   Focus.set($('#player'));
 }
-/* 播放页"搜本作"：弹出可编辑搜索条 → 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
+/* 播放页"搜本作"：弹窗（对应 FongMi 播放器菜单搜索对话框）→ 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
+function closeFindModal() { $('#findModal').classList.remove('open'); if (App.view === 'video') Focus.set($('#player')); }
 function openFindBox(title, getState) {
-  const wrap = $('#findWrap'); if (!wrap) return;
-  if (wrap.innerHTML) { wrap.innerHTML = ''; return; } // 再点一次收起
-  wrap.innerHTML = `<div class="sbox" style="padding:8px 0"><input id="findKw" data-focus value="${esc(title)}" placeholder="片名可编辑">
-    <button class="btn" data-focus id="findGo">全源搜索</button></div>
-    <div class="hrow" id="findRes" style="flex-wrap:wrap;padding:0"></div>`;
+  const m = $('#findModal');
+  if (m.classList.contains('open')) return closeFindModal(); // 再点一次收起
+  m.classList.add('open');
+  m.onclick = e => { if (e.target === m) closeFindModal(); };
+  const kw = $('#findKw'); kw.value = title || '';
+  const res = $('#findRes'); res.innerHTML = '';
   const runFind = async () => {
-    const kw = $('#findKw').value.trim(); if (!kw) return;
-    const res = $('#findRes'); res.innerHTML = '<span class="muted" style="font-size:12px">全源搜索中…</span>';
+    const q = kw.value.trim(); if (!q) return;
+    res.innerHTML = '<span class="muted" style="font-size:12px">全源搜索中…</span>';
     const sources = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
     const pages = await pMap(sources, ({ s }) =>
-      httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(kw)}&pg=1`), 8000)
-        .then(raw => parseList(raw, s).filter(v => isRelevant(v.name, kw)).map(v => ({ ...v, source: s }))).catch(() => []), 6);
-    if (!$('#findRes')) return;
+      httpGet(listUrl(s.url, `ac=videolist&wd=${encodeURIComponent(q)}&pg=1`), 8000)
+        .then(raw => parseList(raw, s).filter(v => isRelevant(v.name, q)).map(v => ({ ...v, source: s }))).catch(() => []), 6);
+    if (!m.classList.contains('open')) return;
     const found = pages.flat().slice(0, 30);
     res.innerHTML = found.length
       ? found.map((f, i) => `<button class="chip" data-focus data-f="${i}">${esc(f.name)}｜${esc(f.source.name)}${f.remarks ? '·' + esc(f.remarks) : ''}</button>`).join('')
@@ -1257,12 +1259,13 @@ function openFindBox(title, getState) {
       const it = found[+b.dataset.f];
       const st = getState();
       App.resume = { line: st.line, ep: st.ep, sec: st.sec };
+      closeFindModal();
       openDetail(it);
     };
   };
   $('#findGo').onclick = runFind;
-  $('#findKw').onkeydown = e => { if (e.key === 'Enter') runFind(); };
-  $('#findKw').focus(); $('#findKw').select();
+  kw.onkeydown = e => { if (e.key === 'Enter') runFind(); };
+  kw.focus(); kw.select();
   if (title) runFind();
 }
 async function doChangeSource() {

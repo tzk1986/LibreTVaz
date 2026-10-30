@@ -130,6 +130,10 @@
   <div class="hint">遥控器模拟：方向键移动焦点 · Enter 确认 · Esc 返回 · 数字键换台(直播) · 也可直接鼠标点击</div>
 </div>
 <div class="modal" id="siteModal"><div class="sitegrid" id="siteGrid"></div></div>
+<div class="modal" id="findModal"><div style="max-width:760px;margin:10vh auto 0;padding:0 20px">
+  <div class="sbox" style="padding:0 0 10px"><input id="findKw" placeholder="片名可编辑，回车全源搜索，Esc 关闭"><button class="btn" id="findGo" data-focus>全源搜索</button></div>
+  <div id="findRes" style="max-height:60vh;overflow:auto;background:var(--card);border-radius:8px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px"></div>
+</div></div>
 <div class="modal" id="srcModal"><div class="srcmgr" id="srcMgr"></div></div>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
