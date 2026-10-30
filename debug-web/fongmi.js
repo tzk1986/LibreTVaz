@@ -103,13 +103,21 @@ const persistVocab = () => {
 let vocabSaveTimer = null;
 const persistSoon = () => { clearTimeout(vocabSaveTimer); vocabSaveTimer = setTimeout(persistVocab, 500); };
 const vocabSize = () => (pinIndex ? pinIndex.size() : VOCAB.length);
+// ①核心词归一化：片名入库时同步派生核心词（复仇者联盟4：终局之战→复仇者联盟），简拼可直中本体
+const coreNameOf = n => (typeof PerfCore !== 'undefined' && PerfCore.coreName ? PerfCore.coreName(n) : '');
 const addWords = names => {
   if (pinIndex) {
-    for (const n of names) { if (!n) continue; pinIndex.add(n); pinIndex.bump(n, 1); }
+    for (const n of names) {
+      if (!n) continue;
+      pinIndex.add(n); pinIndex.bump(n, 1);
+      const c = coreNameOf(n);
+      if (c && c !== n) { pinIndex.add(c); pinIndex.bump(c, 1); }
+    }
     persistSoon();
   } else {
     const set = new Set(VOCAB); let dirty = false;
-    for (const n of names) { if (n && !set.has(n)) { set.add(n); VOCAB.push(n); dirty = true; } }
+    const pushW = t => { if (t && !set.has(t)) { set.add(t); VOCAB.push(t); dirty = true; } };
+    for (const n of names) { pushW(n); pushW(coreNameOf(n)); }
     if (VOCAB.length > 2000) VOCAB = VOCAB.slice(-2000);
     if (dirty) persistSoon();
   }
@@ -1148,21 +1156,28 @@ function renderSearch() {
     if (!q) { row.innerHTML = ''; return; }
     let hits = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 30) : [];
     if (!hits.length) hits = (pinIndex ? pinIndex.list() : VOCAB).filter(w => w.toLowerCase().includes(q));
-    hits = [...new Set(hits)];
-    let core = '';
-    if (hits.length >= 2 && typeof PerfCore !== 'undefined') { // 系列片截断：命中词的最短公共前缀（如「庆余年」）置顶，点它直接搜核心词
-      const cp = PerfCore.commonPrefix(hits);
-      if (cp && cp.length >= 2 && !hits.includes(cp)) { core = cp; hits.unshift(cp); }
+    else { // ②模糊补足：首字母串包含查询的相关词（fcz→非凡创作者类），排精确命中后
+      const seen = new Set(hits);
+      for (const w of pinIndex.fuzzy(q, 30 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
     }
-    hits = hits.slice(0, 30);
+    hits = [...new Set(hits)];
+    // ②截断核心词：系列命中截到查询等长字数（fcz→复仇者），置顶带标，点选即搜
+    const truncs = /^[a-z]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3) : [];
+    const marked = new Set(truncs);
+    hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 30);
     row.innerHTML = hits.length
-      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}${w === core ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
+      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}${marked.has(w) ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
       : '<span class="muted" style="font-size:12px">没有匹配的片名，可点候选词或换字母试试</span>';
   };
   const drawCand = () => {
     const row = $('#candRow'); if (!row) return;
     const q = ($('#kw')?.value || '').trim().toLowerCase();
-    const pre = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 12) : [];
+    const isPy = /^[a-z]+$/.test(q);
+    const pre = isPy && pinIndex ? pinIndex.suggest(q, 12) : [];
+    if (isPy && pinIndex && pre.length < 12) { // ②候选词同样模糊补足
+      const seen = new Set(pre);
+      for (const w of pinIndex.fuzzy(q, 12 - pre.length)) if (!seen.has(w)) { pre.push(w); seen.add(w); }
+    }
     const words = pinIndex
       ? [...new Set([...pre, ...pinIndex.top(48)])].slice(0, 48) // 高频 top48 + 当前输入前缀命中置顶
       : [...new Set(VOCAB.slice(-600).reverse())].slice(0, 48);

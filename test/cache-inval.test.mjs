@@ -136,12 +136,30 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   ok(q > 0, 'pin: 桶查询有命中');
 }
 
-// 8. commonPrefix：系列片名联想截断核心词
+// 8. coreName/truncateByQuery/fuzzy：资源搜索导向的归一化+截断+模糊召回（docs/2026-10-30-资源搜索简拼直搜优化方案.md ①②）
 {
-  eq(P.commonPrefix(['庆余年第一季 特别版', '庆余年 第二季', '庆余年，全世界都以为我是废物太子']), '庆余年', 'prefix: 庆余年系列截断');
-  eq(P.commonPrefix(['独行月球']), '独行月球', 'prefix: 单词即自身');
-  eq(P.commonPrefix(['甲方', '乙方']), '', 'prefix: 无公共前缀为空');
-  ok(P.commonPrefix([]) === '' && P.commonPrefix(null) === '', 'prefix: 空输入安全');
+  eq(P.coreName('复仇者联盟4：终局之战'), '复仇者联盟', 'core: 尾番号+冒号副标题剥离');
+  eq(P.coreName('庆余年 第二季'), '庆余年', 'core: 第N季剥离');
+  eq(P.coreName('庆余年，全世界都以为我是废物太子（庆余年之大凉太子爷）'), '庆余年', 'core: 括号注释+逗号取首段');
+  eq(P.coreName('甄嬛传'), '甄嬛传', 'core: 干净片名不变');
+  eq(P.coreName('毒液2'), '毒液', 'core: 尾数剥离');
+  eq(P.coreName('某某 更新至12集 高清'), '某某', 'core: 更新集数/版本词剥离');
+  ok(P.coreName('') === '' && P.coreName(null) === '' && P.coreName('一') === '', 'core: 空/单字安全返回空');
+}
+{
+  eq(P.truncateByQuery('fcz', ['复仇者联盟', '复仇者联盟2', '复仇者联盟4：终局之战']), ['复仇者'], 'trunc: fcz→复仇者');
+  eq(P.truncateByQuery('qyn', ['庆余年第一季', '庆余年 第二季']), ['庆余年'], 'trunc: qyn→庆余年');
+  eq(P.truncateByQuery('bx', ['白雪公主']), [], 'trunc: 单命中不截(噪音防护)');
+  eq(P.truncateByQuery('fcz', ['复仇者', '复仇者联盟', '复仇者联盟2']), [], 'trunc: 核心已是命中词不重复出');
+  eq(P.truncateByQuery('qyn2', ['庆余年第一季', '庆余年 第二季']), [], 'trunc: 非纯字母不截');
+}
+{
+  const ix = P.createPinIndex();
+  ix.addMany(['复仇者联盟', '非凡创作者', '白雪公主']);
+  eq(ix.suggest('fcz'), ['复仇者联盟'], 'fuzzy: suggest 仍只前缀');
+  ok(ix.fuzzy('fcz').includes('非凡创作者'), 'fuzzy: 首字母串含查询即召回(ffczz⊃fcz)');
+  ok(!ix.fuzzy('fcz').includes('白雪公主'), 'fuzzy: 无关词不混入');
+  eq(ix.fuzzy(''), [], 'fuzzy: 空查询返回空');
 }
 
 console.log(fails ? `cache-inval: ${fails} 条失败` : 'cache-inval: 全部通过');

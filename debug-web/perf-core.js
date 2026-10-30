@@ -131,6 +131,15 @@
         hits.sort(rank);
         return hits.slice(0, limit);
       },
+      // 模糊召回：首字母串包含查询的「相关词」（非前缀也算，如 ffczz 含 fcz）；全扫 2000 词×≤4 变体 <1ms
+      fuzzy(q, limit = 30) {
+        q = String(q || '').toLowerCase().trim();
+        if (!q || !coll) return [];
+        const hits = [];
+        for (const w of words) { const vs = py.get(w); if (vs && vs.some(v => v.includes(q))) hits.push(w); }
+        hits.sort(rank);
+        return hits.slice(0, limit);
+      },
       top: n => [...words].sort(rank).slice(0, n),
       initials: word => Array.from(String(word || '')).map(initialOf).join(''),
       list: () => words.slice(),
@@ -139,15 +148,33 @@
     };
   }
 
-  // 系列片名截断：['庆余年第一季 特别版','庆余年 第二季'] → '庆余年'（联想行以最短公共前缀补充核心词）
-  function commonPrefix(list) {
-    if (!list || !list.length) return '';
-    let p = String(list[0]);
-    for (const w of list.slice(1)) {
-      while (p && !String(w).startsWith(p)) p = p.slice(0, -1);
-      if (!p) break;
+  // 资源片名核心词归一化（docs/2026-10-30-资源搜索简拼直搜优化方案.md ①）：片名=核心名+模板装饰
+  // 复仇者联盟4：终局之战→复仇者联盟；庆余年 第二季→庆余年；（）注释、更新至N集、版本号/版本词剥离
+  const CORE_BRACKET = /[《〈「『【\[（(][^》〉」』】\])）]*[》〉」』】\])）]/g;
+  const CORE_TOKEN = /(第[0-9一二三四五六七八九十百零两]+[季部集篇期章弹]|[0-9]+[季部]|更新至[0-9]+[集话]?|剧场版|特别篇|特别版|未删减版?|终极版|加长版|导演剪辑版|完整版|正片|预告片|花絮|片花|完结版?|抢先版|高清版?|超清|标清|蓝光|杜比|粤语|国语|中字|双字)/g;
+  const CORE_CODE = /(^|[^A-Za-z0-9])(HD|BD|TC|TS|MKV|MP4|4K|8K|VIP|[0-9]{3,4}P)(?![A-Za-z0-9])/gi;
+  function coreName(title) {
+    let s = String(title || '').trim();
+    if (!s) return '';
+    s = s.replace(CORE_BRACKET, '').replace(CORE_TOKEN, '').replace(CORE_CODE, '$1');
+    s = s.split(/[，。、！!？?；;：:．·\s|｜/\\-]+/)[0].trim().replace(/[0-9]+$/, '').trim();
+    return s.length >= 2 ? s : '';
+  }
+
+  // 按查询长度对齐截断（方案②）：纯首字母查询时命中词截到 q 等长汉字并聚合（'fcz'+复仇者联盟系列→复仇者）
+  function truncateByQuery(q, hits, limit = 3, minCount = 2) {
+    q = String(q || '').toLowerCase();
+    if (!/^[a-z]+$/.test(q) || q.length < 2 || !hits || hits.length < minCount) return [];
+    const inHits = new Set(hits);
+    const count = new Map();
+    for (const w of hits) {
+      const chars = Array.from(String(w));
+      if (chars.length <= q.length) continue;
+      const core = chars.slice(0, q.length).join('');
+      if (core.length < 2 || inHits.has(core)) continue;
+      count.set(core, (count.get(core) || 0) + 1);
     }
-    return p;
+    return [...count].filter(([, n]) => n >= minCount).sort((a, b) => b[1] - a[1]).map(([c]) => c).slice(0, limit);
   }
 
   // m3u8 改写（对标主站 src/lib/m3u8.ts + proxy-handlers.ts:117-131）：
@@ -172,6 +199,6 @@
     }).join('\n');
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, commonPrefix };
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);
