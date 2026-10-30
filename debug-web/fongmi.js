@@ -334,6 +334,7 @@ function switchView(v) {
   else if (v === 'collect') renderCollect();
   else if (v === 'live') renderLive();
   else if (v === 'keep') renderKeep();
+  else if (v === 'hist') renderHist();
   else if (v === 'probe') renderProbe();
   else if (v === 'video') { /* 由 openDetail 渲染 */ }
 }
@@ -767,7 +768,7 @@ function renderHome() {
       <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
       <div class="func" data-focus data-nav="server" style="display:none"><b>服务器模式</b><i>打开调试台</i></div>
     </div>
-    ${hist.length ? `<div class="rowhead">最近观看 <small>焦点按 ×(Enter) 删除</small></div><div class="grid" id="histGrid">${hist.map((h, i) => cardHtml(h, i, { del: true })).join('')}</div>` : ''}
+    ${hist.length ? `<div class="rowhead">最近观看 <small>焦点按 ×(Enter) 删除</small><button class="btn" data-focus id="histAll" style="margin-left:auto">全部 ▸</button></div><div class="grid" id="histGrid">${hist.map((h, i) => cardHtml(h, i, { del: true })).join('')}</div>` : ''}
     <div class="rowhead">更新推荐 <small>来自源「${esc(SRC.vod[Home.srcIdx]?.name || '无')}」无参请求，滚动到底自动加载</small></div>
     <div class="grid" id="recGrid"><p class="muted">加载中…</p></div></main>`;
   $('#funcs').onclick = e => {
@@ -781,6 +782,8 @@ function renderHome() {
   if (hg) bindGrid(hg, hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
     const list = LS('fongmi_hist', []); list.splice(i, 1); localStorage.setItem('fongmi_hist', JSON.stringify(list)); renderHome();
   });
+  const ha = $('#histAll');
+  if (ha) ha.onclick = () => switchView('hist'); // O3b 独立历史页入口
   $('#scroller').addEventListener('scroll', onScroll);
   loadRec();
 }
@@ -1314,12 +1317,12 @@ function drawCollectTab() {
 async function openDetail(item) {
   if (item.name && pinIndex) { pinIndex.bump(item.name, 2); persistSoon(); } // 进详情 +2 权重（方案③.5）
   const s = item.source || SRC.vod[Home.srcIdx];
-  App.videoBack = App.view === 'collect' ? 'collect' : (App.view === 'home' ? 'home' : App.view === 'keep' ? 'keep' : 'vod');
+  App.videoBack = App.view === 'collect' ? 'collect' : (App.view === 'home' ? 'home' : App.view === 'keep' ? 'keep' : App.view === 'hist' ? 'hist' : 'vod');
   App.view = 'video';
   stopPlayer();
   const hist = LS('fongmi_hist', []).filter(h => !(h.id === String(item.id) && h.si === SRC.vod.indexOf(s)));
   hist.unshift({ id: String(item.id), name: item.name, pic: item.pic, si: SRC.vod.indexOf(s) });
-  localStorage.setItem('fongmi_hist', JSON.stringify(hist.slice(0, 20)));
+  localStorage.setItem('fongmi_hist', JSON.stringify(hist.slice(0, 60))); // O3b 放宽 20→60 供历史页管理
   body.innerHTML = `<main id="scroller" style="overflow-y:auto">
     <div class="vtop"><video id="player" controls autoplay></video>
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
@@ -1630,6 +1633,31 @@ async function checkKeeps(items) {
   }
   localStorage.setItem('fongmi_keep', JSON.stringify(k));
   if (App.view === 'keep') renderKeep(); // 二次进入全走缓存、changed=false 不再循环
+}
+
+/* ================= 历史页（O3b：首页「最近观看·全部」进入，grid 管理+清空，删除连带清续播位） ================= */
+function renderHist() {
+  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]).map(h => ({ ...h, source: SRC.vod[h.si] }));
+  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 点进可自动续播</small>
+    <button class="btn" data-focus id="histClear" style="margin-left:auto">清空全部</button></div>
+    <div class="grid" id="histAllGrid">${hist.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">暂无观看历史</p>'}</div></main>`;
+  $('#histClear').onclick = () => {
+    if (!confirm('清空全部观看历史？收藏项的续播进度也会一并清除')) return;
+    localStorage.removeItem('fongmi_hist');
+    const prog = LS('fongmi_prog', {});
+    const keep = new Set(LS('fongmi_keep', []).map(k => `${k.id}|${k.si}`));
+    for (const pk in prog) { if (!keep.has(pk)) delete prog[pk]; }
+    localStorage.setItem('fongmi_prog', JSON.stringify(prog));
+    renderHist();
+  };
+  bindGrid($('#histAllGrid'), hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
+    const x = hist[i]; if (!x) return;
+    localStorage.setItem('fongmi_hist', JSON.stringify(LS('fongmi_hist', []).filter(h => !(h.id === x.id && h.si === x.si))));
+    const prog = LS('fongmi_prog', {});
+    delete prog[`${x.id}|${x.si}`];
+    localStorage.setItem('fongmi_prog', JSON.stringify(prog));
+    renderHist();
+  });
 }
 
 /* ================= 直播（LiveActivity：全屏+叠加层+三列面板） ================= */
