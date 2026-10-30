@@ -53,6 +53,28 @@
     return { bump: () => ++e, cur: () => e, stale: t => t !== e };
   }
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch };
+  // m3u8 改写（对标主站 src/lib/m3u8.ts + proxy-handlers.ts:117-131）：
+  // 分片行与 #EXT-X-KEY/#EXT-X-MAP 的 URI 解析为绝对地址后包成 /proxy?url=；base 用重定向后的 finalUrl；已代理 URI 不二次改写
+  const PX_RE = /(^|[=/])proxy\?url=/i;
+  function rewriteM3u8(text, base) {
+    const px = u => '/proxy?url=' + encodeURIComponent(u);
+    const resolve = u => { try { return new URL(u, base).href; } catch { return null; } };
+    const rwAttr = line => line.replace(/URI="([^"]+)"/i, (mm, u) => {
+      if (PX_RE.test(u)) return mm;
+      const a = resolve(u);
+      return a ? mm.replace('"' + u + '"', '"' + px(a) + '"') : mm;
+    });
+    return String(text).split('\n').map(raw => {
+      const cr = raw.endsWith('\r'); const line = cr ? raw.slice(0, -1) : raw;
+      const s = line.trim();
+      if (!s) return raw;
+      if (s.startsWith('#')) return /^#EXT-X-(KEY|MAP)\b/i.test(s) ? rwAttr(line) + (cr ? '\r' : '') : raw;
+      if (PX_RE.test(s)) return raw;
+      const a = resolve(s);
+      return (a ? px(a) : s) + (cr ? '\r' : '');
+    }).join('\n');
+  }
+
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8 };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);
