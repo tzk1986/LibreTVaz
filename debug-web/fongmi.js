@@ -1412,12 +1412,16 @@ async function openDetail(item) {
       .filter(x => x.i !== line && !tried.has(x.i) && x.u)
       .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
     if (!cand.length) return false;
-    tried.add(cand[0].i);
-    line = cand[0].i;
+    const ni = cand[0].i;
+    tried.add(ni);
+    line = ni;
     draw(curEp);
     const u = d.episodes[line].list[curEp] || d.episodes[line].list[0];
-    toast(`该线路无法播放，已自动切换「${d.episodes[line].flag}」`);
-    playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
+    toast(`该线路无法播放，3 秒后自动切换「${d.episodes[line].flag}」`);
+    // 秒挂型线路间隔 3s 再跳下一条防快闪；tried 集封顶=线路数，不会无限循环；期间手动/换台操作由守卫丢弃
+    setTimeout(() => {
+      if (App.view === 'video' && line === ni) playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
+    }, 3000);
     return true;
   };
   let startEp = 0, seekTo = 0, fromProg = false;
