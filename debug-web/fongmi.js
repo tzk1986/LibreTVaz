@@ -1905,15 +1905,14 @@ function renderSearch() {
   for (let i = 0; i < 36; i += 6) krows.push(KEYS.slice(i, i + 6));
   body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索（${zone ? '资源口' : '点播'}池）" data-focus><button class="btn" data-focus id="searchBack">← ${zone ? '资源口' : '点播'}</button></div>
     <main id="scroller"><div class="search3">
-      <section class="scol"><div class="rowhead">搜索历史 <button class="chip" data-focus id="histClear">清空</button></div><div class="vcol" id="histList"></div></section>
+      <section class="scol"><div class="rowhead">搜索历史 <button class="chip" data-focus id="histClear">清空</button></div><div class="wcol" id="histList"></div></section>
       <section class="scol">
         <div class="hrow"><button class="btn srcpick" data-focus id="srcName">全部源（聚合）</button><button class="btn" data-focus id="srcPick">指定源</button></div>
         <div class="hrow" style="padding-top:8px"><button class="btn" data-focus id="goBtn">🔍 搜索</button><button class="btn" data-focus data-kb="⌫">⌫ 退格</button><button class="btn" data-focus data-kb="CLR">清空</button><button class="btn" data-focus id="qrBtn">📱 远程输入</button></div>
         <div class="kbg">${krows.map(r => r.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')).join('')}</div>
-        <div class="hrow" id="sugRow" style="padding:8px 0 0;flex-wrap:wrap"></div>
-        <p class="muted" style="font-size:12px;padding-top:6px">依次点选片名拼音首字母（如「庆余年」按 QYN）或用数字键，下方实时联想本池片名；手机扫码可与电视同步输入。</p>
+        <p class="muted" style="font-size:12px;padding-top:6px">依次点选片名拼音首字母（如「庆余年」按 QYN）或用数字键，右侧实时联想本池片名（空输入时为热门词）；手机扫码可与电视同步输入。</p>
       </section>
-      <section class="scol"><div class="rowhead">热门搜索 <button class="chip" data-focus id="delHist" title="清空本池搜索历史">删除历史</button></div><div class="vcol" id="hotList"></div></section>
+      <section class="scol"><div class="rowhead"><span id="hotHead">热门搜索</span> <button class="chip" data-focus id="delHist" title="清空本池搜索历史">删除历史</button></div><div class="wcol" id="hotList"></div></section>
     </div></main>`;
   bindBack('searchBack', () => switchView(zone ? 'zone' : 'vod'));
   const run = () => {
@@ -1937,25 +1936,28 @@ function renderSearch() {
       ? words.map((w, i) => `<button class="btn" data-focus data-k="${esc(w)}">${i < 3 ? '🔥 ' : ''}${esc(w)}</button>`).join('')
       : '<span class="muted" style="font-size:12px">词库建设中…（搜索/进墙自动积累本池片名）</span>';
   };
+  /* 右列复用（对标真机搜索页）：输入框为空显示热门词榜；有输入即切换为关联词，样式同款词流 */
   const drawSug = () => {
     const inp = $('#kw'); if (!inp) return;
+    const el = $('#hotList'); if (!el) return;
+    const head = $('#hotHead');
     const q = inp.value.trim().toLowerCase();
-    const row = $('#sugRow'); if (!row) return;
-    if (!q) { row.innerHTML = ''; return; }
-    let hits = /^[a-z0-9]+$/.test(q) && pi ? pi.suggest(q, 30) : [];
+    if (!q) { if (head) head.textContent = '热门搜索'; drawHot(); return; }
+    if (head) head.textContent = '关联词';
+    let hits = /^[a-z0-9]+$/.test(q) && pi ? pi.suggest(q, 40) : [];
     if (!hits.length) hits = pool.list().filter(w => w.toLowerCase().includes(q));
     else { // ②模糊补足：首字母串包含查询的相关词（fcz→非凡创作者类），排精确命中后
       const seen = new Set(hits);
-      for (const w of pi.fuzzy(q, 30 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
+      for (const w of pi.fuzzy(q, 40 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
     }
     hits = [...new Set(hits)];
     // ②截断核心词：查询在首字母串的匹配位置对齐截断（fcz→复仇者、lm→联盟），置顶带标，点选即搜
     const truncs = /^[a-z0-9]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3, 2, pi && (w => pi.variants(w))) : [];
     const marked = new Set(truncs);
-    hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 30);
-    row.innerHTML = hits.length
+    hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 40);
+    el.innerHTML = hits.length
       ? hits.map(w => `<button class="btn" data-focus data-w="${esc(w)}">${esc(w)}${marked.has(w) ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
-      : '<span class="muted" style="font-size:12px">没有匹配的片名，可点热榜词或换字母试试</span>';
+      : '<span class="muted" style="font-size:12px">没有关联词，清空输入可看热榜，或换字母试试</span>';
   };
   const drawSrc = () => { const b = $('#srcName'); if (b) b.textContent = Search.srcSel ? `📌 ${Search.srcSel.name}` : '全部源（聚合）'; };
   const clearHist = () => { localStorage.removeItem(kwKey); drawHist(); toast(`已清空${zone ? '资源口' : '点播'}搜索历史`); };
@@ -1994,7 +1996,7 @@ function renderSearch() {
   };
   $('#qrBtn').onclick = () => openQrModal('search');
   drawHist(); drawHot(); drawSrc();
-  (zone ? seedZoneVocab() : seedVocab()).then(() => { if (App.view === 'search') { drawHot(); drawSug(); } });
+  (zone ? seedZoneVocab() : seedVocab()).then(() => { if (App.view === 'search') drawSug(); }); // 空输入=热榜、有输入=关联词，单入口防热榜覆盖联想
   Focus.set($('#kw')); // 仅选中不弹键盘：OK 才进编辑（两段式 R1）
 }
 

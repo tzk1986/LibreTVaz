@@ -159,10 +159,11 @@
   .search3 { display: grid; grid-template-columns: 220px minmax(0,1fr) 230px; gap: 18px; padding: 4px 28px 16px; align-items: start; }
   .scol { min-width: 0; }
   .scol .rowhead { margin-top: 8px; }
-  .vcol { display: flex; flex-direction: column; gap: 6px; align-items: stretch; max-height: 62vh; overflow-y: auto; scrollbar-width: none; }
-  .vcol::-webkit-scrollbar { display: none; }
-  .vcol .btn { text-align: left; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; } /* flex:0 0 auto：overflow:hidden 令按钮最小高归零，超高列表曾被压扁裁字而非滚动 */
-  #sugRow .btn { white-space: nowrap; } /* 联想词与键盘同级按钮样式，可选中反色 */
+  /* 词流列（对标真机搜索页）：无边框词语平铺换行；聚焦反色可 OK 选中 */
+  .wcol { display: flex; flex-wrap: wrap; column-gap: 16px; align-content: flex-start; max-height: 62vh; overflow-y: auto; scrollbar-width: none; }
+  .wcol::-webkit-scrollbar { display: none; }
+  .wcol .btn { background: transparent; border: 2px solid transparent; padding: 8px 4px; white-space: normal; text-align: left; flex: 0 1 auto; min-width: 0; color: var(--fg); }
+  .wcol .btn.focus { background: #fff; color: #000; } /* 后置透明底会盖掉通用反色规则，这里显式恢复聚焦白底黑字 */
   .kbg { display: grid; grid-template-columns: repeat(6, 46px); gap: 7px; justify-content: center; padding: 8px 0 2px; }
   .kbg .kb { width: auto; }
   .morebtn { grid-column: 1 / -1; text-align: center; padding: 12px 0; color: var(--dim); } /* S4 海报墙尾部无限下拉哨兵：横跨整行 */
