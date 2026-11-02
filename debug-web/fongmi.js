@@ -2004,7 +2004,7 @@ function renderSearch() {
    提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
    源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
    SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
-const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false, srcSel: null };
+const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false, srcSel: null, fails: 0 };
 function collectSources(zone) { // zone=true 只搜专区源（资源口/专区作品）；常规搜索排除专区源——专区内容仅在设置·实验室「资源口」入口可见
   const items = SRC.vod.map((s, si) => ({ s, si }))
     .filter(x => zone ? x.s.isAdult : !x.s.isAdult)
@@ -2033,7 +2033,8 @@ function renderCollect() {
     drawCollectTab();
   };
   const ep = ++Collect.epoch;
-  Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0;
+  Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0; Collect.fails = 0;
+  const failed = []; let retried = false; // 超时假空修复：首轮全源返回仍空且有失败源时自动补试一轮，不再把「慢」当「无」
   let sources = collectSources(!!Collect.zone);
   if (Collect.srcSel && sources.some(x => x.si === Collect.srcSel.si)) sources = sources.filter(x => x.si === Collect.srcSel.si); // 指定源生效：仅搜该源；源已删除/失效则回退聚合
   Collect.total = sources.length; // O3c 判「各源已返回完」做无结果推荐
@@ -2056,12 +2057,20 @@ function renderCollect() {
       if (ep !== Collect.epoch || Collect.stop || App.view !== 'collect') return;
       addSiteTab(s, si, list);
       if (Collect.tabIdx === '') drawCollectTab();
-    } catch { /* 单源失败静默，与 FongMi 一致 */ }
+    } catch { Collect.fails++; if (ep === Collect.epoch) failed.push({ s, si }); }
     finally {
       if (ep !== Collect.epoch) return;
       Collect.done++;
-      // 全部返回且无任何命中 → 重绘空态（含 O3c 拼音推荐）；此前 bySite 为空时页面会停在「等待各源返回…」
-      if (!Collect.stop && Collect.tabIdx === '' && Collect.done >= Collect.total && !Object.keys(Collect.bySite).length && App.view === 'collect') drawCollectTab();
+      // 全部返回且无任何命中：有失败源先自动补试一轮（8s 超时会把「慢」误判成「无」，二次搜索靠迟到缓存才出数据）；仍空才绘空态（含 O3c 拼音推荐）
+      if (!Collect.stop && Collect.tabIdx === '' && Collect.done >= Collect.total && !Object.keys(Collect.bySite).length && App.view === 'collect') {
+        if (!retried && failed.length) {
+          retried = true;
+          Collect.done = Collect.total - failed.length; Collect.fails = 0;
+          const again = failed.splice(0);
+          const g = $('#cGrid'); if (g) g.innerHTML = `<p class="muted" style="padding:20px 0">${again.length} 个源超时/失败，正在重试…</p>`;
+          again.forEach(fire);
+        } else drawCollectTab();
+      }
     }
   })();
   const [first, rest] = PerfCore.splitBatches(sources, LS('fongmi_threads', 8));
@@ -2088,7 +2097,7 @@ function drawCollectTab() {
       sug = PerfCore.truncateByQuery(q, cand, 2, 2, w => pi.variants(w));
       if (!sug.length) sug = hits.slice(0, 2);
     }
-    grid.innerHTML = `<p class="muted" style="padding:20px 0">${allDone ? '各源均无结果' : '等待各源返回…'}${Collect.tabIdx !== '' ? ' · 该 Tab 暂无数据' : ''}<br>`
+    grid.innerHTML = `<p class="muted" style="padding:20px 0">${allDone ? (Collect.fails ? `各源无命中（${Collect.fails} 个源失败/超时，可点「搜索」再试）` : '各源均无结果') : '等待各源返回…'}${Collect.tabIdx !== '' ? ' · 该 Tab 暂无数据' : ''}<br>`
       + (sug.length ? sug.map(w => `<button class="chip" data-focus data-kw="${esc(w)}">试试搜「${esc(w)}」?</button>`).join(' ') : (allDone ? '可换首字母简拼、直接输入中文名或换源重试' : '')) + '</p>';
     grid.onclick = e => {
       const b = e.target.closest('[data-kw]'); if (!b) return;
