@@ -45,21 +45,23 @@ function seedZoneSources() {
   SRC.vod.push(...add);
   saveSrc();
 }
-/* 专区池对齐（只升不降）：凡主机名命中资源口预置站单的源强制 isAdult=true，同主机多路径变体
-   （如 …/provide/vod 与 …/provide/vod/at/json）只留第一条——各导入路径按精确 URL 跳过已存在源、
-   从不回写标记，专区源不会被重复导入改回普通；但同站不同路径的变体 URL 不相等会漏进常规池，此处按主机名收编 */
+/* 专区池对齐（只升不降）：凡主机名命中资源口预置站单的源强制 isAdult=true——各导入路径按精确 URL
+   跳过已存在源、从不回写标记，专区源不会被重复导入改回普通；但同站不同路径的变体 URL 不相等会漏进常规池，此处按主机名收编。
+   同站多路径变体**保留**（互为备份：一路接口挂时另一路仍可聚合/搜索），仅按精确 URL 去重；
+   墙/Tab 展示层已有按名/按 id 去重，池内双份不会重复上屏 */
 const hostOf = u => { try { return new URL(u).hostname.toLowerCase(); } catch { return null; } };
 function alignZonePool() {
   if (!ZONE_SOURCES.length) return false;
   const zoneHosts = new Set(ZONE_SOURCES.map(s => hostOf(s.url)).filter(Boolean));
   const before = JSON.stringify(SRC.vod);
   SRC.vod.forEach(s => { const h = hostOf(s.url); if (h && zoneHosts.has(h)) s.isAdult = true; });
-  const seenH = new Set();
+  const seenU = new Set();
   SRC.vod = SRC.vod.filter(s => {
     const h = hostOf(s.url);
     if (!h || !zoneHosts.has(h)) return true;
-    if (seenH.has(h)) return false;
-    seenH.add(h);
+    const k = norm(s.url);
+    if (seenU.has(k)) return false;
+    seenU.add(k);
     return true;
   });
   if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; localStorage.setItem('fongmi_site_idx', '0'); } // 去重删行后下标防越界
@@ -720,7 +722,7 @@ const BUILTIN_SOURCES = [
 ];
 /* 资源口预置源清单：站单数据在 debug-web/sources.local.js（本地文件，不入版本库），缺失时为空表；
    首次/升版本进资源口自动种入源列表，仅供资源口聚合/搜索/播放（isAdult 隔离常规视图）；扩充清单时改 ZONE_SEED_VER 触发补种 */
-const ZONE_SEED_VER = 'v3';
+const ZONE_SEED_VER = 'v4';
 const ZONE_SOURCES = (window.__ZONE_SEED || []).map(([name, url]) => ({ name, url, isAdult: true }));
 const saveSrc = () => localStorage.setItem('libretvaz_sources', JSON.stringify(SRC));
 
