@@ -135,7 +135,7 @@ fun PlayerScreen(
                 }
                 val cand = Playback.pickNextLine(detailS.lines, line, ep, tried)
                 if (cand.isEmpty()) {
-                    errorHint = "已尝试全部 ${detailS.lines.size} 条线路均无法播放，请「搜本作」换源"
+                    errorHint = "已尝试全部 ${detailS.lines.size} 条线路均无法播放，请「搜关联」换源"
                     return
                 }
                 val ni = cand[0].index
@@ -208,7 +208,7 @@ fun PlayerScreen(
                 OutlinedButton(onClick = { dlg = "ep" }) { Text("第${ep + 1}/${total}集") }
                 Button(onClick = { goEp(-1) }, enabled = ep > 0) { Text("⏮ 上一集") }
                 Button(onClick = { goEp(1) }, enabled = total > 0 && ep < total - 1) { Text("下一集 ⏭") }
-                OutlinedButton(onClick = { dlg = "find" }) { Text("🔎 搜本作") }
+                OutlinedButton(onClick = { dlg = "find" }) { Text("🔎 搜关联") }
             }
         }
         Column(

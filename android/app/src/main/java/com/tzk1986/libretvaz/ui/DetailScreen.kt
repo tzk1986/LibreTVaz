@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 详情页（对应 web openDetail）：多线路 FilterChip / 命名选集网格（默认线优先取带流后缀线路）/
- * 简介 / 搜本作换源直达播放。线路与集以 onPlay 携带上下文交给播放页（对应 web openDetail 闭包）。
+ * 简介 / 搜关联（候选词跨源/跨季搜索）直达播放。线路与集以 onPlay 携带上下文交给播放页（对应 web openDetail 闭包）。
  */
 @Composable
 fun DetailScreen(
@@ -68,13 +68,13 @@ fun DetailScreen(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            OutlinedButton(onClick = { finding = true }) { Text("🔎 搜本作") }
+            OutlinedButton(onClick = { finding = true }) { Text("🔎 搜关联") }
         }
         switchHint?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
 
         when {
             failed -> Text(
-                "获取播放地址失败：该源接口异常，可点「搜本作」换源观看",
+                "获取播放地址失败：该源接口异常，可点「搜关联」换源观看",
                 color = MaterialTheme.colorScheme.error,
             )
             d == null -> Text("正在获取选集…")
