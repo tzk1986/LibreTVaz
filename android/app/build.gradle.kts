@@ -53,6 +53,8 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
     implementation(libs.coil.compose)
+    // 拼音首字母索引需与浏览器 Intl(pinyin) 行为一致：桌面 JVM 的 java.text.Collator 非拼音序，统一用 ICU4J
+    implementation(libs.icu4j)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // 单元测试里 android.jar 的 org.json 是空桩，需放真实实现（测试 classpath 优先于 android.jar）
     testImplementation(libs.junit)
