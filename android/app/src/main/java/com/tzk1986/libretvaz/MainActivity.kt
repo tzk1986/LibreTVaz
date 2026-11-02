@@ -8,6 +8,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.tzk1986.libretvaz.data.Http
+import com.tzk1986.libretvaz.data.RemoteHub
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VideoDetail
@@ -67,17 +68,51 @@ class MainActivity : ComponentActivity() {
             LibreTVazTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Browse) }
+                    // 扫码远程输入：全局长轮询挂活动级，命中派发到目标页（B8，web remoteLoop 等价）
+                    var serverUrl by remember { mutableStateOf(settingsStore.serverUrl) }
+                    var remoteKw by remember { mutableStateOf<String?>(null) }
+                    var remoteSub by remember { mutableStateOf<String?>(null) }
+                    LaunchedEffect(screen) { serverUrl = settingsStore.serverUrl }
+                    LaunchedEffect(serverUrl) {
+                        if (serverUrl.isNotEmpty()) RemoteHub.runLoop(serverUrl, this)
+                    }
+                    DisposableEffect(Unit) {
+                        val off = RemoteHub.addHandler { mode, text ->
+                            if (mode == "sub") remoteSub = text
+                            else {
+                                val zone = when (val s = screen) {
+                                    is Screen.Search -> s.zone
+                                    is Screen.Collect -> s.zone
+                                    is Screen.Keep -> s.zone
+                                    is Screen.Hist -> s.zone
+                                    else -> false
+                                }
+                                if (screen !is Screen.Search) screen = Screen.Search(zone)
+                                remoteKw = text
+                            }
+                            true
+                        }
+                        onDispose { off() }
+                    }
                     when (val current = screen) {
                         Screen.Live -> LiveScreen(
                             store = sourceStore,
                             onBack = { screen = Screen.Browse },
                             onPlay = { url -> screen = Screen.Player(url, Screen.Live) },
                         )
-                        Screen.Sources -> SourcesScreen(store = sourceStore, onBack = { screen = Screen.Browse })
+                        Screen.Sources -> SourcesScreen(
+                            store = sourceStore,
+                            qrAuto = settingsStore.qrAuto,
+                            remoteSub = remoteSub,
+                            onRemoteSubConsumed = { remoteSub = null },
+                            onBack = { screen = Screen.Browse },
+                        )
                         Screen.Settings -> SettingsScreen(store = settingsStore, onBack = { screen = Screen.Browse })
                         is Screen.Search -> SearchScreen(
                             store = sourceStore,
                             zone = current.zone,
+                            remoteKw = remoteKw,
+                            onRemoteConsumed = { remoteKw = null },
                             onBack = { screen = if (current.zone) Screen.Zone else Screen.Browse },
                             onCollect = { kw, sel -> screen = Screen.Collect(kw, current.zone, sel) },
                         )

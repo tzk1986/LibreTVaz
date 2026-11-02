@@ -15,7 +15,14 @@ import com.tzk1986.libretvaz.data.VodSource
 import kotlinx.coroutines.launch
 
 @Composable
-fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun SourcesScreen(
+    store: SourceStore,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    qrAuto: Boolean = true,
+    remoteSub: String? = null,
+    onRemoteSubConsumed: () -> Unit = {},
+) {
     var vodList by remember { mutableStateOf(store.vodSources()) }
     var liveList by remember { mutableStateOf(store.liveSources()) }
     var name by remember { mutableStateOf("") }
@@ -23,6 +30,8 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
     var importUrl by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var showQr by remember { mutableStateOf(false) }
+    var confirmSub by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
@@ -46,6 +55,15 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
         }
     }
 
+    // 扫码推送订阅（web remoteLoop sub 分支等价）：qrAuto 开=直接导入，关=弹窗遥控确认
+    LaunchedEffect(remoteSub) {
+        remoteSub?.let { u ->
+            onRemoteSubConsumed()
+            importUrl = u
+            if (qrAuto) doImport(u) else confirmSub = u
+        }
+    }
+
     BackHandler { onBack() }
 
     Column(modifier = modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -65,6 +83,7 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
                 modifier = Modifier.weight(1f),
             )
             Button(enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
+            OutlinedButton(onClick = { showQr = true }) { Text("📱 扫码导入") }
         }
         // 订阅仓库预设（与 Web 端源管理一致）：点击即填入并导入，免手输长 URL
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -115,6 +134,22 @@ fun SourcesScreen(store: SourceStore, onBack: () -> Unit, modifier: Modifier = M
                 }
             }
         }
+    }
+
+    if (showQr) RemoteQrDialog(mode = "sub", onDismiss = { showQr = false })
+
+    confirmSub?.let { u ->
+        AlertDialog(
+            onDismissRequest = { confirmSub = null },
+            title = { Text("收到远程订阅链接，确认导入？") },
+            text = { Text(u.take(200), style = MaterialTheme.typography.bodySmall, maxLines = 6) },
+            confirmButton = {
+                Button(onClick = { confirmSub = null; doImport(u) }) { Text("导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmSub = null; message = "已忽略远程订阅导入" }) { Text("忽略") }
+            },
+        )
     }
 }
 

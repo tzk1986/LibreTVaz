@@ -37,6 +37,8 @@ fun SearchScreen(
     onBack: () -> Unit,
     onCollect: (kw: String, srcSel: SpecSrc?) -> Unit,
     modifier: Modifier = Modifier,
+    remoteKw: String? = null,
+    onRemoteConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val repo = remember { CmsRepository() }
@@ -46,6 +48,7 @@ fun SearchScreen(
     var query by remember { mutableStateOf("") }
     var srcSel by remember { mutableStateOf<SpecSrc?>(null) }
     var showSrcPick by remember { mutableStateOf(false) }
+    var showQr by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
     var kws by remember { mutableStateOf(vocab.kws(zone)) }
     val focus = remember { FocusRequester() }
@@ -82,6 +85,15 @@ fun SearchScreen(
         vocab.pushKw(t, zone)
         kws = vocab.kws(zone)
         onCollect(t, srcSel)
+    }
+
+    // 扫码推送词：填入输入框并走正常搜索流（web RemoteIn.onSearch 等价）
+    LaunchedEffect(remoteKw) {
+        remoteKw?.let {
+            query = it
+            search(it)
+            onRemoteConsumed()
+        }
     }
 
     fun pressKey(c: String) {
@@ -152,7 +164,7 @@ fun SearchScreen(
                     Button(onClick = { search(query) }) { Text("🔍 搜索") }
                     OutlinedButton(onClick = { pressKey("⌫") }) { Text("⌫ 退格") }
                     OutlinedButton(onClick = { pressKey("CLR") }) { Text("清空输入") }
-                    OutlinedButton(onClick = { hint = "远程扫码输入将在服务器配对模式提供" }) { Text("📱 远程输入") }
+                    OutlinedButton(onClick = { showQr = true }) { Text("📱 远程输入") }
                 }
                 KB_ROWS.forEach { row ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -203,6 +215,8 @@ fun SearchScreen(
             }
         }
     }
+
+    if (showQr) RemoteQrDialog(mode = "search", onDismiss = { showQr = false })
 
     if (showSrcPick) {
         val all = store.vodSources().mapIndexed { si, s -> si to s }.filter { it.second.isAdult == zone }
