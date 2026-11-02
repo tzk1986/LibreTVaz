@@ -88,6 +88,16 @@ class PerfCoreTest {
         assertEquals(listOf("联盟"), PerfCore.truncateByQuery("lm", hits, variantsOf = { idx.variants(it) }))
     }
 
+    @Test fun `relCandidates 搜关联候选词打散`() {
+        assertEquals(listOf("NCIS", "NCIS New York", "NCIS 第一季", "NCIS: New York 第一季"), PerfCore.relCandidates("NCIS: New York 第一季"))
+        assertEquals(listOf("庆余年", "庆余年 第二季"), PerfCore.relCandidates("庆余年 第二季"))
+        assertEquals(listOf("甄嬛传"), PerfCore.relCandidates("甄嬛传"))
+        assertEquals(listOf("毒液", "毒液2"), PerfCore.relCandidates("毒液2"))
+        assertEquals(listOf("复仇者联盟", "复仇者联盟4", "复仇者联盟4：终局之战"), PerfCore.relCandidates("复仇者联盟4：终局之战"))
+        assertEquals(emptyList<String>(), PerfCore.relCandidates(null))
+        assertTrue(PerfCore.relCandidates("测试 一二 三四 五六 七八 九十 十一").size <= 6)
+    }
+
     @Test fun `rewriteM3u8 分片与KEY MAP包代理`() {
         val base = "http://host/v/p/index.m3u8"
         val enc = { u: String -> "/proxy?url=" + PerfCore.encodeURIComponent(u) }

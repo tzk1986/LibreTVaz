@@ -162,6 +162,29 @@
     return s.length >= 2 ? s : '';
   }
 
+  // 播放页「搜关联」候选词：片名打散为互相包含的关联短语（搜 ncis 出全季、搜 ncis 第一季 出该季）
+  // 顺序：核心词 → 分段前缀短语（连续拉丁词并为一段，New York 不拆）→ 核心词+季/部 → 原名；normalizeTitle 去重、上限 6
+  function relCandidates(name, max = 6) {
+    const orig = String(name || '').trim();
+    if (!orig) return [];
+    const out = []; const seen = new Set();
+    const key = s => s.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+    const add = w => { w = String(w || '').replace(/\s+/g, ' ').trim(); if (w.length >= 2 && out.length < max && !seen.has(key(w))) { seen.add(key(w)); out.push(w); } };
+    const core = coreName(orig);
+    if (core) add(core);
+    const rawToks = orig.replace(/[：:．·、,，_\-—/|｜《》()（）\[\]【】]+/g, ' ').split(/\s+/).filter(Boolean);
+    const segs = [];
+    for (const t of rawToks) {
+      if (/^[A-Za-z]+$/.test(t) && segs.length && /^[A-Za-z ]+$/.test(segs[segs.length - 1])) segs[segs.length - 1] += ' ' + t;
+      else segs.push(t);
+    }
+    for (let i = 1; i < segs.length; i++) add(segs.slice(0, i).join(' '));
+    const sea = orig.match(/第[0-9零一二三四五六七八九十百两]+[季部篇期]|[Ss]eason\s*\d+|[Pp]art\s*\d+/g) || [];
+    for (const m of sea) if (core) add(core + ' ' + m);
+    add(orig);
+    return out;
+  }
+
   // 截断核心词（方案②）：把查询 q 在词首字母串中的**匹配位置**对齐截到 q 等长汉字并聚合
   // 'fcz'+复仇者联盟→复仇者（idx0）；'lm'+复仇者联盟 fczlm→联盟（idx3）——模糊命中不再从词首错截
   // variantsOf(w) 由调用方传 pinIndex.variants（含多音字变体）；缺省退化为词首前缀截断
@@ -365,6 +388,6 @@
     动漫: [['全部', []], ['国产', ['DOM']], ['日漫', ['JP']], ['韩漫', ['KR']], ['欧美', ['EUUS']]],
   };
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, lineSpeedTag, pickBestLine, fmtSpeed, SPEED_GOOD, SPEED_FAIR, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, relCandidates, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, lineSpeedTag, pickBestLine, fmtSpeed, SPEED_GOOD, SPEED_FAIR, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

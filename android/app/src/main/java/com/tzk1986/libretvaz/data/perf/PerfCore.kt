@@ -74,6 +74,34 @@ object PerfCore {
         return if (s.length >= 2) s else ""
     }
 
+    private val REL_PUNCT = Regex("[：:．·、,，_\\-—/|｜《》()（）\\[\\]【】]+")
+    private val REL_SEASON = Regex("第[0-9零一二三四五六七八九十百两]+[季部篇期]|[Ss]eason\\s*\\d+|[Pp]art\\s*\\d+")
+
+    /** 搜关联候选词（对齐 web relCandidates）：核心词→分段前缀短语（连续拉丁词并为一段）→核心+季部→原名；归一去重≤max */
+    fun relCandidates(name: String?, max: Int = 6): List<String> {
+        val orig = (name ?: "").trim()
+        if (orig.isEmpty()) return emptyList()
+        val out = mutableListOf<String>(); val seen = HashSet<String>()
+        fun key(s: String) = s.lowercase(Locale.ROOT).replace(Regex("[\\s\\p{P}\\p{S}]+"), "")
+        fun add(w0: String): Boolean {
+            val w = w0.replace(Regex("\\s+"), " ").trim()
+            if (w.length < 2 || out.size >= max || !seen.add(key(w))) return false
+            out.add(w); return true
+        }
+        val core = coreName(orig)
+        if (core.isNotEmpty()) add(core)
+        val segs = mutableListOf<String>()
+        for (t in orig.replace(REL_PUNCT, " ").split(Regex("\\s+")).filter { it.isNotEmpty() }) {
+            if (Regex("^[A-Za-z]+$").matches(t) && segs.isNotEmpty() && Regex("^[A-Za-z ]+$").matches(segs.last()))
+                segs[segs.size - 1] = segs.last() + " " + t
+            else segs.add(t)
+        }
+        for (i in 1 until segs.size) add(segs.subList(0, i).joinToString(" "))
+        if (core.isNotEmpty()) REL_SEASON.findAll(orig).forEach { add("$core ${it.value}") }
+        add(orig)
+        return out
+    }
+
     /**
      * 截断核心词：把查询 q 在词首字母串中的匹配位置对齐截到 q 等长汉字并聚合。
      * variantsOf 传 PinIndex::variants（含多音字变体）；缺省退化为词首前缀截断。

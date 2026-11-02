@@ -1184,7 +1184,7 @@ const LAB_DEFS = [
   ['fongmi_linespeed', '线路测速（播放页显示各线速度）', 1],
   ['fongmi_autobestline', '测速后自动选最快线', 1],
   ['fongmi_fuzzy', '模糊搜索（片名核心词容错）', 1],
-  ['fongmi_autosrc', '全线失败自动换源（搜本作切源续播）', 0],
+  ['fongmi_autosrc', '全线失败自动换源（搜关联切源续播）', 0],
   ['fongmi_histmerge', '历史记录合并（按片名去重）', 1],
   ['fongmi_epfull', '播放页点击剧集自动全屏', 1],
 ];
@@ -2133,9 +2133,9 @@ function drawCollectTab() {
 async function openDetail(item) {
   vocab(Zone.active || !!(item.source && item.source.isAdult)).bump(item.name, 2); // 进详情 +2 权重（方案③.5，按池路由）
   const s = item.source || SRC.vod[Home.srcIdx];
-  // 播放页内「搜本作/换源/自动换源」再进详情：App.view 已是 video，保持原返回目标不丢
+  // 播放页内「搜关联/换源/自动换源」再进详情：App.view 已是 video，保持原返回目标不丢
   if (App.view !== 'video') App.videoBack = ({ collect: 'collect', keep: 'keep', hist: 'hist', search: 'search', zone: 'zone', zonehist: 'zonehist', zonekeep: 'zonekeep' })[App.view] || 'vod';
-  App.curZone = Zone.active || !!(s && s.isAdult); // 专区作品的「搜本作/换源」池限定专区源；常规作品排除专区源
+  App.curZone = Zone.active || !!(s && s.isAdult); // 专区作品的「搜关联/换源」池限定专区源；常规作品排除专区源
   App.view = 'video';
   stopPlayer();
   // 实验室「历史合并」：开时按片名去重（同名跨源只留最新一条）；条数上限走设置页 fongmi_histmax
@@ -2145,12 +2145,12 @@ async function openDetail(item) {
   const hmax = LS('fongmi_histmax', 60); let hn = 0, ha = 0;
   localStorage.setItem('fongmi_hist', JSON.stringify(hist.filter(h => h.a ? ++ha <= hmax : ++hn <= hmax))); // 两池各按上限截断
   body.innerHTML = `<main id="scroller" style="overflow-y:auto">
-    <div class="eprow"><button class="btn" data-focus id="vidBack">← 返回</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>
+    <div class="eprow"><button class="btn" data-focus id="vidBack">← 返回</button><button class="btn" data-focus id="findBtn">🔎 搜关联</button></div>
     <div class="vtop"><video id="player" controls autoplay data-focus></video>
       <div class="txt" id="vtxt"><h2>${esc(item.name)}</h2><p class="meta">详情加载中…</p></div></div>
     <div id="vrows"></div></main>`;
   bindBack('vidBack', () => switchView(App.videoBack || 'vod')); // 常驻返回：加载失败/超时态也能退出，不必刷新
-  // 常驻搜本作：详情失败/加载中的源也能直接跨源搜同名片续播；paint 成功后升级为精确片名与当前线路/集号/进度
+  // 常驻搜关联：详情失败/加载中的源也能直接跨源搜同名片续播；paint 成功后升级为精确片名与当前线路/集号/进度
   let findTitle = item.name || '';
   let findState = () => ({ line: 0, ep: 0, sec: 0 });
   curFindState = () => findState(); // 始终读最新 findState（paint 会重绑精确版）
@@ -2305,7 +2305,7 @@ async function openDetail(item) {
     const spNow = LINE_SPEED.get(`${dk}|${ep}`);
     // 单线作品判慢：本源没有第二条线可跳，行内直接给「搜本作换源」出口，避免孤线红标困惑
     const swapHint = d.episodes.length === 1 && spNow && spNow[0] != null && spNow[0] >= 0 && spNow[0] < PerfCore.SPEED_FAIR
-      ? '<button class="chip" data-focus id="swapHint" style="margin-left:8px">⚡ 该源仅此1条线 · 搜本作换源</button>' : '';
+      ? '<button class="chip" data-focus id="swapHint" style="margin-left:8px">⚡ 该源仅此1条线 · 搜关联换源</button>' : '';
     $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${flagBtnHtml(g, i, spNow)}</button>`).join('') + swapHint;
     const progHere = LS('fongmi_prog', {})[`${d.id}|${si}`];
     $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}${progHere && progHere.ep === i ? ' prog' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
@@ -2433,7 +2433,8 @@ async function openDetail(item) {
   if (painted && JSON.stringify(d) === JSON.stringify(cached)) return; // 数据未变不打断缓存首帧的播放
   paint(d);
 }
-/* 播放页"搜本作"：弹窗（对应 FongMi 播放器菜单搜索对话框）→ 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
+/* 播放页"搜关联"：弹窗（对应 FongMi 播放器菜单搜索对话框）→ 全源搜索 → 选中结果带当前线路/集号/进度跳转续播
+   片名打散为候选词词流（输入框下方，样式同搜索页关联词），点选即换词重搜；原名兜底＝旧"搜本作" */
 function closeFindModal() { $('#findModal').classList.remove('open'); if (App.view === 'video') Focus.set($('#player')); }
 function openFindBox(title, getState, zone) {
   const m = $('#findModal');
@@ -2442,6 +2443,11 @@ function openFindBox(title, getState, zone) {
   m.onclick = e => { if (e.target === m) closeFindModal(); };
   const kw = $('#findKw'); kw.value = title || '';
   const res = $('#findRes'); res.innerHTML = '';
+  const rel = $('#relRow');
+  const cands = PerfCore.relCandidates(title);
+  const drawRel = () => { rel.innerHTML = cands.map(w => `<button class="btn${w === kw.value.trim() ? ' on' : ''}" data-focus data-w="${esc(w)}">${esc(w)}</button>`).join(''); };
+  drawRel();
+  kw.addEventListener('input', drawRel); // 手输词与候选一致时同步高亮
   let runToken = 0, curFound = [];
   const drawFind = (found, pending) => {
     res.innerHTML = found.length
@@ -2491,6 +2497,7 @@ function openFindBox(title, getState, zone) {
     if (rest.length) setTimeout(() => { if (tk === runToken) rest.forEach(fire); }, 1200);
   };
   $('#findGo').onclick = runFind;
+  rel.onclick = e => { const b = e.target.closest('[data-w]'); if (!b) return; kw.value = b.dataset.w; drawRel(); runFind(); };
   kw.onkeydown = e => { if (e.key === 'Enter') runFind(); };
   Focus.set(kw); // 两段式 R1：仅选中；OK 进编辑（编辑态 Enter 触发全源搜索）
   if (title) runFind();

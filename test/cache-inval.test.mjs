@@ -153,6 +153,17 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), `${name} 
   eq(P.truncateByQuery('fcz', ['复仇者', '复仇者联盟', '复仇者联盟2']), [], 'trunc: 核心已是命中词不重复出');
   eq(P.truncateByQuery('qyn2', ['庆余年第一季', '庆余年 第二季']), [], 'trunc: 非纯字母不截');
 }
+// 8a2. relCandidates：播放页「搜关联」候选词打散（核心词→前缀短语→核心+季部→原名，去重≤6）
+{
+  eq(P.relCandidates('NCIS: New York 第一季'), ['NCIS', 'NCIS New York', 'NCIS 第一季', 'NCIS: New York 第一季'], 'rel: ncis 例（拉丁相邻词并为一段）');
+  eq(P.relCandidates('庆余年 第二季'), ['庆余年', '庆余年 第二季'], 'rel: 核心+季');
+  eq(P.relCandidates('甄嬛传'), ['甄嬛传'], 'rel: 干净片名只出原名');
+  eq(P.relCandidates('毒液2'), ['毒液', '毒液2'], 'rel: 核心与原名并存');
+  eq(P.relCandidates('复仇者联盟4：终局之战'), ['复仇者联盟', '复仇者联盟4', '复仇者联盟4：终局之战'], 'rel: 副标题分段');
+  eq(P.relCandidates(''), [], 'rel: 空输入安全');
+  eq(P.relCandidates(null), [], 'rel: null 安全');
+  ok(P.relCandidates('测试 一二 三四 五六 七八 九十 十一').length <= 6, 'rel: 上限6');
+}
 {
   const ix = P.createPinIndex();
   ix.addMany(['复仇者联盟', '非凡创作者', '白雪公主']);
