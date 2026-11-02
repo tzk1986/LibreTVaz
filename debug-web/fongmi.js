@@ -1452,12 +1452,18 @@ async function runAggWall(cat) {
   const pool = aggPool();
   Vod.aggCat = cat || null; Vod.win = 240; // S4 无限下拉：加载更多按同一分类续页；新墙重置渲染窗口
   const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && (App.view === 'vod' || App.view === 'zone') && $('#vodGrid');
+  /* 队列化渲染：本墙首绘整体按年降序一次（默认最新），此后每个源返回只把「没上墙的片名」按到达序追加队尾——
+     已有卡片位置不动，消除逐源合并时的全墙重排闪动 */
+  const drawn = new Set(); let firstDrawn = false;
   const merge = () => {
     const all = [];
     for (const s of pool) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
     const items = dedupByName(all);
     if (!items.length) return false;
-    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = true; Vod.loading = false; // S4：聚合墙可无限下拉（拉到空轮/10 轮封顶才关）
+    if (!firstDrawn) { firstDrawn = true; Vod.items = sortByYearDesc(items); }
+    else for (const it of items) { const k = normalizeTitle(it.name); if (k && !drawn.has(k)) { drawn.add(k); Vod.items.push(it); } }
+    items.forEach(it => drawn.add(normalizeTitle(it.name)));
+    Vod.page = 1; Vod.more = true; Vod.loading = false; // S4：聚合墙可无限下拉（拉到空轮才关）
     addWords(items.map(it => it.name), Zone.active);
     drawVodGrid();
     return true;
@@ -1515,15 +1521,16 @@ async function aggLoadMore() {
   }, 6);
   Vod.loadingMore = false;
   if (rid !== Vod.reqId || token !== aggToken || (App.view !== 'vod' && App.view !== 'zone') || !Vod.agg) return;
-  const prevLen = (Vod.items || []).length;
   const all = [];
   for (const s of aggPool()) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
   const items = dedupByName(all);
+  const onWall = new Set((Vod.items || []).map(it => normalizeTitle(it.name)));
+  const added = items.filter(it => { const k = normalizeTitle(it.name); return k && !onWall.has(k); }); // 队列化：本轮只见过的不再上墙
   Vod.page = pg;
-  Vod.more = items.length > prevLen; // 有新增=还能继续无限拉；全是重复/空=到底
-  if (items.length) { Vod.items = sortByYearDesc(items); addWords(items.map(it => it.name), Zone.active); }
+  Vod.more = added.length > 0; // 有新增=还能继续无限拉；全是重复/空=到底
+  if (added.length) { Vod.items = (Vod.items || []).concat(added); addWords(added.map(it => it.name), Zone.active); } // 只追加队尾，已有卡片不动
   drawVodGrid();
-  toast(Vod.more ? `第 ${pg} 轮：共 ${Vod.items.length} 部（+${Vod.items.length - prevLen}）` : '各源已无新内容（到底了）');
+  toast(Vod.more ? `第 ${pg} 轮：共 ${Vod.items.length} 部（+${added.length}）` : '各源已无新内容（到底了）');
 }
 /* 预取其余分类的源分片（只入缓存不渲染），低并发避免抢当前请求带宽 */
 async function aggPrefetch(rid, token, skip) {
@@ -1596,7 +1603,7 @@ async function loadMerged(pg, srvIds) { // srvIds=R8 预设命中子分类数组
   if (pg === 1) {
     Vod.items = [];
     const cached = cacheGet(ck);
-    if (cached && cached.length) { cachedShown = true; Vod.items = cached; drawVodGrid(); }
+    if (cached && cached.length) { cachedShown = true; Vod.items = sortByYearDesc(cached); drawVodGrid(); }
     else grid.innerHTML = '<p class="muted">加载中…</p>';
   }
   let extra = '';
@@ -1614,7 +1621,7 @@ async function loadMerged(pg, srvIds) { // srvIds=R8 预设命中子分类数组
   if (pg === 1) { Vod.filters = buildFilters(t, null); if (Vod.showFilters) drawSubRow(); }
   addWords(fresh.map(it => it.name));
   const prevLen = pg === 1 ? 0 : Vod.items.length;
-  Vod.items = pg === 1 ? fresh : dedupByName(dedupById(Vod.items.concat(fresh))); // 追加轮按 id+片名去重，防重复上墙
+  Vod.items = pg === 1 ? sortByYearDesc(fresh) : dedupByName(dedupById(Vod.items.concat(fresh))); // 首屏排一次年降序；追加轮保留旧序、新条目进队尾
   Vod.more = pg === 1 ? pages.some(p => p.length > 0) : Vod.items.length > prevLen; // pg>1 有新增才能继续（防无视 pg 恒回首页的源空转）
   drawVodGrid();
 }
@@ -1632,7 +1639,7 @@ async function loadVod(pg = 1) {
   if (pg === 1) {
     Vod.items = [];
     const cached = cacheGet(ck);
-    if (cached && cached.length) { cachedShown = true; Vod.items = cached; drawVodGrid(); }
+    if (cached && cached.length) { cachedShown = true; Vod.items = sortByYearDesc(cached); drawVodGrid(); }
     else grid.innerHTML = '<p class="muted">加载中…</p>';
   }
   const effT = Vod.sub || (t ? t.id : '');
@@ -1654,7 +1661,7 @@ async function loadVod(pg = 1) {
   if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
   addWords(items.map(it => it.name));
   const prevLen = pg === 1 ? 0 : Vod.items.length;
-  Vod.items = pg === 1 ? dedupByName(items) : dedupByName(dedupById(Vod.items.concat(items))); // 追加轮去重：源无视 pg 回重复页不再上重复卡
+  Vod.items = pg === 1 ? sortByYearDesc(dedupByName(items)) : dedupByName(dedupById(Vod.items.concat(items))); // 首屏排一次年降序；追加轮保留旧序、新条目进队尾
   Vod.more = pg === 1 ? items.length > 0 : Vod.items.length > prevLen; // pg>1 以“是否有新增”判底，全重复=到底，防无限空转
   drawVodGrid();
 }
@@ -1664,7 +1671,8 @@ const sortByYearDesc = items =>
   items.map((it, i) => [it, i]).sort((a, b) => (yearNum(b[0]) - yearNum(a[0])) || (a[1] - b[1])).map(p => p[0]);
 function drawVodGrid() {
   const grid = $('#vodGrid'); if (!grid) return;
-  let shown = sortByYearDesc(Vod.items);
+  const sc = $('#scroller'); const st = sc ? sc.scrollTop : 0; // 增量重绘不重置滚动（配合队列化，屏上内容纹丝不动）
+  let shown = Vod.items; // 队列化：排序已在取数时做一次，渲染不再全墙重排
   /* R8 三级 (b)：预设生效但分类树无地区分类→客户端 classifyVod 过滤；UNKNOWN 保守剔除并计数 */
   let unknown = 0;
   if (Vod.preset && !Vod.pSrv) {
@@ -1707,6 +1715,7 @@ function drawVodGrid() {
     Collect.back = Zone.active ? 'zone' : 'vod'; Collect.zone = Zone.active;
     switchView('collect'); renderCollect();
   });
+  if (sc) sc.scrollTop = st;
 }
 function drawSubRow() {
   const el = $('#subRow'); if (!el) return;
@@ -2009,7 +2018,7 @@ function renderSearch() {
    提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
    源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
    SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
-const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false, srcSel: null, fails: 0 };
+const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, seq: [], tabIdx: '', epoch: 0, back: 'search', zone: false, srcSel: null, fails: 0 };
 function collectSources(zone) { // zone=true 只搜专区源（资源口/专区作品）；常规搜索排除专区源——专区内容仅在设置·实验室「资源口」入口可见
   const items = SRC.vod.map((s, si) => ({ s, si }))
     .filter(x => zone ? x.s.isAdult : !x.s.isAdult)
@@ -2020,6 +2029,7 @@ function searchShardSet(ck, u, items) { const v = cacheRaw(ck) || {}; v[u] = { t
 function addSiteTab(s, si, list) {
   if (!list.length) return;
   Collect.bySite[si] = list;
+  if (!Collect.seq.includes(si)) Collect.seq.push(si); // 队列化：全部 Tab 按源「到达序」拼接，慢源后到只进尾部不插前
   addWords(list.map(v => v.name), !!Collect.zone);
   const tabs = $('#cTabs'); if (!tabs) return;
   let tab = tabs.querySelector(`[data-t="${si}"]`);
@@ -2038,7 +2048,7 @@ function renderCollect() {
     drawCollectTab();
   };
   const ep = ++Collect.epoch;
-  Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0; Collect.fails = 0;
+  Collect.bySite = {}; Collect.seq = []; Collect.tabIdx = ''; Collect.done = 0; Collect.fails = 0;
   const failed = []; let retried = false; // 超时假空修复：首轮全源返回仍空且有失败源时自动补试一轮，不再把「慢」当「无」
   let sources = collectSources(!!Collect.zone);
   if (Collect.srcSel && sources.some(x => x.si === Collect.srcSel.si)) sources = sources.filter(x => x.si === Collect.srcSel.si); // 指定源生效：仅搜该源；源已删除/失效则回退聚合
@@ -2085,8 +2095,9 @@ function renderCollect() {
 }
 function drawCollectTab() {
   const grid = $('#cGrid'); if (!grid) return;
+  const sc = $('#scroller'); const st = sc ? sc.scrollTop : 0; // 各源陆续返回重绘时保持滚动位置，画面不跳
   let items;
-  if (Collect.tabIdx === '') items = Object.values(Collect.bySite).flat();
+  if (Collect.tabIdx === '') items = Collect.seq.flatMap(si => Collect.bySite[si] || []); // 到达序拼接：新源结果进队尾，不插到前面
   else items = Collect.bySite[+Collect.tabIdx] || [];
   if (!items.length) {
     /* O3c 无结果推荐（docs/2026-10-30-O1-O3播放与直播体验方案.md）：全部 Tab+各源返回完+纯字母简拼 →
@@ -2115,6 +2126,7 @@ function drawCollectTab() {
   }
   grid.innerHTML = items.map((it, i) => cardHtml(it, i, { showSite: Collect.tabIdx === '' })).join('');
   bindGrid(grid, items, it => { App.videoBack = 'collect'; openDetail(it); });
+  if (sc) sc.scrollTop = st;
 }
 
 /* ================= 详情/播放一体页（VideoActivity） ================= */
