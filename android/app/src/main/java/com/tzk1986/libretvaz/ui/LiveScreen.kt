@@ -11,10 +11,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.tzk1986.libretvaz.data.Epg
 import com.tzk1986.libretvaz.data.LiveChannel
 import com.tzk1986.libretvaz.data.LivePlaylist
 import com.tzk1986.libretvaz.data.LiveRepository
 import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.perf.PerfCore
+import kotlinx.coroutines.delay
 
 @Composable
 fun LiveScreen(
@@ -30,6 +33,10 @@ fun LiveScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var group by remember { mutableStateOf<String?>(null) }
+    var epgIdx by remember { mutableStateOf<PerfCore.EpgIndex?>(null) }
+    var epgNote by remember { mutableStateOf<String?>(null) } // 顶栏提示：未配置/未取到
+    var epgChan by remember { mutableStateOf<LiveChannel?>(null) } // 节目单弹窗频道
+    var minuteTick by remember { mutableIntStateOf(0) }
 
     BackHandler { onBack() }
 
@@ -42,10 +49,31 @@ fun LiveScreen(
         loading = false
     }
 
+    // EPG 异步拉取不阻塞频道列表（web ensureEpg 等价，5 分钟缓存）
+    LaunchedEffect(selectedIndex, sources) {
+        val url = sources.getOrNull(selectedIndex)?.epg
+        if (url.isNullOrBlank()) { epgIdx = null; epgNote = "当前直播源未配置节目单" }
+        else {
+            val idx = Epg.load(url)
+            if (sources.getOrNull(selectedIndex)?.epg == url) { // 加载期间切了源则丢弃
+                epgIdx = idx
+                epgNote = if (idx == null) "节目单未取到（网络/格式）" else null
+            }
+        }
+    }
+
+    // 顶栏/行内「正在」每分钟自然滚动（web epgTimer 等价）
+    LaunchedEffect(Unit) {
+        while (true) { delay(60_000); minuteTick++ }
+    }
+
     Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = onBack) { Text("返回") }
             Text("看电视", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+            epgNote?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+            }
         }
 
         if (sources.isEmpty()) {
@@ -80,24 +108,79 @@ fun LiveScreen(
                 }
                 val channels = pl.channels.filter { ch -> group == null || ch.group == group }
                 Text("共 ${channels.size} 个频道", style = MaterialTheme.typography.bodySmall)
+                minuteTick // 每分钟订阅刷新行内「正在」
                 LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(channels) { ch -> ChannelRow(ch) { onPlay(ch.url) } }
+                    items(channels) { ch ->
+                        ChannelRow(
+                            channel = ch,
+                            now = Epg.now(epgIdx, ch.name),
+                            onClick = { onPlay(ch.url) },
+                            onEpg = if (epgIdx != null) ({ epgChan = ch }) else null,
+                        )
+                    }
                 }
             }
         }
     }
+
+    epgChan?.let { ch ->
+        val list = Epg.dayList(epgIdx, ch.name)
+        val now = Epg.now(epgIdx, ch.name)
+        val next = list.firstOrNull { it.t > PerfCore.nowNum() }
+        AlertDialog(
+            onDismissRequest = { epgChan = null },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { epgChan = null }) { Text("关闭") } },
+            title = { Text("${ch.name} · 今日节目单") },
+            text = {
+                if (list.isEmpty()) Text("本频道今日无节目数据（台名未匹配或节目单无当日内容）")
+                else LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(list) { p ->
+                        val mark = when {
+                            p === now -> " ·正在"
+                            p === next -> " ·即将"
+                            else -> ""
+                        }
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text(
+                                "${Epg.hm(p.t)}${if (p.s > 0) "–${Epg.hm(p.s)}" else ""}  ${p.title}$mark",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (p === now) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            )
+                            if (p === now && p.desc.isNotEmpty()) Text(
+                                p.desc.take(160),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            )
+                        }
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
-private fun ChannelRow(channel: LiveChannel, onClick: () -> Unit) {
+private fun ChannelRow(channel: LiveChannel, now: PerfCore.EpgProgram?, onClick: () -> Unit, onEpg: (() -> Unit)? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(channel.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), maxLines = 1)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(channel.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+            if (now != null) Text(
+                "正在 ${Epg.hm(now.t)} ${now.title}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 1,
+            )
+        }
         channel.group?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+        }
+        onEpg?.let {
+            TextButton(onClick = it) { Text("节目单", style = MaterialTheme.typography.labelMedium) }
         }
     }
 }

@@ -54,6 +54,34 @@ object Http {
         return false
     }
 
+    /** 阻塞式二进制 GET（XMLTV .gz 等需先按魔数判压缩，不能预先按文本读），带跨协议重定向跟随；IO 线程使用 */
+    fun getBytes(url: String, timeoutMs: Int = 15000): ByteArray {
+        val proxy = proxySpec()?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress(it.first, it.second)) }
+        var cur = url
+        repeat(6) {
+            val conn = (if (proxy != null) URL(cur).openConnection(proxy) else URL(cur).openConnection()) as HttpURLConnection
+            try {
+                conn.connectTimeout = timeoutMs
+                conn.readTimeout = timeoutMs
+                conn.requestMethod = "GET"
+                conn.instanceFollowRedirects = false
+                conn.setRequestProperty("User-Agent", CHROME_UA)
+                val code = conn.responseCode
+                if (code in 200..299) return conn.inputStream.use { it.readBytes() }
+                if (code in 300..399) {
+                    val loc = conn.getHeaderField("Location")
+                    if (loc.isNullOrEmpty()) throw IllegalStateException("HTTP $code")
+                    cur = try { URL(URL(cur), loc).toString() } catch (e: Exception) { loc }
+                    return@repeat
+                }
+                throw IllegalStateException("HTTP $code")
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IllegalStateException("重定向次数过多")
+    }
+
     /** 阻塞式 GET，调用方需在 IO 线程使用 */
     fun get(url: String, extraHeaders: Map<String, String> = emptyMap(), timeoutMs: Int = 8000): String {
         val proxy = proxySpec()?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress(it.first, it.second)) }
