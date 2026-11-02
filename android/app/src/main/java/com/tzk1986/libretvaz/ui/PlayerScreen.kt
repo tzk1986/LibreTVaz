@@ -94,6 +94,8 @@ fun PlayerScreen(
     var speeds by remember { mutableStateOf<List<Long?>?>(null) }
     var userPickedLine by remember { mutableStateOf(false) }
     var probeSeq by remember { mutableIntStateOf(0) }
+    var autoSrcTried by remember { mutableStateOf(false) } // autoSrc 自动换源一次性闸门
+    var pv by remember { mutableStateOf<PlayerView?>(null) } // epFull 点集后收起控制器用
 
     val player = remember { buildPlayer(context) }
 
@@ -164,6 +166,38 @@ fun PlayerScreen(
         tried = setOf(line)
         playAt(line, i)
         probeSpeeds(i)
+        if (settings.epFull) pv?.hideController() // epFull：点集后收起控制器专注全屏看
+    }
+
+    /** autoSrc：全线失败且本作品剧集极少（≤2，多半是错源）时自动搜关联换源续播，仅试一次（web fongmi_autosrc） */
+    fun tryAutoSrc() {
+        autoSrcTried = true
+        val pool = store.vodPool().filter { PerfCore.norm(it.url) != PerfCore.norm(itemS.sourceUrl) }
+        if (pool.isEmpty()) return
+        errorHint = "全线失败，正在自动搜关联换源…"
+        scope.launch {
+            val title = detailS.title.ifBlank { itemS.name }
+            val alt = runCatching { repo.search(title, pool).list.firstOrNull() }.getOrNull()
+            if (alt == null) {
+                errorHint = "已尝试全部线路均无法播放，自动换源也未找到可播来源，可「搜关联」手动换源"
+                return@launch
+            }
+            val src = VodSource(alt.sourceName, alt.sourceUrl, isAdult = alt.isAdult)
+            val d2 = repo.detail(src, alt.vodId)
+            if (d2 == null || d2.lines.isEmpty()) {
+                errorHint = "已尝试全部线路均无法播放，自动换源未返回播放地址，可「搜关联」手动换源"
+                return@launch
+            }
+            val li = Playback.pickDefaultLine(d2.lines).coerceAtLeast(0)
+            val ei = minOf(ep, (d2.lines[li].list.size - 1).coerceAtLeast(0))
+            detailS = d2
+            itemS = alt
+            line = li; ep = ei; tried = setOf(li)
+            userPickedLine = false
+            playAt(li, ei, player.currentPosition)
+            probeSpeeds(ei)
+            toast("已自动切换到「${alt.sourceName}」续播")
+        }
     }
 
     // 监听只注册一次；回调内引用的都是 delegate state，读到最新值
@@ -194,6 +228,7 @@ fun PlayerScreen(
                 val cand = Playback.pickNextLine(detailS.lines, line, ep, tried, speeds)
                 if (cand.isEmpty()) {
                     errorHint = "已尝试全部 ${detailS.lines.size} 条线路均无法播放，请「搜关联」换源"
+                    if (settings.autoSrc && !autoSrcTried && detailS.lines.size <= 2) tryAutoSrc()
                     return
                 }
                 val ni = cand[0].index
@@ -245,6 +280,7 @@ fun PlayerScreen(
                         PlayerView.ControllerVisibilityListener { v -> controlsVisible = v == View.VISIBLE },
                     )
                     findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.setKeyTimeIncrement(15_000L)
+                    pv = this
                 }
             },
             modifier = Modifier.fillMaxSize(),

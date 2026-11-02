@@ -72,9 +72,16 @@ class CmsParserTest {
         assertTrue(CmsParser.isRelevant("庆余年 第二季", "庆余年2"))
         assertTrue(CmsParser.isRelevant("庆余年第三季", "庆余年 3"))
         assertTrue(CmsParser.isRelevant("我是大侦探第二季粤语版", "我是大侦探2"))
-        assertFalse(CmsParser.isRelevant("庆余年12", "庆余年1"))
+        assertFalse(CmsParser.isRelevant("庆余年12", "庆余年1", fuzzy = false))
         assertFalse(CmsParser.isRelevant("爸爸去哪儿", "摔跤吧!爸爸"))
-        assertFalse(CmsParser.isRelevant("庆余年 第二季", "庆余年3"))
+        assertFalse(CmsParser.isRelevant("庆余年 第二季", "庆余年3", fuzzy = false))
+    }
+
+    @Test
+    fun `fuzzy core-name fallback rescues season-mismatched titles`() {
+        // 实验室「模糊搜索」开（默认）：核心片名互含也算命中（web fongmi_fuzzy 等价）
+        assertTrue(CmsParser.isRelevant("庆余年12", "庆余年1"))
+        assertTrue(CmsParser.isRelevant("庆余年 第二季", "庆余年3"))
     }
 
     @Test

@@ -141,7 +141,7 @@ fun BrowseScreen(
 
         // 功能行：对应各页面按钮（源管理/服务器模式即原顶栏按钮的入口）
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            itemsIndexed(functionCards()) { _, card ->
+            itemsIndexed(orderedCards(settings)) { _, card ->
                 FuncCard(
                     title = card.title,
                     caption = card.caption,
@@ -284,9 +284,9 @@ private fun AutoLoadMore(
     }
 }
 
-private data class FuncCardSpec(val id: String, val title: String, val caption: String)
+internal data class FuncCardSpec(val id: String, val title: String, val caption: String)
 
-private fun functionCards() = listOf(
+internal fun functionCards() = listOf(
     FuncCardSpec("vod", "点播", "分类浏览"),
     FuncCardSpec("live", "直播", "看电视"),
     FuncCardSpec("search", "搜索", "多源聚合"),
@@ -297,6 +297,31 @@ private fun functionCards() = listOf(
     FuncCardSpec("sources", "源管理", "导入订阅/源设置"),
     FuncCardSpec("settings", "设置", "播放/服务器/代理"),
 )
+
+/** 功能行 = tabsJson 存档序+显隐过滤（web getTabs 等价：点播恒首位、未知键丢弃、缺失项按默认序补显示） */
+private fun orderedCards(settings: SettingsStore): List<FuncCardSpec> {
+    val all = functionCards()
+    if (settings.tabsJson.isBlank()) return all
+    val saved = runCatching {
+        val arr = org.json.JSONArray(settings.tabsJson)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            o.optString("nav") to (o.optInt("show", 1) != 0)
+        }
+    }.getOrDefault(emptyList())
+    if (saved.isEmpty()) return all
+    val byId = all.associateBy { it.id }
+    val out = ArrayList<FuncCardSpec>()
+    byId["vod"]?.let { out.add(it) }
+    for ((nav, show) in saved) {
+        if (nav == "vod" || !show) continue
+        byId[nav]?.takeIf { it !in out }?.let { out.add(it) }
+    }
+    for (spec in all) {
+        if (spec.id != "vod" && saved.none { it.first == spec.id }) out.add(spec)
+    }
+    return out
+}
 
 @Composable
 private fun FuncCard(title: String, caption: String, selected: Boolean, onClick: () -> Unit) {

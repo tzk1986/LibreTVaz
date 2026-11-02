@@ -30,7 +30,9 @@ data class SpecSrc(val si: Int, val name: String)
 /** 搜索分片缓存：ck → (norm(url) → 带时间戳分片)，进程内存（web searchShardSet 等价，B11 落盘） */
 private val SEARCH_CACHE = ConcurrentHashMap<String, ConcurrentHashMap<String, PerfCore.Shard<VodSummary>>>()
 
-private const val TOP_BATCH = 8
+/** 设置页「清理缓存」钩子（web cache_purge 的进程内部分） */
+internal fun clearSearchShardsCache() { SEARCH_CACHE.clear() }
+
 private const val SOURCE_TIMEOUT_MS = 8_000L
 
 /**
@@ -80,7 +82,7 @@ fun CollectScreen(
         val (si, s) = x
         val list = runCatching {
             kotlinx.coroutines.withTimeout(SOURCE_TIMEOUT_MS) {
-                repo.searchSourcePage1(s, kwNow).filter { CmsParser.isRelevant(it.name, kwNow) }
+                repo.searchSourcePage1(s, kwNow).filter { CmsParser.isRelevant(it.name, kwNow, settings.fuzzy) }
             }
         }.getOrNull()
         if (ep != runSeq) return list != null
@@ -112,7 +114,7 @@ fun CollectScreen(
             val ck = PerfCore.searchKey(kwNow)
             SEARCH_CACHE[ck]?.let { shards ->
                 val siOf = items.associateBy({ PerfCore.norm(it.second.url) }, { it })
-                val split = PerfCore.splitTtl(shards, PerfCore.SEARCH_TTL)
+                val split = PerfCore.splitTtl(shards, CacheTiers.TIERS[settings.cacheTier].search)
                 (split.fresh.entries + split.stale.entries).forEach { (u, list) ->
                     val x = siOf[u] ?: return@forEach
                     appendTab(ep, x.first, list)
@@ -138,7 +140,7 @@ fun CollectScreen(
                     }
                 }
             }
-            val (first, rest) = PerfCore.splitBatches(items, TOP_BATCH)
+            val (first, rest) = PerfCore.splitBatches(items, settings.searchThreads)
             first.forEach { x -> scope.launch(Dispatchers.IO) { runOne(x) } }
             if (rest.isNotEmpty()) scope.launch(Dispatchers.IO) {
                 delay(1200)

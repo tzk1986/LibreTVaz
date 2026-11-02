@@ -33,9 +33,14 @@ object CmsParser {
     fun isAdultType(typeName: String?): Boolean =
         typeName != null && ADULT_KEYWORDS.any { typeName.contains(it) }
 
-    fun isRelevant(name: String, wd: String): Boolean {
+    fun isRelevant(name: String, wd: String, fuzzy: Boolean = true): Boolean {
         val query = prepareQuery(wd) ?: return true
-        return isRelevantPrepared(name, query)
+        val rel = isRelevantPrepared(name, query)
+        if (rel || !fuzzy) return rel
+        // 实验室「模糊搜索」：核心片名互含也算命中（源片名常带【高清】/导演名等尾缀），web fongmi_fuzzy 等价
+        val cq = com.tzk1986.libretvaz.data.perf.PerfCore.coreName(query.normalized)
+        val cn = com.tzk1986.libretvaz.data.perf.PerfCore.coreName(name)
+        return cq.isNotEmpty() && cn.isNotEmpty() && (cn.contains(cq) || cq.contains(cn))
     }
 
     private data class SeasonRef(val base: String, val season: Int, val explicit: Boolean)

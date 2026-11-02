@@ -44,6 +44,41 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_BEST_LINE, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_BEST_LINE, value).apply()
 
+    /** 对齐 web fongmi_qrauto：扫码推送的订阅自动导入（关=进源页手动确认；B8 消费） */
+    var qrAuto: Boolean
+        get() = prefs.getBoolean(KEY_QR_AUTO, true)
+        set(value) = prefs.edit().putBoolean(KEY_QR_AUTO, value).apply()
+
+    /** 对齐 web fongmi_threads：搜索首批并发源数（其余 1.2s 次批） */
+    var searchThreads: Int
+        get() = prefs.getInt(KEY_THREADS, 8)
+        set(value) = prefs.edit().putInt(KEY_THREADS, value.coerceIn(1, 48)).apply()
+
+    /** 对齐 web fongmi_fuzzy：片名核心词容错（关=严格匹配） */
+    var fuzzy: Boolean
+        get() = prefs.getBoolean(KEY_FUZZY, true)
+        set(value) = prefs.edit().putBoolean(KEY_FUZZY, value).apply()
+
+    /** 对齐 web fongmi_autosrc：全线失败自动搜关联换源续播（默认关） */
+    var autoSrc: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_SRC, false)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_SRC, value).apply()
+
+    /** 对齐 web fongmi_epfull：点选剧集后收起控制器专注全屏看 */
+    var epFull: Boolean
+        get() = prefs.getBoolean(KEY_EP_FULL, true)
+        set(value) = prefs.edit().putBoolean(KEY_EP_FULL, value).apply()
+
+    /** 对齐 web fongmi_cache 档位：0短/1标准/2长/3超长（聚合+搜索 TTL 一组） */
+    var cacheTier: Int
+        get() = prefs.getInt(KEY_CACHE_TIER, 1).coerceIn(0, CacheTiers.TIERS.size - 1)
+        set(value) = prefs.edit().putInt(KEY_CACHE_TIER, value.coerceIn(0, CacheTiers.TIERS.size - 1)).apply()
+
+    /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
+    var tabsJson: String
+        get() = prefs.getString(KEY_TABS, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_TABS, value).apply()
+
     /** 专区预置站单已种版本号（对应 web fongmi_zone_seed；升 Zone.SEED_VER 触发补种，清标记=恢复预置） */
     var zoneSeedVer: String
         get() = prefs.getString(KEY_ZONE_SEED, "").orEmpty()
@@ -71,5 +106,24 @@ class SettingsStore(context: Context) {
         private const val KEY_SITE_IDX = "site_idx"
         private const val KEY_ZONE_SEED = "zone_seed"
         private const val KEY_PROXY = "proxy_url"
+        private const val KEY_QR_AUTO = "qr_auto"
+        private const val KEY_THREADS = "search_threads"
+        private const val KEY_FUZZY = "fuzzy"
+        private const val KEY_AUTO_SRC = "auto_src"
+        private const val KEY_EP_FULL = "ep_full"
+        private const val KEY_CACHE_TIER = "cache_tier"
+        private const val KEY_TABS = "tabs"
     }
+}
+
+/** 缓存时长档位（web CACHE_TIERS 等价）：聚合墙 TTL + 搜索分片 TTL 一组切换 */
+object CacheTiers {
+    data class Tier(val label: String, val agg: Long, val search: Long)
+
+    val TIERS = listOf(
+        Tier("短（聚合1分/搜索3分）", 60_000L, 3 * 60_000L),
+        Tier("标准（聚合3分/搜索10分）", 3 * 60_000L, 10 * 60_000L),
+        Tier("长（聚合10分/搜索30分）", 10 * 60_000L, 30 * 60_000L),
+        Tier("超长（聚合30分/搜索2小时）", 30 * 60_000L, 2 * 3600_000L),
+    )
 }

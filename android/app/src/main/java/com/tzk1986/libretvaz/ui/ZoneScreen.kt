@@ -48,6 +48,9 @@ private const val ZSP_TTL = 7 * 24 * 3600_000L
 private val ZDETAIL = MemCache<VideoDetail>(300)
 private const val ZDETAIL_TTL = 6 * 3600_000L
 
+/** 设置页「清理缓存」钩子：专区角标测速+条目详情进程内缓存（web cache_purge 的 zsp 部分） */
+internal fun clearZoneCaches() { ZSP.clear(); ZDETAIL.clear() }
+
 /**
  * 资源口（专区池聚合墙，web renderZone 等价）：预置/自导入专区源按健康 ms 取前 6 聚合，
  * 一源返回即增量上墙（首绘年降序一次，后续未见片名按到达序追加队尾，不动已上屏条目）；

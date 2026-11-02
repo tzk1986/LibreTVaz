@@ -33,6 +33,8 @@ object LineSpeed {
 
     fun put(key: String, speeds: List<Long?>) { cache[key] = speeds }
 
+    fun clearAll() { cache.clear() }
+
     /**
      * 并发（4）测本作品本集前 ≤10 线：完成一线即回调 onLine（全表快照，UI 原位刷新）；
      * 返回最终全表。已缓存直接返回缓存（同 web「本作品本集已测/在测不重测」）。
