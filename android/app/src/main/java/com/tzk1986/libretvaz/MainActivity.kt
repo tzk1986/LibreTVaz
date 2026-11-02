@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.tzk1986.libretvaz.data.DiskCache
 import com.tzk1986.libretvaz.data.Http
 import com.tzk1986.libretvaz.data.RemoteHub
 import com.tzk1986.libretvaz.data.SettingsStore
@@ -25,6 +26,8 @@ import com.tzk1986.libretvaz.ui.CollectScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
 import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
+import com.tzk1986.libretvaz.ui.clearSearchShardsCache
+import com.tzk1986.libretvaz.ui.clearZoneSpeedCache
 import com.tzk1986.libretvaz.ui.ZoneScreen
 import com.tzk1986.libretvaz.ui.theme.LibreTVazTheme
 
@@ -57,6 +60,17 @@ sealed class Screen {
 }
 
 class MainActivity : ComponentActivity() {
+
+    /** B11 退出清理：低水位修剪磁盘 + 作废时效性差的搜索分片/专区角标（盘 IO 后台线程，不卡退出动画） */
+    override fun onStop() {
+        super.onStop()
+        Thread {
+            runCatching { clearSearchShardsCache() }
+            runCatching { clearZoneSpeedCache() }
+            runCatching { DiskCache.trimTo(DiskCache.LOW_WATER_BYTES) }
+        }.start()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val sourceStore = SourceStore(this)

@@ -52,6 +52,9 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
+    // B11 视频播放盘缓存 SimpleCache 需要数据库提供器；周期清理任务用 WorkManager
+    implementation(libs.androidx.media3.database)
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.coil.compose)
     // 拼音首字母索引需与浏览器 Intl(pinyin) 行为一致：桌面 JVM 的 java.text.Collator 非拼音序，统一用 ICU4J
     implementation(libs.icu4j)

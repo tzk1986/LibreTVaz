@@ -13,12 +13,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tzk1986.libretvaz.data.*
 import com.tzk1986.libretvaz.data.perf.LineSpeed
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -34,6 +37,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var autoNext by remember { mutableStateOf(store.autoNext) }
     var autoLine by remember { mutableStateOf(store.autoLine) }
     var resume by remember { mutableStateOf(store.resumePlay) }
@@ -82,8 +86,16 @@ fun SettingsScreen(
             item { SettingCard("历史记录条数", "$histMax 条") { dlg = "histmax" } }
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }
             item { SettingCard("清理缓存", purgeMsg) {
-                clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll(); Agg.clearAll()
-                purgeMsg = "已清理（搜索分片/专区角标/线路测速/聚合墙）"
+                // B11 扩磁盘：CMS 分片文件全删 + 视频 SimpleCache 释放重建，报回收体积（web cache_purge 等价）
+                scope.launch {
+                    val freed = withContext(Dispatchers.IO) {
+                        val sz = DiskCache.sizeBytes() + VideoCache.sizeBytes(context)
+                        clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll(); Agg.clearAll()
+                        DiskCache.clearAll(); VideoCache.clear(context)
+                        sz
+                    }
+                    purgeMsg = "已清理内存+磁盘（回收 ${DiskCache.sizeLabel(freed)}）"
+                }
             } }
             item { SettingCard("导航栏", "显隐与排序（${tabOrder.count { it.second }}/${functionCards().size} 显示）") {
                 tabOrder = loadTabOrder(store); dlg = "tabs"

@@ -16,7 +16,7 @@ data class AggCat(val key: String, val kw: List<String>, val rlabs: List<String>
 
 /**
  * 聚合墙引擎（web aggPool/fetchAggSource/runAggWall/aggLoadMore/aggPrefetch 等价）：
- * 分片按源存进程内 MemCache（键 aggs:源|分类[@地区]），首绘用已有分片秒开，续轮各源 pg+1
+ * 分片按源存双层缓存 DiskBacked（内存 LRU+磁盘回灌，键 aggs:源|分类[@地区]），首绘用已有分片秒开，续轮各源 pg+1
  * 追加进分片（dedupById、每源 800 部封顶）再整墙重并——队列化只追加未见片名，不动已上屏条目。
  * 判底以「本轮整墙是否有新增」为准（无轮次上限；300 轮仅极端保险丝），单源失败静默。
  * 地区预设：分类树收录该区的源排前；墙拉起后低并发预取其余分类（只进分片不渲染，切类秒开）。
@@ -34,8 +34,8 @@ object Agg {
         AggCat("动漫", listOf("动漫", "动画", "番")),
     )
 
-    val shards = MemCache<List<VodSummary>>(256)
-    private val typesC = MemCache<List<VodType>>(64)
+    val shards = DiskBacked(MemCache<List<VodSummary>>(256), "aggs:", CmsCodecs::encSummaries, CmsCodecs::decSummaries)
+    private val typesC = DiskBacked(MemCache<List<VodType>>(64), "types:", CmsCodecs::encTypes, CmsCodecs::decTypes)
     private val typesDedupe = KeyDedupe<List<VodType>>()
 
     fun key(s: VodSource, cat: AggCat?): String =
@@ -54,16 +54,17 @@ object Agg {
     fun fresh(s: VodSource, cat: AggCat?, ttl: Long, now: Long = System.currentTimeMillis()): Boolean =
         shards.getRaw(key(s, cat))?.let { it.v.isNotEmpty() && now - it.t < ttl } == true
 
-    /** 分类树：6h 新鲜缓存 + 同源并发合并；拉新失败回退旧条目（web getSrcTypes 等价） */
+    /** 分类树：6h 新鲜缓存（B11 起双层：内存+磁盘回灌）+ 同源并发合并；拉新失败回退旧条目（web getSrcTypes 等价） */
     suspend fun typesOf(repo: CmsRepository, s: VodSource): List<VodType> {
-        typesC.get(s.url, TYPES_TTL)?.let { return it }
+        val key = "types:" + s.url
+        typesC.get(key, TYPES_TTL)?.let { return it }
         return runCatching {
             typesDedupe.run(s.url) {
                 val fresh = repo.types(s)
-                if (fresh.isNotEmpty()) { typesC.set(s.url, fresh); fresh }
-                else typesC.getRaw(s.url)?.v ?: emptyList()
+                if (fresh.isNotEmpty()) { typesC.set(key, fresh); fresh }
+                else typesC.getRaw(key)?.v ?: emptyList()
             }
-        }.getOrElse { typesC.getRaw(s.url)?.v ?: emptyList() }
+        }.getOrElse { typesC.getRaw(key)?.v ?: emptyList() }
     }
 
     private fun isTop(t: VodType) = t.pid.isEmpty() || t.pid == "0"
@@ -155,6 +156,6 @@ object Agg {
         }
     }
 
-    /** 设置页「清理缓存」钩子：聚合分片+分类树（web purgeCache('aggs:') 等价） */
+    /** 设置页「清理缓存」钩子：聚合分片+分类树，内存与磁盘双清（web purgeCache('aggs:') 等价） */
     fun clearAll() { shards.clear(); typesC.clear() }
 }

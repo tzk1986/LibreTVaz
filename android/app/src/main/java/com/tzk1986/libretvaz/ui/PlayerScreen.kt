@@ -45,13 +45,15 @@ internal fun speedTagColor(cls: String): Color = when (cls) {
     else -> Color(0xFF9E9E9E)
 }
 
+@OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun buildPlayer(context: android.content.Context): ExoPlayer {
     // 代理经 Http.applyGlobalProxy() 的 JVM 全局 ProxySelector 生效（media3 无 setProxy API）
     val dsf = DefaultHttpDataSource.Factory()
         .setUserAgent(Http.CHROME_UA)
         .setAllowCrossProtocolRedirects(true)
+    // B11：前置 200MB LRU 盘缓存（HLS 分片/MP4 Range），回看/重播不白耗流量，也杜绝无限吃盘
     return ExoPlayer.Builder(context)
-        .setMediaSourceFactory(DefaultMediaSourceFactory(dsf))
+        .setMediaSourceFactory(DefaultMediaSourceFactory(VideoCache.factory(context, dsf)))
         .build()
         .apply { playWhenReady = true }
 }

@@ -36,16 +36,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-/** 墙内条目起播速度缓存（web adsp/zsp 语义，7 天）；进程内存，B11 落盘 */
-private val ZSP = MemCache<Long>(600)
+/** 墙内条目起播速度缓存（web adsp/zsp 语义，7 天）；B11 双层：内存+磁盘 */
+private val ZSP = DiskBacked(MemCache<Long>(600), "zsp:", CmsCodecs::encLong, CmsCodecs::decLong)
 private const val ZSP_TTL = 7 * 24 * 3600_000L
 
-/** 专区条目详情缓存（测速取首线路首集用，6h） */
-private val ZDETAIL = MemCache<VideoDetail>(300)
+/** 专区条目详情缓存（测速取首线路首集用，6h）；键与角标分离（detail: 命名空间，TTL 不同不得混用） */
+private val ZDETAIL = DiskBacked(MemCache<VideoDetail>(300), "detail:", CmsCodecs::encDetail, CmsCodecs::decDetail)
 private const val ZDETAIL_TTL = 6 * 3600_000L
 
-/** 设置页「清理缓存」钩子：专区角标测速+条目详情进程内缓存（web cache_purge 的 zsp 部分） */
+/** 设置页「清理缓存」钩子：专区角标测速+条目详情（内存+磁盘双清，web cache_purge 的 zsp 部分） */
 internal fun clearZoneCaches() { ZSP.clear(); ZDETAIL.clear() }
+
+/** 退出清理钩子：起播速度角标时效性差，整池作废（内存+磁盘） */
+internal fun clearZoneSpeedCache() { ZSP.clear() }
 
 /**
  * 资源口（专区池聚合墙，web renderZone 等价）：预置/自导入专区源按健康 ms 取前 6 聚合，
@@ -90,6 +93,7 @@ fun ZoneScreen(
     BackHandler { onBack() }
 
     fun zspKey(it: VodSummary) = "zsp:${PerfCore.norm(it.sourceUrl)}|${it.vodId}"
+    fun zDetailKey(it: VodSummary) = "detail:${PerfCore.norm(it.sourceUrl)}|${it.vodId}"
 
     /** 条目起播速度：详情→首线路首集 Range 采样；并发 3、前 60、7 天缓存秒回 */
     fun speedTest() {
@@ -107,8 +111,9 @@ fun ZoneScreen(
                             sem.withPermit {
                                 if (s != speedSeq) return@withPermit -1L
                                 val src = VodSource(it.sourceName, it.sourceUrl, isAdult = true)
-                                val d = ZDETAIL.get(k, ZDETAIL_TTL) ?: repo.detail(src, it.vodId)
-                                d?.let { dd -> ZDETAIL.set(k, dd) }
+                                val dk = zDetailKey(it)
+                                val d = ZDETAIL.get(dk, ZDETAIL_TTL) ?: repo.detail(src, it.vodId)
+                                d?.let { dd -> ZDETAIL.set(dk, dd) }
                                 val link = d?.lines?.firstOrNull()?.list?.firstOrNull()?.link
                                 if (link == null) 0L else LineSpeed.sampleKbps(LineSpeed.segOrSelf(link))
                             }
