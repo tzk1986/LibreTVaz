@@ -170,7 +170,7 @@ function parseFilterMeta(text) {
 const coreNameOf = n => (typeof PerfCore !== 'undefined' && PerfCore.coreName ? PerfCore.coreName(n) : '');
 function createVocabPool(wordsKey, wfreqKey) {
   const index = (typeof PerfCore !== 'undefined' && PerfCore.createPinIndex)
-    ? PerfCore.createPinIndex({ weights: LS(wfreqKey, {}) }) : null;
+    ? PerfCore.createPinIndex({ weights: LS(wfreqKey, {}), max: 8000 }) : null; // 目录全量片名做底，热词靠权重在淘汰时存活
   let words = index ? index.list() : LS(wordsKey, []);
   if (index) { // 恢复存量词库时补派生一次，老 localStorage 立即可用核心词
     const saved = LS(wordsKey, []);
@@ -1858,11 +1858,15 @@ function reapplyZoneTags(shown) {
   }
 }
 
-/* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想；按池隔离（专区词只进专区池） */
+/* 词库自举（方案：现有资源剧名全量做底 + 新数据增量 + 热门搜索加权，一词库三用途）：
+   从至多 10 个健康源各拉至多 8 页目录片名入库；拉满 min 即停；不足 min 也记录本轮完成时间，
+   6h 内不再重复整轮爬（源库本就那么多，防每次进搜索页空耗带宽）；按池隔离（专区词只进专区池） */
 const vocabSeeding = { vod: false, zone: false };
-async function seedVocabPool(zone, min = 600) {
+const vocabSeedAt = { vod: 0, zone: 0 };
+async function seedVocabPool(zone, min = 3000) {
   const pk = zone ? 'zone' : 'vod';
   if (vocabSeeding[pk] || vocabSize(zone) >= min) return;
+  if (vocabSeedAt[pk] && Date.now() - vocabSeedAt[pk] < 6 * 3600e3) return;
   vocabSeeding[pk] = true;
   try {
     const pool = SRC.vod.filter(s => !isDead(s.url) && !!s.isAdult === !!zone);
@@ -1871,21 +1875,22 @@ async function seedVocabPool(zone, min = 600) {
     const seen = new Set();
     const uniq = [];
     for (const s of order) {
-      if (uniq.length >= 6) break;
+      if (uniq.length >= 10) break;
       if (seen.has(norm(s.url))) continue;
       seen.add(norm(s.url)); uniq.push(s);
     }
-    await pMap(uniq, async s => { // 并发 3：词库尽早可用；每源拉 2 页（方案③.5 扩词库）
-      for (const pg of [1, 2]) {
+    await pMap(uniq, async s => { // 并发 3：词库尽早可用；每源至多 8 页目录
+      for (let pg = 1; pg <= 8; pg++) {
         if (vocabSize(zone) >= min) return;
         try { addWords(parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), s), 12000).map(it => it.name).filter(Boolean), zone); }
-        catch { break; /* 单源失败跳过 */ }
+        catch { break; /* 单源失败/翻页到头跳过 */ }
       }
     }, 3);
+    vocabSeedAt[pk] = Date.now();
   } finally { vocabSeeding[pk] = false; }
 }
-const seedVocab = (min = 600) => seedVocabPool(false, min);
-const seedZoneVocab = (min = 400) => seedVocabPool(true, min);
+const seedVocab = (min = 3000) => seedVocabPool(false, min);
+const seedZoneVocab = (min = 1500) => seedVocabPool(true, min);
 /* ================= 搜索输入页（SearchActivity：三栏，对标影视仓搜索页） =================
    左列搜索历史（竖排+清空）｜中列指定源+按钮组+六列矩阵键盘（A-Z0-9 共36键）+拼音联想｜右列热门搜索榜
    点播/资源口两池共用本页同构布局，数据全隔离：历史 fongmi_kw(_zone)、词库/词频 fongmi_words(_zone)/fongmi_wfreq(_zone)、源池与结果均由 Search.mode 决定 */
