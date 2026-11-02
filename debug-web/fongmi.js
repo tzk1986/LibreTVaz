@@ -1234,7 +1234,7 @@ function onScroll() {
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '', aggCat: null, loadingMore: false };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '', aggCat: null, loadingMore: false, win: 240 };
 function renderVod() {
   if (App.srcDirty) { App.srcDirty = false; Vod.tab = null; } // 重进点播消费源变更（等效原强刷的 tab 重置）
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si] && !isZoneRec(h));
@@ -1419,7 +1419,7 @@ async function runAggWall(cat) {
   const grid = $('#vodGrid'); if (!grid) return;
   const rid = ++Vod.reqId, token = ++aggToken;
   const pool = aggPool();
-  Vod.aggCat = cat || null; // S4 无限下拉：加载更多按同一分类续页
+  Vod.aggCat = cat || null; Vod.win = 240; // S4 无限下拉：加载更多按同一分类续页；新墙重置渲染窗口
   const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && (App.view === 'vod' || App.view === 'zone') && $('#vodGrid');
   const merge = () => {
     const all = [];
@@ -1461,38 +1461,38 @@ async function runAggWall(cat) {
 const loadAgg = () => runAggWall(null);
 const loadAggCat = cat => runAggWall(cat);
 /* S4 无限下拉（图片流式）：聚合墙（点播聚合/资源口）哨兵「加载更多」OK 触发——各源同分类拉下一轮页，
-   追加进分片缓存后整墙重并（dedupByName 旧位保留）；全空轮或 10 轮封顶→「已到上限」。并发 6、单源 8s 快断、
-   失败静默；epoch/token 防切类换墙串数据；单源模式走既有 loadVod(pg+1) */
+   去重后追加进分片缓存再整墙重并；**只要本轮整墙有新作品就能一直按下去（无轮次上限）**，
+   「各源均无新增」才判到底（有些 CMS 无视 pg 恒回首页，按增量判重才不会空转死循环）。
+   并发 6、单源 8s 快断、失败静默；epoch/token 防切类换墙串数据；单源模式走既有 loadVod(pg+1)。
+   深度上界=每源分片 800 部（防内存/localStorage 膨胀，到界即无新增→自然到底）；300 轮仅为极端保险丝 */
 async function aggLoadMore() {
   if (!Vod.agg || Vod.loadingMore || !Vod.more) return;
   const cat = Vod.aggCat || null;
   const rid = Vod.reqId, token = aggToken;
   const pg = (Vod.page || 1) + 1;
-  if (pg > 10) { Vod.more = false; drawVodGrid(); return; }
+  if (pg > 300) { Vod.more = false; drawVodGrid(); return; }
   Vod.loadingMore = true;
   const btn = $('#moreBtn'); if (btn) btn.textContent = '加载中…';
-  const pool = aggPool();
-  let any = false;
-  await pMap(pool, async s => {
+  await pMap(aggPool(), async s => {
     try {
       const more = await fetchAggSource(s, cat, pg);
       if (!more.length) return;
-      any = true;
       const k = aggKey(s, cat);
       const old = (cacheRaw(k) && cacheRaw(k).d) || [];
-      cacheSet(k, dedupById(old.concat(more)).slice(0, 800)); // 分片封顶 800 条防内存膨胀
+      cacheSet(k, dedupById(old.concat(more)).slice(0, 800)); // 分片深度 800 部/源封顶
     } catch { /* 单源失败跳过 */ }
   }, 6);
   Vod.loadingMore = false;
   if (rid !== Vod.reqId || token !== aggToken || (App.view !== 'vod' && App.view !== 'zone') || !Vod.agg) return;
-  Vod.page = pg;
-  Vod.more = any && pg < 10;
+  const prevLen = (Vod.items || []).length;
   const all = [];
   for (const s of aggPool()) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
   const items = dedupByName(all);
+  Vod.page = pg;
+  Vod.more = items.length > prevLen; // 有新增=还能继续无限拉；全是重复/空=到底
   if (items.length) { Vod.items = sortByYearDesc(items); addWords(items.map(it => it.name), Zone.active); }
   drawVodGrid();
-  toast(any ? `第 ${pg} 轮加载完成，共 ${Vod.items.length} 部` : '各源均无更多内容');
+  toast(Vod.more ? `第 ${pg} 轮：共 ${Vod.items.length} 部（+${Vod.items.length - prevLen}）` : '各源已无新内容（到底了）');
 }
 /* 预取其余分类的源分片（只入缓存不渲染），低并发避免抢当前请求带宽 */
 async function aggPrefetch(rid, token, skip) {
@@ -1645,20 +1645,29 @@ function drawVodGrid() {
       : `地区「${Vod.preset}」：${Vod.agg ? '聚合' : `已拉 ${Vod.page} 页`} ${Vod.items.length} 部，筛出 ${shown.length} 部${unknown ? ` · ${unknown} 部无地区信息未显示` : ''}${!Vod.agg && Vod.page >= 10 ? ' · 已拉满 10 页上限' : ''}`;
   } else Vod.presetInfo = '';
   const wasMore = Focus.el && Focus.el.id === 'moreBtn'; // S4 哨兵重绘后焦点归位，遥控可连续 OK 下拉
-  const atCap = !Vod.agg && Vod.preset && !Vod.pSrv && Vod.page >= 10;
+  /* S4 窗口渲染：聚合/专区墙每次只挂 240 部进 DOM，哨兵先本地展开（零请求），展完再联网续轮——
+     连按到底也不卡 TV 浏览器；单源模式本就逐页追加不设窗 */
+  const total = shown.length;
+  const win = Vod.agg ? Math.min(Vod.win || 240, total) : total;
+  const view = win < total ? shown.slice(0, win) : shown;
+  const atCap = !Vod.agg && Vod.preset && !Vod.pSrv && Vod.page >= 10; // R8 客户端地区过滤 10 页封顶（性能护栏，非内容上限）
   const canMore = !!Vod.more && !atCap;
-  grid.innerHTML = (shown.length
-    ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
+  grid.innerHTML = (total
+    ? view.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
     : `<p class="muted">${Vod.preset ? esc(Vod.presetInfo) + '（仍无数据可继续下滑拉取或选「全部」）' : (Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据')}</p>`)
-    + (shown.length ? `<button class="btn morebtn" data-focus id="moreBtn">${Vod.loadingMore ? '加载中…' : (canMore ? '⌄ 加载更多（OK 键继续下刷）' : '已到上限')}</button>` : '');
-  if (Zone.active) reapplyZoneTags(shown); // 资源口墙增量重绘后回贴测速标签
+    + (total ? `<button class="btn morebtn" data-focus id="moreBtn">${Vod.loadingMore ? '加载中…' : (win < total ? `⌄ 展开更多（本墙还有 ${total - win} 部）` : (canMore ? '⌄ 加载更多（OK 继续无限下刷）' : '已到底（各源无新内容）'))}</button>` : '');
+  if (Zone.active) reapplyZoneTags(view); // 资源口墙增量重绘后回贴测速标签
   $('#presetInfo') && ($('#presetInfo').textContent = Vod.presetInfo || '');
   const mb = $('#moreBtn');
   if (mb) {
-    mb.onclick = () => { if (Vod.agg) aggLoadMore(); else if (!Vod.loading && canMore) loadVod(Vod.page + 1); };
+    mb.onclick = () => {
+      if (Vod.agg && win < total) { Vod.win = win + 240; drawVodGrid(); return; } // 本地展开，不发请求
+      if (Vod.agg) aggLoadMore();
+      else if (!Vod.loading && canMore) loadVod(Vod.page + 1);
+    };
     if (wasMore) Focus.set(mb);
   }
-  bindGrid(grid, shown, it => {
+  bindGrid(grid, view, it => {
     if (!Vod.agg) { openDetail(it); return; }
     // 聚合墙：点击片名进入跨源搜索（影视仓豆瓣式：先统一展示，选中资源再全源查找）
     Collect.kw = it.name; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
