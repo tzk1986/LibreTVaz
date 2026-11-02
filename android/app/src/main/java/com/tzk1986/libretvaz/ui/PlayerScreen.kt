@@ -38,7 +38,7 @@ private val RESUME_MAP = java.util.concurrent.ConcurrentHashMap<String, Triple<I
 private fun resumeKey(it: VodSummary) = "${it.sourceKey}|${it.vodId}"
 
 /** 测速标签配色（对齐 web sp-ok/sp-mid/sp-bad/sp-dim 语义色） */
-private fun speedTagColor(cls: String): Color = when (cls) {
+internal fun speedTagColor(cls: String): Color = when (cls) {
     "sp-ok" -> Color(0xFF66BB6A)
     "sp-mid" -> Color(0xFFFFC107)
     "sp-bad" -> Color(0xFFEF5350)

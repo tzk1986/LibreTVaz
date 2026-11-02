@@ -35,7 +35,7 @@ fun ProbeScreen(
     val scope = rememberCoroutineScope()
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
-    var sources by remember { mutableStateOf(store.vodSources()) }
+    var sources by remember { mutableStateOf(store.vodPool()) }
     var rows by remember { mutableStateOf<List<ProbeRow>?>(null) } // 与 sources 下标对齐；null=未检测
     var running by remember { mutableStateOf(false) }
     var seq by remember { mutableIntStateOf(0) }
@@ -54,7 +54,7 @@ fun ProbeScreen(
             val (kept, removed) = health.pruneDead(store.vodSources())
             if (removed > 0) {
                 store.replaceVod(kept)
-                sources = kept
+                sources = store.vodPool()
                 rows = null // 下标已变，清空待重测
             }
         }

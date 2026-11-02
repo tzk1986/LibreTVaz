@@ -49,13 +49,14 @@ fun BrowseScreen(
     onKeep: () -> Unit,
     onHist: () -> Unit,
     onProbe: () -> Unit,
+    onZone: () -> Unit,
     onPick: (VodSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val repo = remember { CmsRepository() }
     val settings = remember { SettingsStore(context) }
-    var sources by remember { mutableStateOf(store.vodSources()) }
+    var sources by remember { mutableStateOf(store.vodPool()) }
     var sourceIdx by remember { mutableStateOf(settings.siteIdx) }
     var types by remember { mutableStateOf<List<VodType>>(emptyList()) }
     var type by remember { mutableStateOf<VodType?>(null) }
@@ -70,7 +71,7 @@ fun BrowseScreen(
     var preset by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
 
     // 从源管理返回时刷新源列表
-    LaunchedEffect(Unit) { sources = store.vodSources() }
+    LaunchedEffect(Unit) { sources = store.vodPool() }
     if (sourceIdx >= sources.size) sourceIdx = 0
     val source: VodSource? = sources.getOrNull(sourceIdx)
 
@@ -151,6 +152,7 @@ fun BrowseScreen(
                             "keep" -> onKeep()
                             "hist" -> onHist()
                             "probe" -> onProbe()
+                            "zone" -> onZone()
                             "sources" -> onSources()
                             "settings" -> onSettings()
                         }
@@ -289,6 +291,7 @@ private fun functionCards() = listOf(
     FuncCardSpec("keep", "收藏", "追剧收藏"),
     FuncCardSpec("hist", "历史", "播放记录"),
     FuncCardSpec("probe", "测速", "源连接探活"),
+    FuncCardSpec("zone", "资源口", "专区聚合墙"),
     FuncCardSpec("sources", "源管理", "导入订阅/源设置"),
     FuncCardSpec("settings", "设置", "播放/服务器/代理"),
 )

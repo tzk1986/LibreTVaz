@@ -23,6 +23,7 @@ import com.tzk1986.libretvaz.ui.ProbeScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
 import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
+import com.tzk1986.libretvaz.ui.ZoneScreen
 import com.tzk1986.libretvaz.ui.theme.LibreTVazTheme
 
 sealed class Screen {
@@ -32,9 +33,10 @@ sealed class Screen {
     data object Search : Screen()
     data object Browse : Screen()
     data object Probe : Screen()
+    data object Zone : Screen()
     /** 四池：点播/专区各自的收藏与历史（zone=true 为专区池，对应 web keep/hist/zonekeep/zonehist） */
-    data class Keep(val zone: Boolean) : Screen()
-    data class Hist(val zone: Boolean) : Screen()
+    data class Keep(val zone: Boolean, val back: Screen = Browse) : Screen()
+    data class Hist(val zone: Boolean, val back: Screen = Browse) : Screen()
     data class Detail(val item: VodSummary, val backTo: Screen) : Screen()
     /** 播放页携带完整多线路上下文，页内直接换集/换线/搜本作（对齐 web openDetail 闭包） */
     /** 直播等单地址场景的轻量播放页 */
@@ -56,6 +58,7 @@ class MainActivity : ComponentActivity() {
         val settingsStore = SettingsStore(this)
         Http.proxyUrl = settingsStore.proxyUrl // 全局 HTTP/播放数据源共用可选代理
         Http.applyGlobalProxy()
+        sourceStore.alignZone() // 冷启动归池收编（站单空=静默跳过）
         setContent {
             LibreTVazTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -75,12 +78,12 @@ class MainActivity : ComponentActivity() {
                         )
                         is Screen.Keep -> KeepScreen(
                             zone = current.zone,
-                            onBack = { screen = Screen.Browse },
+                            onBack = { screen = current.back },
                             onPick = { screen = Screen.Detail(it, current) },
                         )
                         is Screen.Hist -> HistScreen(
                             zone = current.zone,
-                            onBack = { screen = Screen.Browse },
+                            onBack = { screen = current.back },
                             onPick = { screen = Screen.Detail(it, current) },
                         )
                         Screen.Browse -> BrowseScreen(
@@ -92,7 +95,16 @@ class MainActivity : ComponentActivity() {
                             onKeep = { screen = Screen.Keep(false) },
                             onHist = { screen = Screen.Hist(false) },
                             onProbe = { screen = Screen.Probe },
+                            onZone = { screen = Screen.Zone },
                             onPick = { screen = Screen.Detail(it, Screen.Browse) },
+                        )
+                        Screen.Zone -> ZoneScreen(
+                            store = sourceStore,
+                            onBack = { screen = Screen.Browse },
+                            onSearch = { screen = Screen.Search },
+                            onKeep = { screen = Screen.Keep(true, Screen.Zone) },
+                            onHist = { screen = Screen.Hist(true, Screen.Zone) },
+                            onPick = { screen = Screen.Detail(it, Screen.Zone) },
                         )
                         Screen.Probe -> ProbeScreen(
                             store = sourceStore,

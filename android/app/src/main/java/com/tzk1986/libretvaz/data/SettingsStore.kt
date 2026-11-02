@@ -44,6 +44,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_BEST_LINE, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_BEST_LINE, value).apply()
 
+    /** 专区预置站单已种版本号（对应 web fongmi_zone_seed；升 Zone.SEED_VER 触发补种，清标记=恢复预置） */
+    var zoneSeedVer: String
+        get() = prefs.getString(KEY_ZONE_SEED, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_ZONE_SEED, value).apply()
+
     /** 当前点播源下标（对应 web fongmi_site_idx；跨页面共享，测速墙点行可切换） */
     var siteIdx: Int
         get() = prefs.getInt(KEY_SITE_IDX, 0).coerceAtLeast(0)
@@ -64,6 +69,7 @@ class SettingsStore(context: Context) {
         private const val KEY_LINE_SPEED = "line_speed"
         private const val KEY_AUTO_BEST_LINE = "auto_best_line"
         private const val KEY_SITE_IDX = "site_idx"
+        private const val KEY_ZONE_SEED = "zone_seed"
         private const val KEY_PROXY = "proxy_url"
     }
 }

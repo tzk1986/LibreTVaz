@@ -8,18 +8,32 @@ import org.json.JSONObject
 
 /** 多点播源 + 多直播源的本地持久化管理（直连模式的核心配置） */
 class SourceStore(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences("libretvaz_sources", Context.MODE_PRIVATE)
+    private val app = context.applicationContext
+    private val prefs = app.getSharedPreferences("libretvaz_sources", Context.MODE_PRIVATE)
 
     fun vodSources(): List<VodSource> = decodeVod(prefs.getString(KEY_VOD, "[]") ?: "[]")
     fun liveSources(): List<LiveSource> = decodeLive(prefs.getString(KEY_LIVE, "[]") ?: "[]")
 
+    /** 归池收编（web syncSrc→alignZonePool：每次读源前对齐，只升不降） */
+    fun alignZone(): Boolean = Zone.align(app, this)
+
+    /** 点播池（常规视图/搜索/测速墙消费）：对齐后取非专区源，专区只在资源口出现 */
+    fun vodPool(): List<VodSource> {
+        alignZone()
+        return vodSources().filterNot { it.isAdult }
+    }
+
     fun addVod(source: VodSource): Boolean {
         val url = normalizeVodUrl(source.url)
         if (!isHttp(url)) return false
-        return mutateVod { list ->
+        // 源名命中专区分类词（web isAdultType）→ 直接归专区池
+        val adult = source.isAdult || Zone.isAdultType(source.name)
+        val ok = mutateVod { list ->
             if (list.size >= MAX_VOD || list.any { it.url == url }) false
-            else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url)); true }
+            else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url, isAdult = adult)); true }
         }
+        if (ok) alignZone()
+        return ok
     }
 
     fun addLive(source: LiveSource): Boolean {
@@ -62,6 +76,7 @@ class SourceStore(context: Context) {
         var liveAdded = 0
         mutateVod { list -> vodAdded = mergeVod(list, parsed.vod); true }
         mutateLive { list -> liveAdded = mergeLive(list, parsed.live); true }
+        alignZone() // 订阅内命中预置站单的源即收进专区池并去重（web syncSrc 同款）
         return ImportResult(vodAdded, liveAdded, parsed.skipped, parsed.format, parsed.name, parsed.repos, parsed.reposFailed)
     }
 
@@ -69,7 +84,10 @@ class SourceStore(context: Context) {
         var added = 0
         for (s in incoming) {
             if (target.size >= MAX_VOD) break
-            if (target.none { it.url == s.url }) { target.add(s); added++ }
+            if (target.none { it.url == s.url }) {
+                target.add(if (s.isAdult || Zone.isAdultType(s.name)) s.copy(isAdult = true) else s)
+                added++
+            }
         }
         return added
     }
