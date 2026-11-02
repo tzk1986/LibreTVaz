@@ -25,17 +25,35 @@ async function httpGet(url, timeout = 12000) {
 /* ================= 数据层（与 CmsRepository 同规则） ================= */
 const loadSrc = () => { try { const o = JSON.parse(localStorage.getItem('libretvaz_sources')) || {}; return { vod: o.vod || [], live: o.live || [], subs: o.subs || [] }; } catch { return { vod: [], live: [], subs: [] }; } };
 let SRC = loadSrc();
-const syncSrc = () => { SRC = loadSrc(); };
+const syncSrc = () => { SRC = loadSrc(); fixZoneIdx(); };
+/* 专区源不进常规上下文（只在资源口展示）：当前下标指向专区源时改指首个非专区源 */
+function fixZoneIdx() {
+  if (!SRC.vod[Home.srcIdx]?.isAdult) return;
+  const i = SRC.vod.findIndex(s => !s.isAdult);
+  if (i >= 0) { Home.srcIdx = i; localStorage.setItem('fongmi_site_idx', String(i)); }
+}
+/* 首次进资源口种入预置源（ZONE_SOURCES，站单存本地文件 sources.local.js，不入版本库）：没主动加过时资源口只剩空墙，此处自动补全；
+   按预置版本号（ZONE_SEED_VER）种——源管理手动删除后不再重复加回（尊重删除），
+   清单扩充时升版本号才会补种新站。常规视图隔离由 isAdult 过滤保证，不受种入影响；
+   用户自行导入的专区接口与种入站并存，资源口聚合/搜索取全部 isAdult 源 */
+function seedZoneSources() {
+  if (localStorage.getItem('fongmi_zone_seed') === ZONE_SEED_VER) return;
+  localStorage.setItem('fongmi_zone_seed', ZONE_SEED_VER);
+  const has = new Set(SRC.vod.map(s => norm(s.url)));
+  const add = ZONE_SOURCES.filter(s => !has.has(norm(s.url)));
+  if (!add.length) return;
+  SRC.vod.push(...add);
+  saveSrc();
+}
 // 多标签页共用 localStorage：聚焦时重同步，否则本窗旧快照会在 saveSrc 时把别的标签页删掉的源写回去
 window.addEventListener('focus', () => {
   const before = JSON.stringify(SRC);
   syncSrc();
   if (JSON.stringify(SRC) === before) return;
-  if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; Home.tab = null; Vod.tab = null; }
+  if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; Vod.tab = null; }
   if (Live.srcIdx >= SRC.live.length) Live.srcIdx = 0;
   $('#siteName').textContent = siteLabel();
-  if (App.view === 'home') renderHome();
-  else if (App.view === 'vod') renderVod();
+  if (App.view === 'vod') renderVod();
   else if (App.view === 'live') renderLive();
 });
 const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -43,13 +61,21 @@ const siteLabel = () => Home.aggMode ? '🌐 聚合' : (SRC.vod[Home.srcIdx]?.na
 /* 本地缓存（SWR 模式）：有上次数据先秒显，后台拉新成功后替换并重存；安卓端对应 DiskCache + stale 首屏 */
 const cacheGet = k => { try { const v = JSON.parse(localStorage.getItem('fongmi_cache:' + k)); return (v && v.d) || null; } catch { return null; } };
 const cacheRaw = k => { try { return JSON.parse(localStorage.getItem('fongmi_cache:' + k)) || null; } catch { return null; } };
-const AGG_TTL = 3 * 60 * 1000; // 源级聚合分片缓存 3 分钟内不重复拉取
+/* 源级聚合分片缓存 TTL：走设置页「缓存时长」档位（aggTtl，默认标准档=3分钟） */
 const cacheSet = (k, d) => {
-  try { localStorage.setItem('fongmi_cache:' + k, JSON.stringify({ t: Date.now(), d })); }
-  catch { // 配额满：清掉全部旧缓存，下次访问重新积累
-    Object.keys(localStorage).filter(x => x.startsWith('fongmi_cache:')).forEach(x => localStorage.removeItem(x));
-  }
+  const key = 'fongmi_cache:' + k;
+  const set = () => { try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d })); return true; } catch { return false; } };
+  if (set()) return;
+  /* 配额满按写入顺序成批逐出旧分片（近似 LRU）：保留「返回点播/搜索旧数据秒显」能力。
+     原先一把清空——51 源订阅写满配额后缓存反复归零，返回时全走网络 */
+  const drop = n => { let c = 0; for (const x of Object.keys(localStorage)) { if (c >= n) break; if (x.startsWith('fongmi_cache:') && x !== key) { localStorage.removeItem(x); c++; } } return c; };
+  let moved;
+  do { moved = drop(20); } while (moved && !set());
 };
+/* 按前缀清缓存分片 / 统计占用（设置页「清理缓存」与点播刷新钮共用） */
+const purgeCache = p => Object.keys(localStorage).forEach(x => { if (x.startsWith('fongmi_cache:' + p)) localStorage.removeItem(x); });
+const cacheBytes = () => { let n = 0; for (const x of Object.keys(localStorage)) if (x.startsWith('fongmi_cache:')) n += x.length + (localStorage.getItem(x) || '').length; return n; };
+const fmtBytes = b => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
 // CMS 无参/简化列表不返回 vod_pic，海报墙必须带 ac=videolist；源 api 自带 ac= 时先剔除避免重复
@@ -236,6 +262,7 @@ const Focus = {
   items() {
     const scope = (document.fullscreenElement && document.fullscreenElement.id === 'fsStage') ? '#fsStage'
       : $('#askModal').classList.contains('open') ? '#askModal'
+      : $('#cfgModal').classList.contains('open') ? '#cfgModal'
       : $('#qrModal').classList.contains('open') ? '#qrModal'
       : $('#findModal').classList.contains('open') ? '#findModal'
       : $('#siteModal').classList.contains('open') ? '#siteModal'
@@ -291,28 +318,16 @@ document.addEventListener('focusout', e => { if (isEditable(e.target)) e.target.
 document.addEventListener('keydown', e => {
   if (document.fullscreenElement) showFsBar(); // 全屏内任意按键唤回播控浮层（TV 惯例）
   const editing = isEditable(document.activeElement);
-  if ($('#siteModal').classList.contains('open')) {
-    if (e.key === 'Escape') { closeSiteDialog(); return; }
-  } else if (App.view === 'live' && !editing && !document.fullscreenElement && (!Focus.el || Focus.el.tagName === 'VIDEO')) { // 仅画面/无焦点时劫持键位；焦点在控件（返回/全屏/源chip）放行通用 Enter 点击（补漏#5）；全屏时放行=暂停/seek（补漏#2）
+  if ($('#siteModal').classList.contains('open')) { /* 弹窗开：方向/Enter 照旧走焦点环，Escape 由 backLayer 统一分层关闭 */ }
+  else if (App.view === 'live' && !editing && !document.fullscreenElement && (!Focus.el || Focus.el.tagName === 'VIDEO')) { // 仅画面/无焦点时劫持键位；焦点在控件（返回/全屏/源chip）放行通用 Enter 点击（补漏#5）；全屏时放行=暂停/seek（补漏#2）
     if (Live.panelOpen) { /* 面板开时方向键走通用焦点 */ }
     else if (e.key === 'ArrowUp') { chanStep(-1); e.preventDefault(); return; }
     else if (e.key === 'ArrowDown') { chanStep(1); e.preventDefault(); return; }
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { togglePanel(true); e.preventDefault(); return; } // R6：←→ 也开面板，回首页/收藏经面板可达（原 toast 死键）
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { togglePanel(true); e.preventDefault(); return; } // R6：←→ 也开面板，回点播/收藏经面板可达（原 toast 死键）
     else if (e.key === 'Enter') { togglePanel(true); e.preventDefault(); return; }
     else if (/^[0-9]$/.test(e.key)) { inputDigit(e.key); e.preventDefault(); return; }
   }
-  if (e.key === 'Escape') {
-    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); e.preventDefault(); return; } // Back/Esc 分层第一层=退全屏（部分 TV 浏览器不发原生退全屏事件）
-    if (editing) { document.activeElement.blur(); e.preventDefault(); return; } // 退编辑，Focus.el 选中框保留
-    if (App.view === 'vod' && Vod.showFilters && Focus.el && $('#subRow')?.contains(Focus.el)) { // R8：筛选行内 Esc=收起并回到当前分类 chip
-      Vod.showFilters = false; drawSubRow();
-      const want = Vod.agg && Vod.tab ? 'cat:' + Vod.tab.id : String(Vod.tab?.id ?? '');
-      const chip = [...document.querySelectorAll('#typeRow [data-tid]')].find(c => c.dataset.tid === want);
-      Focus.set(chip || $('#typeRow').querySelector('[data-focus]') || $('#vodBack'));
-      e.preventDefault(); return;
-    }
-    onEsc(); return;
-  }
+  if (e.key === 'Escape') { backLayer(); e.preventDefault(); return; } // Back/Esc 统一分层链（P2：浏览器 Back 亦经 popstate 汇入同链）
   if (e.key === 'Enter') {
     if (editing) return; // 输入框内 Enter 由控件自身处理（搜索/导入/全源搜索）
     if (isEditable(Focus.el)) { enterEdit(Focus.el); e.preventDefault(); return; }
@@ -340,15 +355,41 @@ document.addEventListener('click', e => {
 });
 function onEsc() {
   if ($('#askModal').classList.contains('open')) return closeAsk(false);
+  if ($('#cfgModal').classList.contains('open')) return closeCfg();
   if ($('#qrModal').classList.contains('open')) return closeQrModal();
   if ($('#srcModal').classList.contains('open')) return closeSrcMgr();
   if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
   if ($('#findModal').classList.contains('open')) return closeFindModal();
   if (App.view === 'live' && Live.panelOpen) return togglePanel(false);
   if (App.view === 'video') return switchView(App.videoBack || 'vod');
-  if (App.view === 'collect') { Collect.stop = true; return switchView('search'); }
-  if (App.view !== 'home') return switchView('home');
+  if (App.view === 'collect') { Collect.stop = true; return switchView(Collect.back || 'search'); }
+  if (App.view === 'zone') return switchView('settings');
+  if (App.view === 'zonehist' || App.view === 'zonekeep') return switchView('zone'); // 资源口子页 Esc 回资源口
+  if (App.view !== 'vod') return switchView('vod'); // 点播即首页：其余视图 Esc 一律回点播（P8）
 }
+/* P2 浏览器 Back 接管（History 捕获层）：遥控 Back 键/浏览器后退/手机返回手势都会先发 popstate，
+   页面加载即多挂一层捕获历史，Back 先被 popstate 收回不退出页面，再映射与 Esc 同款分层链：
+   关换源弹窗→退全屏→退编辑→收筛选行→关其余弹窗→视图逐级返回；底层=点播首页（Back=回顶） */
+function backLayer() {
+  if ($('#siteModal').classList.contains('open')) return closeSiteDialog();
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; } // 第一层=退全屏（部分 TV 浏览器不发原生退全屏事件）
+  if (isEditable(document.activeElement)) { document.activeElement.blur(); return; } // 退编辑，Focus.el 选中框保留
+  if (App.view === 'vod' && Vod.showFilters && Focus.el && $('#subRow')?.contains(Focus.el)) { // R8：筛选行内=收起并回到当前分类 chip
+    Vod.showFilters = false; drawSubRow();
+    const want = Vod.agg && Vod.tab ? 'cat:' + Vod.tab.id : String(Vod.tab?.id ?? '');
+    const chip = [...document.querySelectorAll('#typeRow [data-tid]')].find(c => c.dataset.tid === want);
+    Focus.set(chip || $('#typeRow').querySelector('[data-focus]') || $('#vodRefresh'));
+    return;
+  }
+  if (App.view === 'vod') { // 点播首页底层：不退出页面，回顶+焦点进分类行（杜绝 Back 死键/误关）
+    $('#scroller')?.scrollTo({ top: 0 });
+    Focus.set($('#typeRow').querySelector('[data-focus]') || $('#vodRefresh'));
+    return;
+  }
+  onEsc();
+}
+history.pushState({ bk: 1 }, ''); // 捕获层：当前页之上多挂一层，Back 先弹掉它并经 popstate 归我们处理
+window.addEventListener('popstate', () => { history.pushState({ bk: 1 }, ''); backLayer(); });
 
 /* ================= 播放 =================
    渐进容错（docs/2026-10-30-图片播放与拼音候选提速方案.md ③）：
@@ -412,6 +453,44 @@ async function playInto(video, url, title, onDead) {
   }
 }
 function stopPlayer() { playSeq++; stopHls(); document.querySelectorAll('video').forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); }
+/* A1 线路吞吐采样（docs/2026-11-02-TVBox对标设置页与线路测速方案.md）：/proxy 同源避免 CORS；
+   Range 0-131071 限 128KB 成本（源站不支持则全速读、2.5s 预算到点即断，同样得 KB/s）；
+   m3u8 先经 /proxy 拉改写后清单、取首分片采样——分片比清单文本更贴近真实带宽 */
+const lsPx = u => '/proxy?url=' + encodeURIComponent(u);
+const LINE_SPEED = new Map(); // 「详情键|集号」→ 按线下标的 KB/s 数组（null 未测/0 失败）；只存内存，随会话结束丢弃
+let curFindState = null; // 当前播放页 {line,ep,sec} 快照函数（实验室自动换源续播用，openDetail 每次进入重设）
+async function sampleKbps(u, budget = 2500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), budget + 500);
+  const t0 = Date.now();
+  let bytes = 0;
+  try {
+    const r = await fetch(u, { headers: { Range: 'bytes=0-131071' }, signal: ctrl.signal });
+    if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
+    const rd = r.body && r.body.getReader();
+    if (!rd) throw new Error('无响应体');
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      bytes += value ? value.length : 0;
+      if (Date.now() - t0 >= budget) break;
+    }
+    rd.cancel().catch(() => {});
+  } catch (e) { if (!bytes) throw e; } // 掐表/中断前已收到字节：按已收部分计速
+  finally { clearTimeout(timer); }
+  if (!bytes) return 0;
+  return bytes * 1000 / Math.max(1, Date.now() - t0) / 1024; // KB/s
+}
+async function lineSpeed(link) {
+  if (/\.m3u8(\?|$)/i.test(link)) {
+    const t = await (await fetch(lsPx(link), { signal: AbortSignal.timeout(8000) })).text();
+    const first = t.split('\n').map(s => s.trim()).find(s => s && !s.startsWith('#'));
+    if (!first) throw new Error('清单无分片');
+    const seg = /(^|[=/])proxy\?url=/i.test(first) ? first : lsPx(new URL(first, link).href);
+    return sampleKbps(seg);
+  }
+  return sampleKbps(lsPx(link));
+}
 /* R5 遥控播控：焦点在画面时 Enter/Space=播放暂停 toggle，详情页 ←→=±15s seek（对标 Emby/ExoPlayer 键位） */
 function togglePlayVideo(v) { if (v.paused) v.play().catch(() => {}); else v.pause(); }
 function seekVideo(v, d) {
@@ -476,26 +555,36 @@ $('#fsPlay').onclick = () => { const v = $('#player'); if (v) togglePlayVideo(v)
 $('#fsExit').onclick = () => document.exitFullscreen().catch(() => {});
 
 /* ================= 视图框架 ================= */
-const App = { view: 'home', videoBack: 'vod' };
+const App = { view: 'vod', videoBack: 'vod', srcDirty: false, curZone: false };
+/* 资源口（二级专区）：仅经设置页实验室进入；active=当前在专区墙视图，池按 isAdult 取反 */
+const Zone = { active: false, seq: 0, tags: {} }; // tags：本轮墙测速结果（键同 adsp: 缓存），聚合墙增量重绘后回贴标签
+/* 历史/收藏条目专区标记（数据隔离）：写入时带 a:1/0；无标记的旧条目按当时源下标推断。
+   常规收藏/历史/点播导航计数只显示非专区条目，资源口只显示专区条目 */
+const isZoneRec = h => h.a === 1 || (h.a == null && !!SRC.vod[h.si]?.isAdult);
 const body = $('#body');
-/* 遥控友好返回：非首页视图都在头部放可聚焦「← 首页/返回」按钮（实体遥控器没有 Esc 键，需可选中点确认） */
+/* 遥控友好返回：非点播首页视图都在头部放可聚焦「← 点播/返回」按钮（实体遥控器没有 Esc 键，需可选中点确认） */
 const bindBack = (id, fn) => { const b = $('#' + id); if (b) b.onclick = fn; };
 function switchView(v) {
   if (document.fullscreenElement && document.fullscreenElement.id === 'fsStage') document.exitFullscreen().catch(() => {}); // 切视图先退全屏，video 经 fullscreenchange 归位防孤儿
   fsCtl = null;
   stopPlayer();
   $('#siteModal').classList.remove('open');
+  $('#cfgModal').classList.remove('open');
   App.view = v;
+  Zone.active = v === 'zone';
   Focus.set(null);
   $('#siteName').textContent = siteLabel();
-  if (v === 'home') renderHome();
-  else if (v === 'vod') renderVod();
+  if (v === 'vod') renderVod(); // 点播即 App 首页（P8）
+  else if (v === 'zone') renderZone();
   else if (v === 'search') renderSearch();
   else if (v === 'collect') renderCollect();
   else if (v === 'live') renderLive();
   else if (v === 'keep') renderKeep();
   else if (v === 'hist') renderHist();
+  else if (v === 'zonekeep') renderKeep(true);
+  else if (v === 'zonehist') renderHist(true);
   else if (v === 'probe') renderProbe();
+  else if (v === 'settings') renderSettings();
   else if (v === 'video') { /* 由 openDetail 渲染 */ }
 }
 $('#siteName').onclick = openSiteDialog;
@@ -507,12 +596,31 @@ function openSiteDialog() {
   $('#siteModal').classList.add('open');
   const rank = i => { const h = healthOf(SRC.vod[i].url); return h ? (h.fails >= DEAD_FAILS ? 2 : 0) : 1; };
   const msOf = i => healthOf(SRC.vod[i].url)?.ms ?? 1e9;
-  const order = SRC.vod.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || msOf(a) - msOf(b));
-  $('#siteGrid').innerHTML = `<button class="siteitem${Home.aggMode ? ' on' : ''}" data-focus data-i="-1">🌐 聚合<small style="display:block;font-size:11px;color:var(--dim)">全源合并·点卡片跨源搜索</small></button>` + order.map(i => {
+  // 专区源不进常规换源列表（专区资源只展示到资源口）
+  const order = SRC.vod.map((_, i) => i).filter(i => !SRC.vod[i].isAdult).sort((a, b) => rank(a) - rank(b) || msOf(a) - msOf(b));
+  $('#siteGrid').innerHTML = `<p style="grid-column:1/-1;margin:0 0 4px;color:var(--dim);font-size:13px">当前使用接口数据 · 🗑 可删除（需确认）</p><button class="siteitem${Home.aggMode ? ' on' : ''}" data-focus data-i="-1">🌐 聚合<small style="display:block;font-size:11px;color:var(--dim)">全源合并·点卡片跨源搜索</small></button>` + order.map(i => {
     const s = SRC.vod[i], h = healthOf(s.url), dead = rank(i) === 2;
-    return `<button class="siteitem${!Home.aggMode && i === Home.srcIdx ? ' on' : ''}${dead ? ' dead' : ''}" data-focus data-i="${i}">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}${h ? `<small style="display:block;font-size:11px;color:${dead ? '#f28b82' : '#81c995'}">${dead ? '失效' : (h.ms ?? '') + 'ms'}</small>` : ''}</button>`;
+    // A4 对标图12：行内删除钮（聚合等内置项无删除钮）；button 不能套 button，删除钮用 span+data-focus 保持遥控可达
+    return `<button class="siteitem${!Home.aggMode && i === Home.srcIdx ? ' on' : ''}${dead ? ' dead' : ''}" data-focus data-i="${i}">${esc(s.name)}${h ? `<small style="display:block;font-size:11px;color:${dead ? '#f28b82' : '#81c995'}">${dead ? '失效' : (h.ms ?? '') + 'ms'}</small>` : ''}<span class="sdel" data-focus data-del="${i}" title="删除该源">🗑</span></button>`;
   }).join('');
   $('#siteGrid').onclick = e => {
+    const d = e.target.closest('[data-del]');
+    if (d) { // 行内删除：确认→splice→修正下标→重开弹窗即见新列表（同 drawSrcMgr 删除语义但带确认）
+      e.stopPropagation();
+      const i = +d.dataset.del, s = SRC.vod[i]; if (!s) return;
+      askYes(`确定删除点播源「${s.name}」？`, () => {
+        syncSrc();
+        const at = SRC.vod.findIndex(x => x.url === s.url);
+        if (at < 0) return openSiteDialog(); // 他页已删，刷新列表即可
+        SRC.vod.splice(at, 1); saveSrc();
+        if (Home.srcIdx >= SRC.vod.length || at === Home.srcIdx) Home.srcIdx = 0;
+        else if (at < Home.srcIdx) Home.srcIdx--;
+        localStorage.setItem('fongmi_site_idx', String(Home.srcIdx));
+        openSiteDialog();
+        refreshAfterSourceChange();
+      });
+      return;
+    }
     const b = e.target.closest('[data-i]'); if (!b) return;
     const i = +b.dataset.i;
     Home.aggMode = i === -1;
@@ -520,25 +628,39 @@ function openSiteDialog() {
     localStorage.setItem('fongmi_agg', Home.aggMode ? '1' : '0');
     closeSiteDialog();
     $('#siteName').textContent = siteLabel();
-    if (App.view === 'vod' || App.view === 'home') { Home.tab = null; Vod.tab = null; loadSiteData(); }
-    if (App.view === 'vod') renderVod(); else if (App.view === 'home') renderHome();
+    if (App.view === 'vod') { Vod.tab = null; loadSiteData(); renderVod(); }
   };
   Focus.set($('#siteGrid').querySelector('[data-focus]'));
 }
 function closeSiteDialog() { $('#siteModal').classList.remove('open'); }
 
 /* ================= 源管理（对应功能行「源管理」按钮，Android 端即 SourcesScreen） ================= */
+/* 2026-11-02 按《可用点播源清单》重建：一节「直接可播」17 站（裸 m3u8）。
+   移除：量子/火狐(/play/加密页仅搜索)、索尼(ac=detail返HTML失效)、天天主域(换东泰m3u8备域裸流)、茅台(实测搜索0命中)。
+   爱坤/瑞源当日笔记可播、本机当前直连即被 RST（疑似临时封锁），保留由自动维护兜底剔除 */
 const BUILTIN_SOURCES = [
+  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod' },
+  { name: '最大资源', url: 'https://api.zuidapi.com/api.php/provide/vod' },
+  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod' },
+  { name: '无尽资源', url: 'https://api.wujinapi.com/api.php/provide/vod' },
+  { name: '瑞源资源', url: 'http://cj.rycjapi.com/api.php/provide/vod' },
+  { name: '速播资源', url: 'https://www.subocaiji.com/api.php/provide/vod' },
+  { name: '红牛资源', url: 'https://www.hongniuzy3.com/api.php/provide/vod' },
   { name: '非凡资源', url: 'https://cj.ffzyapi.com/api.php/provide/vod' },
-  { name: '量子资源', url: 'https://cj.lziapi.com/api.php/provide/vod' },
-  { name: '360采集', url: 'https://360zy.com/api.php/provide/vod' },
-  { name: '索尼采集', url: 'https://suoniapi.com/api.php/provide/vod' },
-  { name: '天天采集', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod' },
-  { name: '茅台采集', url: 'https://mtzy.me/api.php/provide/vod' },
-  { name: '火狐采集', url: 'https://hhzyapi.com/api.php/provide/vod' },
-  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod?ac=list' },
-  { name: '速播采集', url: 'https://subocaiji.com/api.php/provide/vod' },
+  { name: '360资源', url: 'https://360zy.com/api.php/provide/vod' },
+  { name: '东泰m3u8', url: 'http://dyttzy5.tv/api.php/provide/vod/from/dyttm3u8/at/m3u8' },
+  { name: '金鹰资源', url: 'http://jinyingzy.com/provide/vod' },
+  { name: 'p2100', url: 'https://p2100.net/api.php/provide/vod' },
+  { name: '魔都资源', url: 'https://caiji.moduapi.cc/api.php/provide/vod' },
+  { name: '爱奇艺备', url: 'https://iqiyizyapi.com/api.php/provide/vod' },
+  { name: '百度资源', url: 'https://api.apibdzy.com/api.php/provide/vod' },
+  { name: '猫眼资源', url: 'https://api.maoyanapi.top/api.php/provide/vod' },
+  { name: '虎牙资源', url: 'https://huyazy.net/api.php/provide/vod' },
 ];
+/* 资源口预置源清单：站单数据在 debug-web/sources.local.js（本地文件，不入版本库），缺失时为空表；
+   首次/升版本进资源口自动种入源列表，仅供资源口聚合/搜索/播放（isAdult 隔离常规视图）；扩充清单时改 ZONE_SEED_VER 触发补种 */
+const ZONE_SEED_VER = 'v3';
+const ZONE_SOURCES = (window.__ZONE_SEED || []).map(([name, url]) => ({ name, url, isAdult: true }));
 const saveSrc = () => localStorage.setItem('libretvaz_sources', JSON.stringify(SRC));
 
 /* ---- 订阅解析：从完整调试台 app.js 原样移植（对应 SubscriptionParser.kt） ---- */
@@ -547,6 +669,7 @@ const PRESETS = [
   { name: 'Liucn 单仓（2源可用）', url: 'https://raw.liucn.cc/box/m.json' },
   { name: 'Qist 综合（点播+直播）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json' },
   { name: 'tvyuan 云端体检聚合（Actions 每小时测速，实测14源可用）', url: 'https://gh-proxy.com/https://raw.githubusercontent.com/25175/tvyuan/master/tvbox_collect.json' },
+  { name: '51源合集（实测35可用）', url: 'https://raw.githubusercontent.com/fadai9991/tvbox-sub/main/tvbox.json' },
 ];
 const ADULT_KEYWORDS = ['伦理片','福利','倫理片','福利片','日本伦理','日本福利','日本福利片','日本伦理片','擦边短剧','擦边','韩国伦理','里番动漫','门事件','萝莉少女','制服诱惑','国产传媒','cosplay','黑丝诱惑','无码','日本无码','有码','日本有码','SWAG','网红主播','色情片','同性片','福利视频','无码高清','有码高清','91视频','自拍偷拍','mini传媒'];
 const isAdultType = t => !!t && ADULT_KEYWORDS.some(k => t.includes(k));
@@ -608,7 +731,11 @@ function isRelevant(name, wd) {
       if (bq) return matchesPrepared(normalizeTitle(ts.base), bq);
     }
   }
-  return matchesPrepared(nn, q);
+  const rel = matchesPrepared(nn, q);
+  if (rel || LS('fongmi_fuzzy', 1) === 0) return rel;
+  // 实验室「模糊搜索」：核心片名互含也算命中（源片名常带【高清】/导演名等尾缀）
+  const cq = PerfCore.coreName(q.n), cn = PerfCore.coreName(name);
+  return !!cq && !!cn && (cn.includes(cq) || cq.includes(cn));
 }
 const isCmsApi = u => /\/api\.php\/provide\/vod(?![^?#]*\/at\/xml)(?:[\/?#]|$)/i.test(String(u || '').trim());
 function jsonLoose(text) {
@@ -682,6 +809,10 @@ function openSrcMgr() {
 }
 function closeSrcMgr() { $('#srcModal').classList.remove('open'); }
 function drawSrcMgr() {
+  const idx = SRC.vod.map((s, i) => [i, s]);
+  const srcRows = list => list.map(([i, s]) => `<div class="srcrow"><span class="n">${esc(s.name)}</span>${hb(s)}<span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('');
+  const zoneRows = idx.filter(([, s]) => s.isAdult);
+  const normals = idx.filter(([, s]) => !s.isAdult);
   $('#srcMgr').innerHTML = `
     <div class="hrow" style="margin-bottom:10px;flex-wrap:wrap">
       <button class="btn" data-focus id="smAdd">＋ 添加内置已测源</button>
@@ -701,8 +832,9 @@ function drawSrcMgr() {
     </div>
     <p id="impMsg" class="muted" style="margin:6px 0;min-height:20px"></p>
     <div style="margin:4px 0 10px"><button class="btn" data-focus id="smQrBtn">📱 手机推送订阅</button></div>
-    <h3>点播源（${SRC.vod.length}/200）</h3>
-    ${SRC.vod.map((s, i) => `<div class="srcrow"><span class="n">${esc(s.name)}${s.isAdult ? ' ·成人' : ''}</span>${hb(s)}<span class="url">${esc(s.url)}</span><button class="rm" data-focus data-rmv="${i}">删除</button></div>`).join('') || '<p class="muted">无点播源</p>'}
+    <h3>点播源 · 常规（${normals.length}）</h3>
+    ${srcRows(normals) || '<p class="muted">无点播源</p>'}
+    ${zoneRows.length ? `<h3>专区源 · 仅资源口可见（${zoneRows.length}）</h3>${srcRows(zoneRows)}` : ''}
     <h3>直播源（${SRC.live.length}）</h3>
     ${SRC.live.map((l, i) => `<div class="srcrow"><span class="n">${esc(l.name)}</span><span class="url">${esc(l.url)}</span><button class="rm" data-focus data-rml="${i}">删除</button></div>`).join('') || '<p class="muted">无直播源</p>'}`;
   $('#smAdd').onclick = () => {
@@ -716,7 +848,7 @@ function drawSrcMgr() {
     localStorage.setItem('fongmi_auto', '0');
     syncSrc();
     SRC.vod = []; saveSrc();
-    Home.srcIdx = 0; Home.items = []; Home.page = 1; Home.more = false; Home.tab = null;
+    Home.srcIdx = 0;
     Vod.items = []; Vod.page = 1; Vod.more = false; Vod.tab = null;
     drawSrcMgr(); refreshAfterSourceChange();
   });
@@ -742,9 +874,17 @@ async function doImport(url) {
   url = (url || '').trim();
   const msg = $('#impMsg'); if (!url) return;
   if (msg) msg.textContent = '拉取解析中…';
+  // raw.githubusercontent 直连不通时自动换 gh-proxy 前缀（A5 51源合集预设兜底）
+  const getSub = async u => {
+    try { return await httpGet(u, 20000); }
+    catch (e) {
+      if (/^https:\/\/raw\.githubusercontent\.com\//i.test(u)) return await httpGet('https://gh-proxy.com/' + u, 20000);
+      throw e;
+    }
+  };
   try {
-    const text = await httpGet(url, 20000);
-    const p = await parseExpanded(text, u => httpGet(u, 20000));
+    const text = await getSub(url);
+    const p = await parseExpanded(text, u => getSub(u));
     syncSrc(); // 拉取期间其它标签页可能已改动，合并前以最新存储为准
     const oldVod = new Set(SRC.vod.map(v => norm(v.url)));
     const oldLive = new Set(SRC.live.map(l => norm(l.url)));
@@ -760,11 +900,12 @@ async function doImport(url) {
     if (msg) msg.innerHTML = `<span class="err">${esc(e.message || String(e))}</span>`;
   }
 }
+/* P3 源变更惰性化：增删源/后台维护只更新顶栏标签+置脏，绝不重绘正在看的页面；
+   重进点播时消费（等效原强刷含 tab 重置），浏览中按下拉翻页则从第 1 页含新源重拉 */
 function refreshAfterSourceChange() {
   Probe.rows = null;
   $('#siteName').textContent = siteLabel();
-  if (App.view === 'vod') { Home.tab = null; Vod.tab = null; renderVod(); }
-  else if (App.view === 'home') renderHome();
+  App.srcDirty = true;
 }
 
 /* ================= 源自维护引擎（基础版） =================
@@ -821,14 +962,16 @@ function pickBestSource() {
     .sort((a, b) => (a.h.ms ?? 1e9) - (b.h.ms ?? 1e9));
   return ranked.length ? ranked[0].i : -1;
 }
+/* 专区源不参与 7 天自动移除（P14）：测挂只标死沉底——专区接口受网络波动影响频繁，
+   清掉后按版本号种子不会自动补回，会导致资源口永久变空 */
 function pruneDeadSources() {
-  const keep = SRC.vod.filter(s => { const h = healthOf(s.url); return !(h && h.deadSince && Date.now() - h.deadSince > DEAD_REMOVE_MS); });
+  const keep = SRC.vod.filter(s => { if (s.isAdult) return true; const h = healthOf(s.url); return !(h && h.deadSince && Date.now() - h.deadSince > DEAD_REMOVE_MS); });
   const removed = SRC.vod.length - keep.length;
   if (removed) {
     SRC.vod = keep;
     if (Home.srcIdx >= SRC.vod.length) Home.srcIdx = 0;
     saveSrc(); refreshAfterSourceChange();
-    toast(`已清理 ${removed} 个连续失效满 7 天的源`);
+    toast(`已清理 ${removed} 个连续失效满 7 天的源（翻页或重进后生效）`);
   }
 }
 async function refreshSubsIfStale() {
@@ -849,7 +992,7 @@ async function refreshSubsIfStale() {
   if (added) { // 并发去重：两个订阅同时返回同 URL 时只留一个
     const seen = new Set();
     SRC.vod = SRC.vod.filter(v => !seen.has(normUrl(v.url)) && seen.add(normUrl(v.url)));
-    saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源`);
+    saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源（翻页或重进后生效）`);
   }
 }
 let guarding = false;
@@ -870,7 +1013,7 @@ async function sourceGuard() {
       if (best >= 0) {
         Home.srcIdx = best;
         localStorage.setItem('fongmi_site_idx', String(best));
-        toast(`当前源已失效，自动切换到「${SRC.vod[best].name}」`);
+        toast(`当前源已失效，自动切换到「${SRC.vod[best].name}」（翻页或重进后生效）`);
         refreshAfterSourceChange();
       } else toast('所有点播源均不可用：请检查网络，或在源管理重新导入');
     }
@@ -893,7 +1036,7 @@ window.addEventListener('error', e => {
   else img.remove();
 }, true);
 function cardHtml(it, i, opts = {}) {
-  return `<div class="card" data-focus data-i="${i}">
+  return `<div class="card" data-focus data-i="${i}" data-aid="${esc(String(it.id ?? ''))}">
     ${opts.del ? '<button class="del" data-focus data-del="1" title="删除">×</button>' : ''}
     <div class="pic"><div class="ph">${esc(it.name)}</div>${picHtml(it.pic)}
       ${it.year ? `<span class="year">${esc(it.year)}</span>` : ''}
@@ -910,89 +1053,191 @@ function bindGrid(el, items, onPick, onDel) {
   };
 }
 
-/* ================= 首页（HomeActivity：功能行 + 最近观看 + 更新推荐） ================= */
-const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), aggMode: localStorage.getItem('fongmi_agg') === '1', types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, histLoaded: false };
-function renderHome() {
-  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]);
-  const keepAll = LS('fongmi_keep', []); const keepNu = keepAll.filter(x => x.updated).length;
-  body.innerHTML = `<main id="scroller">
-    <div class="funcs" id="funcs">
-      <div class="func" data-focus data-nav="vod"><b>点播</b><i>VodActivity</i></div>
-      <div class="func" data-focus data-nav="live"><b>直播</b><i>LiveActivity</i></div>
-      <div class="func" data-focus data-nav="search"><b>搜索</b><i>SearchActivity</i></div>
-      <div class="func" data-focus data-nav="keep"><b>收藏</b><i>${keepAll.length} 部${keepNu ? ' · ' + keepNu + ' 部更新' : ''}</i></div>
-      <div class="func" data-focus data-nav="hist"><b>历史</b><i>${hist.length} 部</i></div>
-      <div class="func" data-focus data-nav="probe"><b>连接</b><i>源测速探活</i></div>
-      <div class="func" data-focus data-nav="sources"><b>源管理</b><i>导入订阅/源设置</i></div>
-      <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
-      <div class="func" data-focus data-nav="server" style="display:none"><b>服务器模式</b><i>打开调试台</i></div>
-    </div>
-    <div class="rowhead">更新推荐 <small>来自源「${esc(SRC.vod[Home.srcIdx]?.name || '无')}」无参请求，滚动到底自动加载</small></div>
-    <div class="grid" id="recGrid"><p class="muted">加载中…</p></div></main>`;
-  $('#funcs').onclick = e => {
-    const f = e.target.closest('[data-focus]'); if (!f) return;
-    const nav = f.dataset.nav;
-    if (nav === 'sources') return openSrcMgr();
-    if (nav === 'server') return void window.open('/', '_blank');
-    if (nav) switchView(nav);
-  };
-  $('#scroller').addEventListener('scroll', onScroll);
-  loadRec();
-  Focus.set($('#funcs').querySelector('[data-focus]')); // 初始焦点=功能行首项（R7，换页第一下按键可预期）
+/* ================= 设置页（A2 四列「标签+值」网格，对标影视仓设置页；仅实装真实行为项，无占位） ================= */
+const CACHE_TIERS = [
+  { label: '短（聚合1分/搜索3分）', agg: 60e3, search: 3 * 60e3 },
+  { label: '标准（聚合3分/搜索10分）', agg: 3 * 60e3, search: 10 * 60e3 },
+  { label: '长（聚合10分/搜索30分）', agg: 10 * 60e3, search: 30 * 60e3 },
+  { label: '超长（聚合30分/搜索2小时）', agg: 30 * 60e3, search: 2 * 3600e3 },
+];
+const cacheTier = () => { const c = LS('fongmi_cache', null); if (!Array.isArray(c)) return 1; const i = CACHE_TIERS.findIndex(t => t.agg === c[0] && t.search === c[1]); return i < 0 ? 1 : i; };
+const aggTtl = () => CACHE_TIERS[cacheTier()].agg;
+const searchTtl = () => CACHE_TIERS[cacheTier()].search;
+/* 通用配置弹窗（枚举/Tab排序/实验室共用一个容器）：openCfg(title, html, onPick(v)) */
+let cfgOnPick = null;
+function openCfg(title, html, onPick) {
+  $('#cfgTitle').textContent = title;
+  $('#cfgBody').innerHTML = html;
+  cfgOnPick = onPick || null;
+  $('#cfgModal').classList.add('open');
+  Focus.set($('#cfgBody').querySelector('[data-focus]') || $('#cfgCancel'));
 }
+function closeCfg() {
+  if (!$('#cfgModal').classList.contains('open')) return;
+  $('#cfgModal').classList.remove('open');
+  cfgOnPick = null;
+  if (App.view === 'settings') Focus.set($('.setrow'));
+}
+/* A3 顶部导航 Tab 配置（P8 后为点播页顶部导航栏）：fongmi_tabs=[{nav,show}]，顺序即优先级 */
+const TAB_META = [
+  ['vod', '点播', 'VodActivity'], ['live', '直播', 'LiveActivity'], ['search', '搜索', 'SearchActivity'],
+  ['keep', '收藏', ''], ['hist', '历史', ''], ['probe', '连接', '源测速探活'],
+  ['sources', '源管理', '导入订阅/源设置'], ['settings', '设置', '播放与界面偏好'],
+];
+/* P9：点播即首页，导航栏不再出现「点播」项（存档里的旧 vod 项一并滤掉） */
+const getTabs = () => {
+  const saved = LS('fongmi_tabs', null);
+  const known = n => n !== 'vod' && TAB_META.some(t => t[0] === n);
+  const list = Array.isArray(saved) && saved.length ? saved.filter(t => t && known(t.nav)) : [];
+  for (const [nav] of TAB_META) if (known(nav) && !list.some(t => t.nav === nav)) list.push({ nav, show: 1 });
+  return list;
+};
+const saveTabs = arr => localStorage.setItem('fongmi_tabs', JSON.stringify(arr.map(t => ({ nav: t.nav, show: t.show }))));
+function openTabCfg() {
+  const render = () => {
+    const tabs = getTabs();
+    return tabs.map((t, i) => {
+      const m = TAB_META.find(x => x[0] === t.nav);
+      return `<div class="tabrow"><span>${i + 1}. ${m[1]}${t.show ? '' : '（已隐藏）'}</span>`
+        + `<button class="chip" data-focus data-v="tg:${t.nav}">${t.show ? '隐藏' : '显示'}</button>`
+        + `<button class="chip${i === 0 ? ' off' : ''}" data-focus data-v="up:${t.nav}">↑</button>`
+        + `<button class="chip${i === tabs.length - 1 ? ' off' : ''}" data-focus data-v="dn:${t.nav}">↓</button></div>`;
+    }).join('') + '<p class="muted" style="font-size:12px;margin:8px 0 0">↑↓ 调整优先级，「隐藏/显示」控制点播页顶部导航栏（点播为首页不入栏，刷新固定在栏首）</p>';
+  };
+  openCfg('导航栏（顺序=优先级）', render(), v => {
+    const [act, nav] = String(v).split(':');
+    const arr = getTabs(); const at = arr.findIndex(x => x.nav === nav); if (at < 0) return;
+    if (act === 'tg') arr[at].show = arr[at].show ? 0 : 1;
+    else if (act === 'up' && at > 0) [arr[at - 1], arr[at]] = [arr[at], arr[at - 1]];
+    else if (act === 'dn' && at < arr.length - 1) [arr[at + 1], arr[at]] = [arr[at], arr[at + 1]];
+    saveTabs(arr);
+    $('#cfgBody').innerHTML = render();
+    const nb = $('#cfgBody').querySelector(`[data-v="${v}"]`); if (nb) Focus.set(nb);
+  });
+}
+/* A3 实验室开关组：全部有真实行为（默认值=影视仓文案「已开启××/已关闭××」口径，自动换源默认关） */
+const LAB_DEFS = [
+  ['fongmi_linespeed', '线路测速（播放页显示各线速度）', 1],
+  ['fongmi_autobestline', '测速后自动选最快线', 1],
+  ['fongmi_fuzzy', '模糊搜索（片名核心词容错）', 1],
+  ['fongmi_autosrc', '全线失败自动换源（搜本作切源续播）', 0],
+  ['fongmi_histmerge', '历史记录合并（按片名去重）', 1],
+  ['fongmi_epfull', '播放页点击剧集自动全屏', 1],
+];
+function openLabCfg() {
+  const render = () => LAB_DEFS.map(([k, label, def]) => {
+    const on = LS(k, def) !== 0;
+    return `<div class="tabrow"><span>${label}</span><button class="chip${on ? ' on' : ''}" data-focus data-v="${k}">${on ? '已开启' : '已关闭'}</button></div>`;
+  }).join('') + '<div class="tabrow"><span>🎦 资源口（二级专区聚合）</span><button class="chip" data-focus data-v="__zone">进入</button></div>';
+  openCfg('影视仓实验室', render(), v => {
+    if (v === '__zone') { closeCfg(); switchView('zone'); return; }
+    const d = LAB_DEFS.find(x => x[0] === v); if (!d) return;
+    localStorage.setItem(v, JSON.stringify(LS(v, d[2]) !== 0 ? 0 : 1));
+    $('#cfgBody').innerHTML = render();
+    const nb = $('#cfgBody').querySelector(`[data-v="${v}"]`); if (nb) Focus.set(nb);
+  });
+}
+const BOOL2 = [[1, '开启'], [0, '关闭']];
+const SETTING_DEFS = [
+  { k: 'fongmi_autonext', label: '自动连播', def: 1, opts: BOOL2 },
+  { k: 'fongmi_autoline', label: '失败自动换线', def: 1, opts: BOOL2 },
+  { k: 'fongmi_resume', label: '跨会话续播', def: 1, opts: BOOL2 },
+  { k: 'fongmi_qrauto', label: '扫码自动导入', def: 1, opts: BOOL2 },
+  { k: 'fongmi_threads', label: '搜索线程', def: 8, opts: [[8, '8'], [12, '12'], [16, '16'], [24, '24'], [36, '36'], [48, '48']] },
+  { k: 'fongmi_histmax', label: '历史记录', def: 60, opts: [[30, '30条'], [60, '60条'], [100, '100条']] },
+  { k: 'fongmi_cache', label: '缓存时长', render: () => CACHE_TIERS[cacheTier()].label },
+  { k: 'cache_purge', label: '清理缓存', render: () => fmtBytes(cacheBytes()) + ' · 点击清理' },
+  { k: 'tabs', label: '导航栏', render: () => '显示/隐藏 · 优先级' },
+  { k: 'lab', label: '影视仓实验室', render: () => '模糊搜索/自动换源/全屏…' },
+];
+function settingValue(def) {
+  if (def.render) return def.render();
+  const v = LS(def.k, def.def);
+  const o = def.opts.find(([x]) => x === v);
+  return o ? o[1] : String(v);
+}
+function openSetting(def) {
+  if (def.k === 'tabs') return openTabCfg();
+  if (def.k === 'lab') return openLabCfg();
+  if (def.k === 'cache_purge') {
+    const sz = fmtBytes(cacheBytes());
+    return askYes(`确认清空全部本地缓存？（当前约 ${sz}；分类/列表/详情/搜索分片，播放进度与收藏不受影响）`, () => {
+      purgeCache(''); typesCache.clear(); toast('缓存已清空'); renderSettings();
+    });
+  }
+  if (def.k === 'fongmi_cache') {
+    return openCfg('缓存时长', CACHE_TIERS.map((t, i) => `<button class="chip${i === cacheTier() ? ' on' : ''}" data-focus data-v="${i}">${t.label}</button>`).join(''), v => {
+      const t = CACHE_TIERS[+v]; localStorage.setItem('fongmi_cache', JSON.stringify([t.agg, t.search]));
+      closeCfg(); renderSettings();
+    });
+  }
+  openCfg(def.label, def.opts.map(([v, l]) => `<button class="chip${LS(def.k, def.def) === v ? ' on' : ''}" data-focus data-v="${v}">${l}</button>`).join(''), v => {
+    localStorage.setItem(def.k, JSON.stringify(+v));
+    closeCfg(); renderSettings();
+  });
+}
+function renderSettings() {
+  body.innerHTML = `<div class="eprow" style="padding:14px 28px 0"><button class="btn" data-focus id="setBack">← 点播</button></div>
+    <main id="scroller"><div class="setgrid" id="setGrid">${SETTING_DEFS.map((d, i) => `<div class="setrow" data-focus data-s="${i}"><span>${d.label}</span><b>${esc(settingValue(d))}</b></div>`).join('')}</div></main>`;
+  bindBack('setBack', () => switchView('vod'));
+  $('#setGrid').onclick = e => {
+    const r = e.target.closest('[data-s]'); if (!r) return;
+    openSetting(SETTING_DEFS[+r.dataset.s]);
+  };
+  Focus.set($('.setrow'));
+}
+
+/* ================= 首页状态（P8 起点播页即 App 首页，Home 仅存当前源/聚合模式） ================= */
+const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), aggMode: localStorage.getItem('fongmi_agg') === '1' };
 function onScroll() {
   const sc = $('#scroller'); if (!sc) return;
   $('#bar').classList.toggle('hide', sc.scrollTop > 90);
-  if (App.view === 'home') {
-    if (Home.more && !Home.loading && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200) loadRec(Home.page + 1);
-  } else if (App.view === 'vod') {
+  if (App.view === 'vod') { // 点播=App 首页，滚动到底翻页
     if (Vod.preset && !Vod.pSrv && Vod.page >= 10) return; // R8 三级 (b)：客户端地区过滤 10 页封顶停止翻页
     if (Vod.more && !Vod.loading && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200) loadVod(Vod.page + 1);
   }
-}
-async function loadRec(pg = 1) {
-  const s = SRC.vod[Home.srcIdx];
-  const grid = $('#recGrid'); if (!grid) return;
-  if (!s) { grid.innerHTML = '<p class="muted">无点播源</p>'; return; }
-  Home.loading = true;
-  let cachedShown = false;
-  if (pg === 1) {
-    Home.items = [];
-    const cached = cacheGet('rec:' + s.url);
-    if (cached && cached.length) {
-      cachedShown = true;
-      const shown = sortByYearDesc(cached);
-      grid.innerHTML = shown.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
-      bindGrid(grid, shown, it => openDetail(it));
-    } else grid.innerHTML = '<p class="muted">加载中…</p>';
-  }
-  let items = [], err = null;
-  try { items = parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`)), s); } catch (e) { err = e.message; }
-  if (App.view !== 'home' || !$('#recGrid')) return;
-  if (err && pg === 1 && cachedShown) { Home.loading = false; return; } // 拉新失败保留缓存首屏
-  Home.loading = false; Home.page = pg;
-  if (pg === 1 && items.length) cacheSet('rec:' + s.url, items);
-  addWords(items.map(it => it.name));
-  Home.items = pg === 1 ? items : Home.items.concat(items);
-  Home.more = items.length > 0;
-  const shown = sortByYearDesc(Home.items);
-  grid.innerHTML = (err && pg === 1 ? `<p class="err">${esc(err)}</p>` : '') + shown.map((it, i) => cardHtml(it, i, { showSite: false })).join('');
-  bindGrid(grid, shown, it => openDetail(it));
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
 const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '' };
 function renderVod() {
-  body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="vodBack">← 首页</button></div>
+  if (App.srcDirty) { App.srcDirty = false; Vod.tab = null; } // 重进点播消费源变更（等效原强刷的 tab 重置）
+  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si] && !isZoneRec(h));
+  const keepAll = LS('fongmi_keep', []).filter(x => !isZoneRec(x)); const keepNu = keepAll.filter(x => x.updated).length;
+  const subs = { keep: `${keepAll.length} 部${keepNu ? ' · ' + keepNu + ' 部更新' : ''}`, hist: `${hist.length} 部` };
+  const navs = getTabs().filter(t => t.show).map(t => {
+    const m = TAB_META.find(x => x[0] === t.nav);
+    return `<div class="func" data-focus data-nav="${t.nav}"><b>${m[1]}</b><i>${subs[t.nav] ?? m[2]}</i></div>`;
+  }).join('');
+  body.innerHTML = `<div class="funcs" id="vodNav" style="padding:4px 28px 0">
+      <div class="func" data-focus id="vodRefresh" title="清除本页相关缓存分片并重新拉取"><b>🔄 刷新</b><i>清缓存重拉本页</i></div>${navs}
+      <!-- 服务器模式入口保留备用：调试台退役后暂隐藏，恢复时去掉 display:none 即可 -->
+      <div class="func" data-focus data-nav="server" style="display:none"><b>服务器模式</b><i>打开调试台</i></div>
+    </div>
     <div class="hrow" id="typeRow" style="padding:6px 28px"><span class="muted" style="padding:6px 0">分类加载中…</span></div>
     <div class="hrow" id="subRow" style="padding:0 28px 6px"></div>
     <main id="scroller"><div class="grid" id="vodGrid"></div></main>`;
-  bindBack('vodBack', () => switchView('home'));
+  $('#vodNav').onclick = e => {
+    const f = e.target.closest('[data-nav]'); if (!f) return;
+    const nav = f.dataset.nav;
+    if (nav === 'sources') return openSrcMgr();
+    if (nav === 'server') return void window.open('/', '_blank');
+    switchView(nav);
+  };
+  $('#vodRefresh').onclick = () => { // 只清点播相关分片（历史/收藏/测速不动），重走 loadTypes→缓存已空即全量拉新
+    if (Home.aggMode) purgeCache('aggs:');
+    else {
+      const s = SRC.vod[Home.srcIdx];
+      if (s) { typesCache.delete(s.url); purgeCache('types:' + s.url); purgeCache(`vod:${s.url}|`); purgeCache(`mrg:${s.url}|`); }
+    }
+    toast('已清本页缓存，重新拉取中…');
+    loadTypes();
+  };
   $('#scroller').addEventListener('scroll', onScroll);
   loadTypes();
-  Focus.set($('#typeRow').querySelector('[data-focus]') || $('#vodBack')); // R7：分类 chips 已缓存则直达首 chip，否则返回钮
+  Focus.set($('#vodNav').querySelector('[data-focus]') || $('#typeRow').querySelector('[data-focus]') || $('#vodRefresh')); // 初始焦点=导航栏首项（FongMi 顶栏式）
 }
-function loadSiteData() { Vod.reqId++; Home.reqId++; }
+function loadSiteData() { Vod.reqId++; }
 /* 有子类的父分类一律聚合子类展示（非凡/量子等 CMS 父 id 直查为空壳或仅 1~3 条杂项） */
 const applyTabMerged = () => {
   const kids = Vod.tab ? Vod.types.filter(c => c.pid === Vod.tab.id && c.id !== Vod.tab.id) : [];
@@ -1000,7 +1245,8 @@ const applyTabMerged = () => {
 };
 const isTopType = t => t.pid === '0' || t.pid === '' || t.pid === 'null';
 async function loadTypes() {
-  const s = SRC.vod[Home.srcIdx]; if (!s) return;
+  const s = SRC.vod[Home.srcIdx];
+  if (!s) { $('#typeRow') && ($('#typeRow').innerHTML = '<span class="muted">无点播源：点顶部导航「源管理」导入订阅或添加内置源</span>'); const g = $('#vodGrid'); if (g) g.innerHTML = ''; return; }
   const rid = ++Vod.reqId;
   if (Home.aggMode) { // 聚合模式（源选择弹窗进入）：固定四大类标签，数据跨全部健康源合并
     Vod.agg = true; Vod.types = []; Vod.filters = null; Vod.merged = null;
@@ -1036,15 +1282,15 @@ async function loadTypes() {
     }
     const tops = Vod.types.filter(isTopType);
     const tabList = tops.length ? tops : Vod.types;
-    const tabs = [{ id: '', name: '首页' }, ...tabList.map(t => ({ id: t.id, name: t.name }))];
+    const tabs = [{ id: '', name: '🏠 最新' }, ...tabList.map(t => ({ id: t.id, name: t.name }))]; // 原「首页」chip：无分类全量最新，即更新推荐等效
     const cur = Vod.tab?.id ?? '';
     const row = $('#typeRow'); if (!row || App.view !== 'vod') return;
     row.innerHTML = tabs.map(t => `<button class="chip${t.id === cur ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
-    if (!document.contains(Focus.el) || Focus.el?.id === 'vodBack') Focus.set(row.querySelector('[data-focus]') || Focus.el); // 重绘后焦点归位首 chip（R7）
+    if (!document.contains(Focus.el) || Focus.el?.id === 'vodRefresh') Focus.set(row.querySelector('[data-focus]') || Focus.el); // 重绘后焦点归位首 chip（R7）
     row.onclick = e => {
       const b = e.target.closest('[data-tid]'); if (!b) return;
       const id = b.dataset.tid;
-      if (id === '') { // 首页：无分类，直接全量最新
+      if (id === '') { // 最新：无分类，直接全量最新
         Vod.tab = null; Vod.filters = null; Vod.showFilters = false; Vod.merged = null;
         resetFilterVals(); $('#subRow').innerHTML = '';
         document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
@@ -1090,14 +1336,14 @@ const aggPool = () => {
     if (h.fails >= DEAD_FAILS) return 1e9;
     return h.ms ?? 4000;
   };
-  return SRC.vod.filter(s => !s.isAdult).sort((a, b) => ms(a) - ms(b)).slice(0, 6);
+  return SRC.vod.filter(s => Zone.active ? s.isAdult : !s.isAdult).sort((a, b) => ms(a) - ms(b)).slice(0, 6);
 };
 /* 各源分类树缓存：聚合分类墙按名称匹配每个源的父分类，再取其子类首页合并 */
 const typesCache = new Map();
 const getSrcTypes = s => {
   if (!typesCache.has(s.url)) typesCache.set(s.url, (async () => {
     const ck = 'types:' + s.url;
-    try { const d = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'))); cacheSet(ck, d); return d; }
+    try { const d = parseTypes(await httpGet(apiUrl(s.url, 'ac=list'), 8000)); cacheSet(ck, d); return d; }
     catch { return cacheGet(ck) || []; } // 慢源/死源用上次分类树兜底
   })());
   return typesCache.get(s.url);
@@ -1114,7 +1360,7 @@ function hasRegionKid(types, cat) {
   return types.some(c => c.pid === p.id && c.id !== p.id && PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
 }
 async function fetchAggSource(s, cat) {
-  if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1')).then(raw => parseList(raw, s)).catch(() => []);
+  if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1'), 8000).then(raw => parseList(raw, s)).catch(() => []);
   const types = await getSrcTypes(s);
   const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
   if (!p) return [];
@@ -1125,7 +1371,7 @@ async function fetchAggSource(s, cat) {
     qs = reg.length ? reg.slice(0, 4) : [p];
   } else qs = kids.length ? kids.slice(0, 3) : [p];
   const sub = await pMap(qs, c =>
-    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`)).then(raw => parseList(raw, s)), 3);
+    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`), 8000).then(raw => parseList(raw, s)), qs.length); // 子类全并行+8s 快断：慢源不再拖聚合首屏
   return sub.flat();
 }
 const aggKey = (s, cat) => 'aggs:' + s.url + '|' + (cat ? cat.key + (cat.rlabs ? '@' + cat.rlabs.join(',') : '') : 'latest');
@@ -1137,7 +1383,7 @@ async function runAggWall(cat) {
   const grid = $('#vodGrid'); if (!grid) return;
   const rid = ++Vod.reqId, token = ++aggToken;
   const pool = aggPool();
-  const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && App.view === 'vod' && $('#vodGrid');
+  const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && (App.view === 'vod' || App.view === 'zone') && $('#vodGrid');
   const merge = () => {
     const all = [];
     for (const s of pool) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
@@ -1151,7 +1397,7 @@ async function runAggWall(cat) {
   let need = [];
   for (const s of pool) {
     const v = cacheRaw(aggKey(s, cat));
-    if (!(v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < AGG_TTL)) need.push(s);
+    if (!(v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < aggTtl())) need.push(s);
   }
   let mergedOnce = merge(); // 本次运行内是否有过分片合并（全失败时据此给空态，不让网格永久停在「正在聚合…」）
   if (!mergedOnce && need.length) grid.innerHTML = `<p class="muted">正在聚合各源${cat ? '「' + cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}，拉到即显示…</p>`;
@@ -1167,7 +1413,7 @@ async function runAggWall(cat) {
     const fresh = await fetchAggSource(s, cat);
     if (fresh.length) cacheSet(aggKey(s, cat), fresh);
     if (alive()) mergedOnce = merge() || mergedOnce; // 一源返回就重画，新数据去重后增量上墙
-  }, 5);
+  }, 6); // 池上限即 6，全并行：首墙只等最快的那批源返回，逐源增量
   if (alive() && !mergedOnce) { // 无数据也要有明确提示：网格不能停留在「正在聚合…」或空白（分类/筛选行本就保持显示）
     grid.innerHTML = `<p class="muted">聚合无数据：${pool.length} 个源均未返回「${cat ? cat.key + (Vod.preset ? '·' + Vod.preset : '') : '最新'}」（源无此地区分类或拉取超时），可选「全部」或换源重试<br><span class="muted" style="font-size:12px">已尝试源：${esc(pool.map(s => s.name).join('、')) || '（聚合池为空，请先在源设置中导入点播源）'}</span></p>`;
     toast('聚合无数据');
@@ -1184,10 +1430,10 @@ async function aggPrefetch(rid, token, skip) {
   for (const c of [null, ...AGG_CATS]) {
     if (!c && skip) continue; // 只从最新墙发起「全量+各类」预取
     if (c === skip) continue;
-    if (rid !== Vod.reqId || token !== aggToken || !Home.aggMode || App.view !== 'vod') return;
+    if (rid !== Vod.reqId || token !== aggToken || (!Home.aggMode && !Zone.active) || (App.view !== 'vod' && App.view !== 'zone')) return; // 资源口同样后台预取分类，切类秒开（P10）
     await pMap(aggPool(), async s => {
       const k = aggKey(s, c); const v = cacheRaw(k);
-      if (v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < AGG_TTL) return;
+      if (v && Array.isArray(v.d) && v.d.length && Date.now() - v.t < aggTtl()) return;
       const fresh = await fetchAggSource(s, c);
       if (fresh.length) cacheSet(k, fresh);
     }, 2);
@@ -1270,6 +1516,7 @@ async function loadMerged(pg, srvIds) { // srvIds=R8 预设命中子分类数组
   drawVodGrid();
 }
 async function loadVod(pg = 1) {
+  if (pg > 1 && App.srcDirty) { App.srcDirty = false; Vod.items = []; Vod.page = 1; Vod.more = false; return loadVod(1); } // 翻页遇源变更：从第1页含新源重拉
   const s = SRC.vod[Home.srcIdx]; if (!s) return;
   const rid = Vod.reqId;
   const grid = $('#vodGrid'); if (!grid) return;
@@ -1329,11 +1576,13 @@ function drawVodGrid() {
   grid.innerHTML = shown.length
     ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
     : `<p class="muted">${Vod.preset ? esc(Vod.presetInfo) + '（仍无数据可继续下滑拉取或选「全部」）' : (Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据')}</p>`;
+  if (Zone.active) reapplyZoneTags(shown); // 资源口墙增量重绘后回贴测速标签
   $('#presetInfo') && ($('#presetInfo').textContent = Vod.presetInfo || '');
   bindGrid(grid, shown, it => {
     if (!Vod.agg) { openDetail(it); return; }
     // 聚合墙：点击片名进入跨源搜索（影视仓豆瓣式：先统一展示，选中资源再全源查找）
     Collect.kw = it.name; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
+    Collect.back = Zone.active ? 'zone' : 'vod'; Collect.zone = Zone.active;
     switchView('collect'); renderCollect();
   });
 }
@@ -1396,6 +1645,95 @@ function drawSubRow() {
   if (pf) { const target = [...el.querySelectorAll('[data-f]')].find(x => x.dataset.f === pf[0] && x.dataset.v === pf[1]); if (target) Focus.set(target); }
 }
 
+/* ================= 资源口（二级专区，仅经 设置→影视仓实验室「进入」可达） =================
+   界面与点播聚合墙一致：分类 chips + 海报墙（复用 runAggWall，池自动取专区源 top6）+ 搜索 + 测速。
+   点卡片→跨源结果页（Collect.back='zone'）→详情播放；测速为线路同款 Range 采样打标签，不移除条目 */
+function renderZone() {
+  syncSrc();
+  seedZoneSources(); // 没种过专区源则首次进入自动补预置站，保证资源口开箱有数据（P10）
+  Vod.agg = true; Vod.types = []; Vod.filters = null; Vod.merged = null; Vod.tab = null;
+  Zone.tags = {}; // 每次进入重建标签（localStorage 7 天缓存仍命中，不重复采样）
+  resetFilterVals();
+  body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="zoneBack">← 返回</button><button class="btn" data-focus id="zoneRefresh" title="清除资源口聚合分片并重新拉取当前墙">🔄 刷新</button><button class="btn" data-focus id="zoneFind">🔎 搜索</button><button class="btn" data-focus id="zoneSpeed" title="重新测当前墙条目的起播速度">⚡ 测速</button><button class="btn" data-focus id="zoneHist" title="仅显示资源口观看历史">🕛 历史</button><button class="btn" data-focus id="zoneKeep" title="仅显示资源口收藏">⭐ 收藏</button></div>
+    <div class="hrow" id="typeRow" style="padding:6px 28px"></div>
+    <main id="scroller"><div class="grid" id="vodGrid"></div></main>`;
+  const tabs = [{ id: '', name: '🔞 最新' }, ...AGG_CATS.map(c => ({ id: 'cat:' + c.key, name: c.key }))];
+  $('#typeRow').innerHTML = tabs.map(t => `<button class="chip${t.id === '' ? ' on' : ''}" data-focus data-tid="${esc(t.id)}">${esc(t.name)}</button>`).join('');
+  $('#typeRow').onclick = e => {
+    const b = e.target.closest('[data-tid]'); if (!b) return;
+    document.querySelectorAll('#typeRow .chip').forEach(c => c.classList.toggle('on', c === b));
+    const id = b.dataset.tid;
+    const p = id === '' ? (Vod.tab = null, runAggWall(null))
+      : (() => { const cat = AGG_CATS.find(c => 'cat:' + c.key === id); Vod.tab = { id: cat.key, name: cat.key }; return runAggWall(cat); })();
+    zoneSpeedWall(); // 热缓存时首屏 merge 同步填充，立即可测
+    p.then(() => { if (App.view === 'zone') zoneSpeedWall(); }); // 冷启动墙逐源增量后补起测（已测条目走缓存秒回）
+  };
+  bindBack('zoneBack', () => switchView('settings'));
+  $('#zoneRefresh').onclick = () => { // 与点播聚合刷新对称：只清本池源的分片（详情/测速/搜索缓存不动），当前分类立即重拉
+    aggPool().forEach(s => purgeCache('aggs:' + s.url));
+    const cat = (Vod.tab && AGG_CATS.find(c => 'cat:' + c.key === Vod.tab.id)) || null;
+    const p = runAggWall(cat);
+    zoneSpeedWall();
+    p.then(() => { if (App.view === 'zone') zoneSpeedWall(); });
+    toast('已清资源口缓存，重新拉取中…');
+  };
+  $('#zoneFind').onclick = () => openFindBox('', () => ({ line: 0, ep: 0, sec: 0 }), true);
+  $('#zoneSpeed').onclick = () => zoneSpeedWall(true);
+  $('#zoneHist').onclick = () => switchView('zonehist');
+  $('#zoneKeep').onclick = () => switchView('zonekeep');
+  Focus.set($('#zoneBack'));
+  if (!SRC.vod.some(s => s.isAdult)) {
+    $('#vodGrid').innerHTML = '<p class="muted" style="padding:20px 28px">资源口暂无预置源<br><span class="muted" style="font-size:12px"><button class="btn" data-focus id="zoneReseed">↻ 恢复预置源</button>　或导入订阅后自动聚合海报墙</span></p>';
+    $('#zoneReseed').onclick = () => { localStorage.removeItem('fongmi_zone_seed'); seedZoneSources(); renderZone(); }; // 预置按版本号只种一次，删除后经此恢复
+    return;
+  }
+  const p0 = runAggWall(null);
+  zoneSpeedWall();
+  p0.then(() => { if (App.view === 'zone') zoneSpeedWall(); }); // 冷启动墙逐源增量完成后补起测（已测条目走缓存秒回）
+}
+/* 墙内条目测速：取首线路首集 /proxy Range 采样（与线路测速同一 lineSpeed，2.5s 预算），
+   海报角标绿/黄/红速度标签；-1=采样失败不判死；失败条目同样保留（用户要求不移除）。
+   并发 3、每次最多测前 60 条（按年份新的优先），结果按 源+id 缓存 7 天 */
+async function zoneSpeedWall(force) {
+  if (App.view !== 'zone' || LS('fongmi_linespeed', 1) === 0) return;
+  const seq = ++Zone.seq;
+  const shown = sortByYearDesc(Vod.items).slice(0, 60);
+  await pMap(shown, async (it, i) => {
+    if (seq !== Zone.seq || App.view !== 'zone') return;
+    const ck = 'adsp:' + normUrl(it.source?.url || '') + '|' + it.id;
+    let kb = null, hit = false;
+    if (!force && Zone.tags[ck] != null) { kb = Zone.tags[ck]; hit = true; } // 本轮已测：直接复用
+    if (!hit && !force) { const c = cacheRaw(ck); if (c && typeof c.d === 'number' && Date.now() - c.t < 7 * 864e5) { kb = c.d; hit = true; } }
+    if (kb != null) Zone.tags[ck] = kb;
+    if (!hit) {
+      try {
+        const dk = `detail:${normUrl(it.source.url)}|${it.id}`;
+        let d = cacheGet(dk);
+        if (!d) { d = parseDetail(await httpGet(listUrl(it.source.url, `ac=videolist&ids=${encodeURIComponent(it.id)}`), 8000), it.source); if (d && d.episodes) cacheSet(dk, d); }
+        const link = d?.episodes?.[0]?.list?.[0]?.link;
+        kb = link ? Math.round(await lineSpeed(link)) : 0;
+      } catch { kb = -1; }
+      cacheSet(ck, kb);
+      Zone.tags[ck] = kb;
+    }
+    if (seq !== Zone.seq || App.view !== 'zone') return;
+    const t = PerfCore.lineSpeedTag(kb);
+    // 按条目 id 定位卡片（聚合墙逐源增量重绘会改变索引顺序，不能用下标）
+    const pic = document.querySelector(`#vodGrid .card[data-aid="${CSS.escape(String(it.id))}"]`)?.querySelector('.pic');
+    if (pic && t) { pic.querySelector('.spTag')?.remove(); pic.insertAdjacentHTML('beforeend', `<span class="spTag ${t.cls}">${esc(t.label)}</span>`); }
+  }, 3);
+}
+/* 聚合墙逐源增量重绘会重建 innerHTML 抹掉角标：按 源|id 从 Zone.tags 回贴，不重测 */
+function reapplyZoneTags(shown) {
+  for (const it of shown) {
+    const kb = Zone.tags['adsp:' + normUrl(it.source?.url || '') + '|' + it.id];
+    if (kb == null) continue;
+    const t = PerfCore.lineSpeedTag(kb);
+    const pic = document.querySelector(`#vodGrid .card[data-aid="${CSS.escape(String(it.id))}"]`)?.querySelector('.pic');
+    if (pic && t && !pic.querySelector('.spTag')) pic.insertAdjacentHTML('beforeend', `<span class="spTag ${t.cls}">${esc(t.label)}</span>`);
+  }
+}
+
 /* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想 */
 let vocabSeeding = false;
 async function seedVocab(min = 600) {
@@ -1423,7 +1761,7 @@ async function seedVocab(min = 600) {
 /* ================= 搜索输入页（SearchActivity） ================= */
 function renderSearch() {
   const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="qrBtn">📱 远程输入</button><button class="btn" data-focus id="searchBack">← 首页</button></div>
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="qrBtn">📱 远程输入</button><button class="btn" data-focus id="searchBack">← 点播</button></div>
     <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
       ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
       <button class="btn" data-focus data-kb="⌫">退格</button>
@@ -1435,12 +1773,12 @@ function renderSearch() {
       ${LS('fongmi_kw', []).length ? `<div class="rowhead">搜索历史</div><div class="hrow">${LS('fongmi_kw', []).map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}
       <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方实时联想当前源里的片名，遥控选中即填入。候选词进入本页时自动从当前源拉取积累；手机扫码可与电视同步输入。</p>
     </main>`;
-  bindBack('searchBack', () => switchView('home'));
+  bindBack('searchBack', () => switchView('vod'));
   const run = () => {
     const kw = $('#kw').value.trim(); if (!kw) return;
     const h = LS('fongmi_kw', []).filter(x => x !== kw); h.unshift(kw);
     localStorage.setItem('fongmi_kw', JSON.stringify(h.slice(0, 10)));
-    Collect.kw = kw; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
+    Collect.kw = kw; Collect.done = 0; Collect.stop = false; Collect.bySite = {}; Collect.back = 'search'; Collect.zone = false;
     switchView('collect'); renderCollect();
   };
   const drawSug = () => {
@@ -1507,9 +1845,11 @@ function renderSearch() {
    提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
    源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
    SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
-const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0 };
-function collectSources() {
-  const items = SRC.vod.map((s, si) => ({ s, si })).filter(x => autoOn() ? !isDead(x.s.url) : true);
+const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false };
+function collectSources(zone) { // zone=true 只搜专区源（资源口/专区作品）；常规搜索排除专区源——专区内容仅在设置·实验室「资源口」入口可见
+  const items = SRC.vod.map((s, si) => ({ s, si }))
+    .filter(x => zone ? x.s.isAdult : !x.s.isAdult)
+    .filter(x => autoOn() ? !isDead(x.s.url) : true);
   return PerfCore.orderSources(items, x => healthOf(x.s.url)?.ms ?? null, Home.srcIdx);
 }
 function searchShardSet(ck, u, items) { const v = cacheRaw(ck) || {}; v[u] = { t: Date.now(), d: items }; cacheSet(ck, v); }
@@ -1526,7 +1866,7 @@ function renderCollect() {
   body.innerHTML = `<div class="colhead" style="display:flex;align-items:center;gap:10px">“${esc(Collect.kw)}”的搜索结果 <span class="muted" style="font-size:13px;font-weight:400">Esc 停止并返回</span><button class="btn" data-focus id="collectBack" style="margin-left:auto">← 返回</button></div>
     <div class="hrow" id="cTabs"><button class="chip on" data-focus data-t="">全部</button></div>
     <main id="scroller"><div class="grid" id="cGrid"><p class="muted" style="padding:20px 0">等待各源返回…</p></div></main>`;
-  bindBack('collectBack', () => { Collect.stop = true; switchView('search'); });
+  bindBack('collectBack', () => { Collect.stop = true; switchView(Collect.back || 'search'); });
   $('#cTabs').onclick = e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
     Collect.tabIdx = b.dataset.t;
@@ -1535,11 +1875,11 @@ function renderCollect() {
   };
   const ep = ++Collect.epoch;
   Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0;
-  const sources = collectSources();
+  const sources = collectSources(!!Collect.zone);
   Collect.total = sources.length; // O3c 判「各源已返回完」做无结果推荐
   if (!sources.length) { $('#cGrid').innerHTML = '<p class="err">无点播源</p>'; return; }
   const ck = PerfCore.searchKey(Collect.kw);
-  const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), PerfCore.SEARCH_TTL);
+  const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), searchTtl());
   const siOf = new Map(sources.map(({ s, si }) => [normUrl(s.url), { s, si }]));
   for (const [u, d] of [...Object.entries(fresh), ...Object.entries(stale)]) {
     const x = siOf.get(u); if (x) addSiteTab(x.s, x.si, d);
@@ -1564,7 +1904,7 @@ function renderCollect() {
       if (!Collect.stop && Collect.tabIdx === '' && Collect.done >= Collect.total && !Object.keys(Collect.bySite).length && App.view === 'collect') drawCollectTab();
     }
   })();
-  const [first, rest] = PerfCore.splitBatches(sources, 8);
+  const [first, rest] = PerfCore.splitBatches(sources, LS('fongmi_threads', 8));
   first.forEach(fire);
   if (rest.length) setTimeout(() => { if (ep === Collect.epoch) rest.forEach(fire); }, 1200);
   Focus.set($('#cTabs').querySelector('[data-focus]')); // R7：结果页初始焦点=Tab「全部」
@@ -1607,12 +1947,17 @@ function drawCollectTab() {
 async function openDetail(item) {
   if (item.name && pinIndex) { pinIndex.bump(item.name, 2); persistSoon(); } // 进详情 +2 权重（方案③.5）
   const s = item.source || SRC.vod[Home.srcIdx];
-  App.videoBack = App.view === 'collect' ? 'collect' : (App.view === 'home' ? 'home' : App.view === 'keep' ? 'keep' : App.view === 'hist' ? 'hist' : 'vod');
+  // 播放页内「搜本作/换源/自动换源」再进详情：App.view 已是 video，保持原返回目标不丢
+  if (App.view !== 'video') App.videoBack = ({ collect: 'collect', keep: 'keep', hist: 'hist', search: 'search', zone: 'zone', zonehist: 'zonehist', zonekeep: 'zonekeep' })[App.view] || 'vod';
+  App.curZone = Zone.active || !!(s && s.isAdult); // 专区作品的「搜本作/换源」池限定专区源；常规作品排除专区源
   App.view = 'video';
   stopPlayer();
-  const hist = LS('fongmi_hist', []).filter(h => !(h.id === String(item.id) && h.si === SRC.vod.indexOf(s)));
-  hist.unshift({ id: String(item.id), name: item.name, pic: item.pic, si: SRC.vod.indexOf(s) });
-  localStorage.setItem('fongmi_hist', JSON.stringify(hist.slice(0, 60))); // O3b 放宽 20→60 供历史页管理
+  // 实验室「历史合并」：开时按片名去重（同名跨源只留最新一条）；条数上限走设置页 fongmi_histmax
+  const mergeH = LS('fongmi_histmerge', 1) !== 0;
+  const hist = LS('fongmi_hist', []).filter(h => !(h.id === String(item.id) && h.si === SRC.vod.indexOf(s)) && !(mergeH && h.name === item.name));
+  hist.unshift({ id: String(item.id), name: item.name, pic: item.pic, si: SRC.vod.indexOf(s), a: s && s.isAdult ? 1 : 0 });
+  const hmax = LS('fongmi_histmax', 60); let hn = 0, ha = 0;
+  localStorage.setItem('fongmi_hist', JSON.stringify(hist.filter(h => h.a ? ++ha <= hmax : ++hn <= hmax))); // 两池各按上限截断
   body.innerHTML = `<main id="scroller" style="overflow-y:auto">
     <div class="eprow"><button class="btn" data-focus id="vidBack">← 返回</button><button class="btn" data-focus id="findBtn">🔎 搜本作</button></div>
     <div class="vtop"><video id="player" controls autoplay data-focus></video>
@@ -1622,20 +1967,22 @@ async function openDetail(item) {
   // 常驻搜本作：详情失败/加载中的源也能直接跨源搜同名片续播；paint 成功后升级为精确片名与当前线路/集号/进度
   let findTitle = item.name || '';
   let findState = () => ({ line: 0, ep: 0, sec: 0 });
-  $('#findBtn').onclick = () => openFindBox(findTitle, findState);
+  curFindState = () => findState(); // 始终读最新 findState（paint 会重绑精确版）
+  $('#findBtn').onclick = () => openFindBox(findTitle, findState, App.curZone);
   // SWR 详情缓存：上次结果先上屏秒显（含起播），8s 内拉新成功且数据有变化才重绘；失败保留缓存
   const dk = `detail:${normUrl(s.url)}|${item.id}`;
   const cached = cacheGet(dk);
   let painted = false;
   /* O1a 跨会话进度（docs/2026-10-30-O1-O3播放与直播体验方案.md）：fongmi_prog { "<id>|<si>": {ep,sec,dur,ts} }
      timeupdate 5s 节流 / pause 即写 / ended 清除；写时顺带清理超 30 天或已脱离历史+收藏的孤儿项 */
-  let progKey = '', progEp = () => 0, onEndedExtra = null; // onEndedExtra 由 paint 注入（连播/提示），监听只绑一次防重绘双触发
+  let progKey = '', progEp = () => 0, progLine = () => 0, progFlag = () => '', onEndedExtra = null; // onEndedExtra 由 paint 注入（连播/提示），监听只绑一次防重绘双触发
   const progSave = () => {
     if (!progKey) return;
     const v = $('#player'); if (!v) return;
     if (!isFinite(v.duration) || v.duration <= 0 || v.currentTime < 5) return;
     const all = LS('fongmi_prog', {});
-    all[progKey] = { ep: progEp(), sec: Math.round(v.currentTime), dur: Math.round(v.duration), ts: Date.now() };
+    // 记线路（含 flag 名，线路表顺序变化时按名还原）：下次从历史/收藏进入直接在快线上续播
+    all[progKey] = { ep: progEp(), sec: Math.round(v.currentTime), dur: Math.round(v.duration), ts: Date.now(), line: progLine(), flag: progFlag() };
     const alive = new Set([...LS('fongmi_hist', []), ...LS('fongmi_keep', [])].map(h => `${h.id}|${h.si}`));
     for (const k in all) { if (!alive.has(k) || Date.now() - (all[k].ts || 0) > 2592e6) delete all[k]; }
     localStorage.setItem('fongmi_prog', JSON.stringify(all));
@@ -1662,40 +2009,128 @@ async function openDetail(item) {
     ${d.director ? `<p class="meta">导演：${esc(d.director)}</p>` : ''}
     ${d.actor ? `<p class="meta">主演：${esc(String(d.actor).slice(0, 100))}</p>` : ''}
     <p class="content">简介：${esc(d.desc.slice(0, 200))}</p><div id="vtitle" class="muted"></div>
-    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="prevEp">« 上一集</button><button class="btn" data-focus id="nextEp">下一集 »</button></div>`;
+    <div class="hrow" style="margin-top:8px"><button class="btn${LS('fongmi_keep', []).some(k => k.id === d.id && k.si === si) ? ' on' : ''}" data-focus id="keepBtn">收藏</button><button class="btn" data-focus id="changeBtn">换源</button><button class="btn" data-focus id="reSpeed" title="重新测当前集各线路速度">⚡ 测速</button><button class="btn" data-focus id="fsBtn">⛶ 全屏</button><button class="btn" data-focus id="prevEp">« 上一集</button><button class="btn" data-focus id="nextEp">下一集 »</button></div>`;
   $('#fsBtn').onclick = toggleFullscreen;
   $('#keepBtn').onclick = () => {
     let k = LS('fongmi_keep', []);
     const at = k.findIndex(x => x.id === d.id && x.si === si);
-    if (at >= 0) { k.splice(at, 1); toast('已取消收藏'); } else { k.unshift({ id: d.id, name: d.title, pic: d.pic, si, eps: d.episodes[line]?.list.length || 0, flag: d.episodes[line]?.flag || '', last: d.remarks || d.notes || '', ts: Date.now() }); toast('已加入收藏'); }
-    localStorage.setItem('fongmi_keep', JSON.stringify(k.slice(0, 50)));
+    if (at >= 0) { k.splice(at, 1); toast('已取消收藏'); } else { k.unshift({ id: d.id, name: d.title, pic: d.pic, si, eps: d.episodes[line]?.list.length || 0, flag: d.episodes[line]?.flag || '', last: d.remarks || d.notes || '', ts: Date.now(), a: s && s.isAdult ? 1 : 0 }); toast('已加入收藏'); }
+    let kn = 0, ka = 0;
+    localStorage.setItem('fongmi_keep', JSON.stringify(k.filter(x => x.a ? ++ka <= 50 : ++kn <= 50))); // 两池各 50 上限
     $('#keepBtn').classList.toggle('on', at < 0);
   };
-  $('#changeBtn').onclick = doChangeSource;
+  $('#changeBtn').onclick = () => doChangeSource();
   // 选线优先：首个含流后缀(.m3u8/.mp4 等)地址的线路，避免默认撞 HTML 壳页线路（方案③）
   const isStreamLink = PerfCore.isStreamLink;
   let line = d.episodes.findIndex(g => g.list.length && g.list.some(x => isStreamLink(x.link)));
   if (line < 0) line = d.episodes.findIndex(g => g.list.length);
   if (line < 0) line = 0;
+  // 6h 内持久化测速复用：线路按钮直接带旧速度标签；若旧记录有合格快线，默认就选它（不再盲进慢线）
+  if (LS('fongmi_linespeed', 1) !== 0) {
+    const pe = LS('fongmi_lspeed', {})[dk];
+    if (pe && Array.isArray(pe.sp) && Date.now() - (pe.t || 0) < 6 * 36e5) {
+      LINE_SPEED.set(`${dk}|${pe.ep || 0}`, pe.sp);
+      if (pe.sp.some(k => k != null && k >= PerfCore.SPEED_FAIR)) line = PerfCore.pickBestLine(d.episodes, pe.sp, pe.ep || 0);
+    }
+  }
   let curEp = 0; // 当前播放集序号，跨源跳转/跨会话续播按它归属
-  progEp = () => curEp;
+  progEp = () => curEp; progLine = () => line; progFlag = () => d.episodes[line]?.flag || '';
   let tried = new Set(); // O1b 本次失败换链中已试过的线路下标（手动换线/选集会重置）
   findTitle = d.title;
   findState = () => ({ line, ep: curEp, sec: $('#player')?.currentTime || 0 });
   const rows = $('#vrows');
   rows.innerHTML = `
-    <div class="eprow"><span class="slabel">线路</span><div class="hrow" id="flagRow" style="flex:1"></div></div>
+    <div class="eprow"><span class="slabel">线路(共 ${d.episodes.length} 条)</span><div class="hrow" id="flagRow" style="flex:1"></div></div>
     <div class="eprow" style="align-items:flex-start"><span class="slabel">选集</span><div class="hrow" id="epRow" style="flex:1;flex-wrap:wrap"></div></div>`;
+  /* A1 线路测速：paint 后异步启动，完成一线原位刷按钮第二行（不阻塞起播）；全测完且最快线≠当前、
+     用户未手动换线时自动跳最快线并续回进度（fongmi_autobestline=0 关；fongmi_linespeed=0 整体关）。
+     假阴性防护：采样是服务端 /proxy 代发，部分 CDN 拒 403/不支持 Range 会测出 0，但播放器实际在流畅播——
+     此时该线重分类为 -1（「测速失败」灰标，不判死、不沉底），显示层以实际播放为准 */
+  let userPickedLine = false, speedKey = '', speedSeq = 0, autoSrcTried = false;
+  const playingHealthy = () => { const pv = $('#player'); return !!pv && pv.readyState >= 3 && !pv.error && pv.currentTime > 0; };
+  const flagBtnHtml = (g, i, sp) => {
+    const k = sp ? sp[i] : null;
+    let t = k != null ? PerfCore.lineSpeedTag(k) : null;
+    // 当前线判慢但播放器流畅 → 黄标「·播放中」，不红叉误导
+    if (t && t.cls === 'sp-bad' && i === line && playingHealthy()) t = { label: k > 0 ? PerfCore.fmtSpeed(k) + ' · 播放中' : '播放中（测速失败）', cls: 'sp-mid' };
+    return `${esc(g.flag)}(${g.list.length})${t ? `<span class="spsub ${t.cls}">${t.label}</span>` : ''}`; // 速度独立一行（对标影视仓播放页）
+  };
+  // 测速常早于起播完成：起播后再回刷一次当前线标签，把红「慢/不可用」降级为黄「播放中」
+  const pvEl = $('#player');
+  if (pvEl) {
+    const onPlaying = () => {
+      const b = document.querySelector(`#flagRow [data-l="${line}"]`);
+      const sp2 = LINE_SPEED.get(`${dk}|${curEp}`);
+      if (b && sp2 && sp2[line] != null && sp2[line] >= 0 && sp2[line] < PerfCore.SPEED_FAIR) b.innerHTML = flagBtnHtml(d.episodes[line], line, sp2);
+    };
+    if (pvEl._lsPlaying) pvEl.removeEventListener('playing', pvEl._lsPlaying); // paint 可能多次：换掉旧闭包防重复
+    pvEl._lsPlaying = onPlaying;
+    pvEl.addEventListener('playing', onPlaying);
+  }
+  const speedProbe = ep => {
+    if (LS('fongmi_linespeed', 1) === 0) return;
+    const key = `${dk}|${ep}`; speedKey = key; const seq = ++speedSeq;
+    if (LINE_SPEED.has(key)) return; // 本作品本集已测/在测（SWR 重绘复用）
+    const n = Math.min(d.episodes.length, 10), sp = new Array(n).fill(null);
+    LINE_SPEED.set(key, sp);
+    pMap([...Array(n).keys()], async i => {
+      const g = d.episodes[i], u = g && (g.list[ep] || g.list[0]);
+      let v = 0;
+      if (u && u.link) { try { v = Math.round(await lineSpeed(u.link)); } catch { v = 0; } }
+      if (v === 0 && i === line && playingHealthy()) v = -1; // 当前线测失败但播放正常→测速失败不判死
+      sp[i] = v;
+      if (seq === speedSeq && speedKey === key && App.view === 'video') {
+        const b = document.querySelector(`#flagRow [data-l="${i}"]`);
+        if (b) b.innerHTML = flagBtnHtml(g, i, sp); // 原位刷新，不整行重建（防焦点/滚动跳动）
+      }
+    }, 4).then(() => {
+      if (sp.some(k => k != null)) { // 结果持久化 6h：历史/收藏再进详情页直接复用旧速度与旧快线
+        const all = LS('fongmi_lspeed', {}); const now = Date.now();
+        for (const k in all) if (now - (all[k].t || 0) > 6 * 36e5) delete all[k];
+        all[dk] = { ep, sp, t: now };
+        localStorage.setItem('fongmi_lspeed', JSON.stringify(all));
+      }
+      if (seq !== speedSeq || speedKey !== key || App.view !== 'video' || ep !== curEp) return;
+      if (sp[line] === 0 && playingHealthy()) { sp[line] = -1; draw(curEp); } // 起播偏晚的流畅线测后补判
+      if (userPickedLine || LS('fongmi_autobestline', 1) === 0) return;
+      const best = PerfCore.pickBestLine(d.episodes, sp, ep);
+      if (best === line) {
+        // 实验室「自动换源」扩展：本作品线少且全部实测判慢（无未测/失败未知）→自动搜本作换源（默认关）
+        const allBad = n && sp.every(k => k != null && k >= 0 && k < PerfCore.SPEED_FAIR);
+        if (allBad && d.episodes.length <= 2 && LS('fongmi_autosrc', 0) !== 0 && !autoSrcTried) {
+          autoSrcTried = true;
+          toast('本作该源各线路均偏慢，自动搜本作换源…');
+          doChangeSource(true);
+        }
+        return;
+      }
+      const sec = $('#player')?.currentTime || 0;
+      line = best; tried = new Set([line]);
+      toast(`已切换到最快线路「${d.episodes[line].flag}」`);
+      draw(curEp);
+      const u = d.episodes[line].list[curEp] || d.episodes[line].list[0];
+      if (u) {
+        playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
+        if (sec > 5) { const vv = $('#player'), f = () => { if (isFinite(vv.duration) && vv.duration > sec + 1) vv.currentTime = sec; }; vv.addEventListener('loadedmetadata', f, { once: true }); }
+      }
+    });
+  };
   const draw = (ep = 0) => {
-    $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${esc(g.flag)}(${g.list.length})</button>`).join('');
+    const spNow = LINE_SPEED.get(`${dk}|${ep}`);
+    // 单线作品判慢：本源没有第二条线可跳，行内直接给「搜本作换源」出口，避免孤线红标困惑
+    const swapHint = d.episodes.length === 1 && spNow && spNow[0] != null && spNow[0] >= 0 && spNow[0] < PerfCore.SPEED_FAIR
+      ? '<button class="chip" data-focus id="swapHint" style="margin-left:8px">⚡ 该源仅此1条线 · 搜本作换源</button>' : '';
+    $('#flagRow').innerHTML = d.episodes.map((g, i) => `<button class="btn${i === line ? ' on' : ''}" data-focus data-l="${i}">${flagBtnHtml(g, i, spNow)}</button>`).join('') + swapHint;
     const progHere = LS('fongmi_prog', {})[`${d.id}|${si}`];
     $('#epRow').innerHTML = d.episodes[line].list.map((u, i) => `<button class="btn${i === ep ? ' on' : ''}${progHere && progHere.ep === i ? ' prog' : ''}" data-focus data-e="${i}">${esc(u.name)}</button>`).join('');
     syncFsBar(); // 换集/换线/重绘后同步全屏浮层集号信息与上下集置灰（含页面 #prevEp/#nextEp）
     $('#flagRow').onclick = e => {
+      if (e.target.closest('#swapHint')) { openFindBox(findTitle, findState, App.curZone); return; }
       const b = e.target.closest('[data-l]'); if (!b) return;
-      line = +b.dataset.l; curEp = 0; tried = new Set([line]);
+      line = +b.dataset.l; curEp = 0; tried = new Set([line]); userPickedLine = true;
       toast(`正在切换线路至「${d.episodes[line].flag}」`);
       draw();
+      speedProbe(0);
       const f = d.episodes[line].list[0];
       if (f) playInto($('#player'), f.link, `${d.title} · ${f.name}`, nextLine);
     };
@@ -1703,16 +2138,33 @@ async function openDetail(item) {
       const b = e.target.closest('[data-e]'); if (!b) return;
       document.querySelectorAll('#epRow .btn').forEach(x => x.classList.toggle('on', x === b));
       curEp = +b.dataset.e; tried = new Set([line]);
+      speedProbe(curEp);
       const u = d.episodes[line].list[curEp];
       playInto($('#player'), u.link, `${d.title} · ${u.name}`, nextLine);
+      // 实验室「点击剧集自动全屏」：用户手势内直接进全屏浮层
+      if (LS('fongmi_epfull', 1) !== 0 && !document.fullscreenElement) toggleFullscreen();
     };
+  };
+  $('#reSpeed').onclick = () => {
+    LINE_SPEED.delete(`${dk}|${curEp}`);
+    userPickedLine = false;
+    draw(curEp); speedProbe(curEp);
+    toast('重新测速各线路…');
   };
   /* O1b 播放失败自动换线：按「未试过≠当前」取候选，优先同集且带流后缀的线路；单次失败只跳一条，
      重试上限=线路数（tried 集天然封顶）；fongmi_autoline=0 关闭回退原 toast */
   const nextLine = () => {
     if (LS('fongmi_autoline', 1) === 0) return false;
-    const cand = PerfCore.pickNextLine(d.episodes, { line, curEp, tried });
-    if (!cand.length) return false;
+    const cand = PerfCore.pickNextLine(d.episodes, { line, curEp, tried, speeds: LINE_SPEED.get(`${dk}|${curEp}`) || null });
+    if (!cand.length) {
+      // 实验室「自动换源」：全部线路失败→自动搜本作切首个同名源续播（默认关，每次进入详情页最多触发一次）
+      if (LS('fongmi_autosrc', 0) !== 0 && !autoSrcTried) {
+        autoSrcTried = true;
+        toast('所有线路均无法播放，自动换源搜索本作…');
+        doChangeSource(true);
+      }
+      return false;
+    }
     const ni = cand[0].i;
     tried.add(ni);
     line = ni;
@@ -1733,6 +2185,7 @@ async function openDetail(item) {
     if (ni >= g.list.length) { toast('已是最后一集'); return; }
     curEp = ni; tried = new Set([line]);
     draw(curEp);
+    speedProbe(curEp);
     playInto($('#player'), g.list[curEp].link, `${d.title} · ${g.list[curEp].name}`, nextLine);
   };
   $('#prevEp').onclick = () => goEp(-1);
@@ -1755,6 +2208,12 @@ async function openDetail(item) {
     startEp = Math.min(r.ep || 0, d.episodes[line].list.length - 1);
   } else if (LS('fongmi_resume', 1) !== 0) { // O1a 跨会话续播（fongmi_resume=0 关闭读取）
     const p = LS('fongmi_prog', {})[`${d.id}|${si}`];
+    if (p && d.episodes.length) {
+      // 续播先还原上次线路：flag 精确匹配优先（线路表顺序可能变化），退化旧下标
+      const fi = p.flag ? d.episodes.findIndex(g => g.flag === p.flag) : -1;
+      if (fi >= 0) line = fi;
+      else if (Number.isInteger(p.line) && p.line >= 0 && p.line < d.episodes.length) line = p.line;
+    }
     if (p && d.episodes[line]?.list.length) {
       startEp = Math.min(p.ep || 0, d.episodes[line].list.length - 1);
       seekTo = p.sec || 0;
@@ -1766,6 +2225,7 @@ async function openDetail(item) {
   draw(startEp);
   const cur = d.episodes[line].list[startEp];
   if (cur) playInto($('#player'), cur.link, `${d.title} · ${cur.name}`, nextLine);
+  speedProbe(startEp); // 首帧起播后再测速：完成一线刷一线，全部测完按开关自动跳最快线
   if (fromProg) {
     if (seekTo >= 5) { // hls 时长在 MANIFEST_PARSED 后可用，loadedmetadata/canplay 双保险
       const vv = $('#player'); let ok = false;
@@ -1789,7 +2249,7 @@ async function openDetail(item) {
 }
 /* 播放页"搜本作"：弹窗（对应 FongMi 播放器菜单搜索对话框）→ 全源搜索 → 选中结果带当前线路/集号/进度跳转续播 */
 function closeFindModal() { $('#findModal').classList.remove('open'); if (App.view === 'video') Focus.set($('#player')); }
-function openFindBox(title, getState) {
+function openFindBox(title, getState, zone) {
   const m = $('#findModal');
   if (m.classList.contains('open')) return closeFindModal(); // 再点一次收起
   m.classList.add('open');
@@ -1815,7 +2275,7 @@ function openFindBox(title, getState) {
     const q = kw.value.trim(); if (!q) return;
     const tk = ++runToken;
     curFound = [];
-    const sources = collectSources();
+    const sources = collectSources(!!zone);
     if (!sources.length) { drawFind([], false); return; }
     const bySi = {};
     let left = sources.length;
@@ -1825,7 +2285,7 @@ function openFindBox(title, getState) {
       drawFind(curFound, pending);
     };
     const ck = PerfCore.searchKey(q);
-    const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), PerfCore.SEARCH_TTL);
+    const { fresh, stale } = PerfCore.splitTtl(cacheRaw(ck), searchTtl());
     const srcOf = new Map(sources.map(({ s, si }) => [normUrl(s.url), { s, si }]));
     for (const [u, d] of [...Object.entries(fresh), ...Object.entries(stale)]) {
       const x = srcOf.get(u); if (x && d.length) bySi[x.si] = d.map(v => ({ ...v, source: x.s }));
@@ -1840,7 +2300,7 @@ function openFindBox(title, getState) {
       } catch { /* 单源失败静默 */ }
       finally { if (tk === runToken && --left <= 0) flush(false); }
     })();
-    const [first, rest] = PerfCore.splitBatches(sources, 8);
+    const [first, rest] = PerfCore.splitBatches(sources, LS('fongmi_threads', 8));
     first.forEach(fire);
     if (rest.length) setTimeout(() => { if (tk === runToken) rest.forEach(fire); }, 1200);
   };
@@ -1849,7 +2309,7 @@ function openFindBox(title, getState) {
   Focus.set(kw); // 两段式 R1：仅选中；OK 进编辑（编辑态 Enter 触发全源搜索）
   if (title) runFind();
 }
-async function doChangeSource() {
+async function doChangeSource(autoPick) {
   toast('换源：正在其它源查找同名…');
   const others = SRC.vod.filter((s, i) => i !== Home.srcIdx && !isDead(s.url));
   const title = ($('#vtxt h2')?.firstChild?.textContent || '').trim();
@@ -1863,6 +2323,10 @@ async function doChangeSource() {
     } catch { /* 忽略 */ }
   }));
   if (!found.length) return toast(`其它源未找到「${title}」`);
+  if (autoPick) { // 实验室「自动换源」：取首个同名结果，带当前线路/集/进度跳转续播
+    App.resume = curFindState ? curFindState() : null;
+    return openDetail(found[0]);
+  }
   $('#vrows').insertAdjacentHTML('afterbegin', `<div class="eprow"><span class="slabel">换源</span><div class="hrow" id="chRow" style="flex:1">${found.map((f, i) => `<button class="btn" data-focus data-c="${i}">${esc(f.source.name)} ${esc(f.remarks || '')}</button>`).join('')}</div></div>`);
   $('#chRow').onclick = e => { const b = e.target.closest('[data-c]'); if (b) openDetail(found[+b.dataset.c]); };
 }
@@ -1871,9 +2335,9 @@ async function doChangeSource() {
 const Probe = { rows: null, running: false, reqId: 0 };
 function renderProbe() {
   body.innerHTML = `<div class="colhead">连接 · 点播源测速 <small class="muted" style="font-size:13px;font-weight:400">逐源请求 ac=list + 首分类列表</small></div>
-    <main style="flex:1;overflow-y:auto;padding:6px 28px"><div class="hrow" style="margin-bottom:8px"><button class="btn" data-focus id="probeGo">重新检测</button><button class="btn" data-focus id="probeBack" style="margin-left:auto">← 首页</button></div><div id="probeTable"></div></main>`;
+    <main style="flex:1;overflow-y:auto;padding:6px 28px"><div class="hrow" style="margin-bottom:8px"><button class="btn" data-focus id="probeGo">重新检测</button><button class="btn" data-focus id="probeBack" style="margin-left:auto">← 点播</button></div><div id="probeTable"></div></main>`;
   $('#probeGo').onclick = () => probeAll();
-  bindBack('probeBack', () => switchView('home'));
+  bindBack('probeBack', () => switchView('vod'));
   drawProbeRows();
   Focus.set($('#probeGo')); // R7
   if (!Probe.rows) probeAll();
@@ -1910,19 +2374,22 @@ async function probeAll() {
 }
 
 /* ================= 收藏页（KeepActivity） ================= */
-function renderKeep() {
-  const keep = LS('fongmi_keep', []);
-  body.innerHTML = `<main id="scroller"><div class="rowhead">我的收藏 <small>选中卡片后按 ↑ 再确定可取消收藏</small>
-    <button class="btn" data-focus id="keepBack" style="margin-left:auto">← 首页</button></div>
+function renderKeep(zone = false) {
+  // （入口：点播页导航「收藏」=普通池；资源口「⭐ 收藏」=专区池，两池数据隔离）
+  const keep = LS('fongmi_keep', []).filter(x => isZoneRec(x) === zone);
+  body.innerHTML = `<main id="scroller"><div class="rowhead">${zone ? '资源口收藏' : '我的收藏'} <small>选中卡片后按 ↑ 再确定可取消收藏</small>
+    <button class="btn" data-focus id="keepBack" style="margin-left:auto">← ${zone ? '资源口' : '点播'}</button></div>
     <div class="grid" id="keepGrid">${keep.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">空空如也</p>'}</div></main>`;
-  bindBack('keepBack', () => switchView('home'));
+  bindBack('keepBack', () => switchView(zone ? 'zone' : 'vod'));
   bindGrid($('#keepGrid'), keep, h => {
     const k = LS('fongmi_keep', []); const x = k.find(y => y.id === h.id && y.si === h.si);
     if (x && x.updated) { x.updated = false; localStorage.setItem('fongmi_keep', JSON.stringify(k)); } // 进详情即清角标
     openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] });
   }, i => {
-    const k = LS('fongmi_keep', []); k.splice(i, 1);
-    localStorage.setItem('fongmi_keep', JSON.stringify(k)); renderKeep();
+    const x = keep[i]; if (!x) return; // 分池过滤后显示序与存储序不一致，按 id+si 定位删除
+    const k = LS('fongmi_keep', []); const at = k.findIndex(y => y.id === x.id && y.si === x.si);
+    if (at >= 0) { k.splice(at, 1); localStorage.setItem('fongmi_keep', JSON.stringify(k)); }
+    renderKeep(zone);
   });
   Focus.set($('#keepGrid').querySelector('[data-focus]') || $('#keepBack')); // R7+R2：初始/删后焦点=网格首卡，空则返回钮
   checkKeeps(keep);
@@ -1956,23 +2423,26 @@ async function checkKeeps(items) {
     x.updated = !!r.u;
   }
   localStorage.setItem('fongmi_keep', JSON.stringify(k));
-  if (App.view === 'keep') renderKeep(); // 二次进入全走缓存、changed=false 不再循环
+  if (App.view === 'keep') renderKeep();
+  else if (App.view === 'zonekeep') renderKeep(true); // 二次进入全走缓存、changed=false 不再循环
 }
 
-/* ================= 历史页（O3b：首页「最近观看·全部」进入，grid 管理+清空，删除连带清续播位） ================= */
-function renderHist() {
-  // （入口在首页「历史」功能按钮；返回/删除均可遥控点选）
-  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si]).map(h => ({ ...h, source: SRC.vod[h.si] }));
-  body.innerHTML = `<main id="scroller"><div class="rowhead">观看历史 <small>共 ${hist.length} 条 · 最新在最前 · 选中卡片按 ↑ 再确定删除</small>
-    <button class="btn" data-focus id="histBack" style="margin-left:auto">← 首页</button><button class="btn" data-focus id="histClear">清空全部</button></div>
+/* ================= 历史页（O3b：点播页导航「历史」进入，grid 管理+清空，删除连带清续播位） ================= */
+function renderHist(zone = false) {
+  // （入口：点播页导航「历史」=普通池；资源口「🕛 历史」=专区池，两池数据隔离）
+  const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si] && isZoneRec(h) === zone).map(h => ({ ...h, source: SRC.vod[h.si] }));
+  body.innerHTML = `<main id="scroller"><div class="rowhead">${zone ? '资源口历史' : '观看历史'} <small>共 ${hist.length} 条 · 最新在最前 · 选中卡片按 ↑ 再确定删除</small>
+    <button class="btn" data-focus id="histBack" style="margin-left:auto">← ${zone ? '资源口' : '点播'}</button><button class="btn" data-focus id="histClear">清空本列表</button></div>
     <div class="grid" id="histAllGrid">${hist.map((h, i) => cardHtml(h, i, { del: true, showSite: true })).join('') || '<p class="muted">暂无观看历史</p>'}</div></main>`;
-  $('#histClear').onclick = () => askYes('清空全部观看历史？收藏项的续播进度也会一并清除', () => {
-    localStorage.removeItem('fongmi_hist');
+  $('#histClear').onclick = () => askYes(`清空${zone ? '资源口' : '普通'}观看历史？（另一类历史与收藏的续播进度不受影响）`, () => {
+    const all = LS('fongmi_hist', []);
+    const gone = new Set(all.filter(h => isZoneRec(h) === zone).map(h => `${h.id}|${h.si}`));
+    localStorage.setItem('fongmi_hist', JSON.stringify(all.filter(h => isZoneRec(h) !== zone)));
+    const keepAlive = new Set(LS('fongmi_keep', []).map(k => `${k.id}|${k.si}`));
     const prog = LS('fongmi_prog', {});
-    const keep = new Set(LS('fongmi_keep', []).map(k => `${k.id}|${k.si}`));
-    for (const pk in prog) { if (!keep.has(pk)) delete prog[pk]; }
+    for (const pk in prog) { if (gone.has(pk) && !keepAlive.has(pk)) delete prog[pk]; }
     localStorage.setItem('fongmi_prog', JSON.stringify(prog));
-    renderHist();
+    renderHist(zone);
   });
   bindGrid($('#histAllGrid'), hist, h => openDetail({ id: h.id, name: h.name, pic: h.pic, source: SRC.vod[h.si] }), i => {
     const x = hist[i]; if (!x) return;
@@ -1980,9 +2450,9 @@ function renderHist() {
     const prog = LS('fongmi_prog', {});
     delete prog[`${x.id}|${x.si}`];
     localStorage.setItem('fongmi_prog', JSON.stringify(prog));
-    renderHist();
+    renderHist(zone);
   });
-  bindBack('histBack', () => switchView('home'));
+  bindBack('histBack', () => switchView(zone ? 'zone' : 'vod'));
   Focus.set($('#histAllGrid').querySelector('[data-focus]') || $('#histBack')); // R7：初始/删后焦点=网格首卡，空则返回钮
 }
 
@@ -2094,7 +2564,7 @@ function renderLive() {
   const lives = SRC.live;
   body.innerHTML = `<div class="livewrap">
     <video id="player" autoplay controls data-focus></video>
-    <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span><button class="btn" data-focus id="liveBack" style="pointer-events:auto">← 首页</button></div>
+    <div class="ltop"><span class="t" id="ltTitle">${lives.length ? esc(lives[Live.srcIdx]?.name) : '未导入直播源'}</span><span class="s" id="ltEpg"></span><span class="c" id="ltClock"></span><button class="btn" data-focus id="liveBack" style="pointer-events:auto">← 点播</button></div>
     <div class="lbottom" id="lbBar"><span class="num" id="lbNum">000</span><b id="lbName">—</b><span id="lbPlay">正在播放：—</span><span class="muted" id="lbLine">线路 1</span><button class="btn" data-focus id="liveFs" style="pointer-events:auto;margin-left:auto">⛶ 全屏</button></div>
     <div class="lpanel" id="lPanel">
       <div class="col" id="colGroup"></div><div class="col" id="colChan"></div><div class="col" id="colEpg"></div>
@@ -2105,7 +2575,7 @@ function renderLive() {
   clearInterval(Live.epgTimer); // 每分钟刷新顶栏「现在·节目」
   Live.epgTimer = setInterval(() => { if (App.view === 'live') updateEpgTop(); }, 60000);
   drawEpgCol();
-  bindBack('liveBack', () => switchView('home'));
+  bindBack('liveBack', () => switchView('vod'));
   $('#liveFs').onclick = toggleFullscreen; // 审计补漏#1：直播也有 OS 全屏入口（toggleFullscreen 认 #player，直播画面同为该 id）
   if (!lives.length) { toast('无直播源，请到普通调试台导入含直播的订阅'); return; }
   if (lives.length > 1) {
@@ -2137,9 +2607,9 @@ async function loadLiveList() {
 }
 function drawPanel() {
   if (!$('#colGroup')) return;
-  /* R6 遥控可达：分组列顶插「← 首页」行（面板关时 liveBack 不可达的替代通道）；频道列顶插收藏按钮，
+  /* R6 遥控可达：分组列顶插「← 点播」行（面板关时 liveBack 不可达的替代通道）；频道列顶插收藏按钮，
      目标=最后聚焦频道行（Live.hi），无则正在播出频道（Live.cur）；★/☆ 文案随目标收藏态 */
-  $('#colGroup').innerHTML = '<div class="li" data-focus data-home="1">← 首页</div>'
+  $('#colGroup').innerHTML = '<div class="li" data-focus data-home="1">← 点播</div>'
     + '<div class="li" data-focus data-fs="1">⛶ 全屏播放</div>' // 补漏#1：面板关时底栏按钮键盘不可达（↑↓被换台劫持），全屏经面板可达
     + (SRC.live.length > 1 ? SRC.live.map((x, i) => `<div class="li${i === Live.srcIdx ? ' on' : ''}" data-focus data-src="${i}">📡 ${esc(x.name)}</div>`).join('') : '') // 换源同样经面板可达（对齐 FongMi 直播菜单）
     + Live.groups.map((g, i) => `<div class="li${i === Live.gi ? ' on' : ''}" data-focus data-g="${i}">${esc(g)}</div>`).join('');
@@ -2150,7 +2620,7 @@ function drawPanel() {
   $('#colChan').innerHTML = `<div class="li"><button class="btn" data-focus id="favCur">${favOn ? '★ 取消收藏选中频道' : '☆ 收藏选中频道'}</button></div>`
     + list.map(x => `<div class="li${x.i === Live.cur ? ' on' : ''}" data-focus data-i="${x.i}">${esc(x.c.name)}<span class="fav${favUrls.has(x.c.url) ? ' on' : ''}" data-f="${x.i}">★</span></div>`).join('');
   $('#colGroup').onclick = e => {
-    if (e.target.closest('[data-home]')) return switchView('home');
+    if (e.target.closest('[data-home]')) return switchView('vod');
     if (e.target.closest('[data-fs]')) { togglePanel(false); toggleFullscreen(); return; }
     const sc = e.target.closest('[data-src]'); if (sc) { Live.srcIdx = +sc.dataset.src; localStorage.setItem('fongmi_live_idx', String(Live.srcIdx)); Live.cur = -1; renderLive(); return; }
     const b = e.target.closest('[data-g]'); if (b) { Live.gi = +b.dataset.g; drawPanel(); }
@@ -2164,7 +2634,7 @@ function drawPanel() {
 function togglePanel(open) {
   Live.panelOpen = open ?? !Live.panelOpen;
   $('#lPanel')?.classList.toggle('open', Live.panelOpen);
-  if (Live.panelOpen) { Focus.set($('#colGroup')?.querySelector('[data-g]') || $('#player')); drawPanel(); } // 落首分组而非「首页」行，↓↑ 即可回看首页行
+  if (Live.panelOpen) { Focus.set($('#colGroup')?.querySelector('[data-g]') || $('#player')); drawPanel(); } // 落首分组而非「点播」行，↓↑ 即可回看导航行
   else Focus.set($('#player'));
 }
 function playChan(i, keepPanel) {
@@ -2201,12 +2671,19 @@ function inputDigit(k) {
 }
 
 /* ================= 启动 ================= */
-switchView('home');
-setTimeout(sourceGuard, 1500); // 首页先出，再静默维护（测活/订阅更新/自动切换）
+fixZoneIdx(); // 存档/导入后的当前下标若落在专区源，先纠正（专区源仅资源口可达）
+switchView('vod');
+setTimeout(sourceGuard, 1500); // 点播首页先出，再静默维护（测活/订阅更新/自动切换）
 setTimeout(seedVocab, 2500);   // 后台预取片名，进搜索页即有候选词
 $('#qrModal').onclick = e => { if (e.target === $('#qrModal')) closeQrModal(); }; // 点遮罩关窗
 $('#qrClose').onclick = closeQrModal; // 关闭按钮（此前只给了焦点漏绑事件，点/Enter 无效）
 $('#askOk').onclick = () => closeAsk(true);
 $('#askCancel').onclick = () => closeAsk(false);
 $('#askModal').onclick = e => { if (e.target === $('#askModal')) closeAsk(false); };
+$('#cfgModal').onclick = e => {
+  if (e.target === $('#cfgModal')) return closeCfg();
+  const b = e.target.closest('[data-v]');
+  if (b && cfgOnPick) cfgOnPick(b.dataset.v);
+};
+$('#cfgCancel').onclick = closeCfg;
 remoteInit(); // 扫码远程输入（sid 共用，弹窗按场景生成带 m 参数的码）

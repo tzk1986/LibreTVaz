@@ -287,13 +287,44 @@
   // O1b 自动换线纯逻辑：流后缀判断 + 候选线路选择（docs/2026-10-30-O1-O3播放与直播体验方案.md）
   function isStreamLink(u) { return /\.(m3u8|mp4|flv|mkv|ts|mpd)(\?|$)/i.test(String(u)); }
   // 候选=未试过≠当前且有地址，按同集优先、流后缀优先排序；返回空数组即无可换（tried 封顶=线路数）
+  // A1 扩展（docs/2026-11-02-TVBox对标设置页与线路测速方案.md）：opts.speeds=按线 KB/s 数组（null 未测、0 失败），
+  // 实测慢/不可用线排最后；未测与正常线维持原「流后缀优先」序
+  const SPEED_GOOD = 1500, SPEED_FAIR = 150; // KB/s 两刀三档（初标定，可改）
   function pickNextLine(episodes, opts = {}) {
-    const { line = -1, curEp = 0, tried = new Set() } = opts;
+    const { line = -1, curEp = 0, tried = new Set(), speeds = null } = opts;
     const t = tried instanceof Set ? tried : new Set(tried || []);
+    const isBad = i => { const k = speeds && speeds[i]; return k != null && k >= 0 && k < SPEED_FAIR; }; // -1=采样失败但播放正常→按未知处理不沉底
     return (episodes || [])
       .map((g, i) => ({ i, u: g.list[curEp] || g.list[0] }))
       .filter(x => x.i !== line && !t.has(x.i) && x.u)
-      .sort((a, b) => (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
+      .sort((a, b) => (isBad(a.i) ? 1 : 0) - (isBad(b.i) ? 1 : 0)
+        || (isStreamLink(b.u.link) ? 1 : 0) - (isStreamLink(a.u.link) ? 1 : 0));
+  }
+
+  // A1 速度标签：null=未测（调用方不显）；-1=采样失败但播放器正常（测速失败，不判死）；0 或 <150 慢/不可用红；≥1500 流畅绿；150~1500 可能卡顿黄
+  const fmtSpeed = k => (k >= 1024 ? (k / 1024).toFixed(1) + 'MB/s' : Math.round(k) + 'KB/s');
+  function lineSpeedTag(kbps) {
+    if (kbps == null || !isFinite(kbps)) return null;
+    if (kbps < 0) return { label: '测速失败', cls: 'sp-dim' };
+    if (kbps <= 0 || kbps < SPEED_FAIR) return { label: (kbps > 0 ? fmtSpeed(kbps) + ' ' : '') + '慢/不可用', cls: 'sp-bad' };
+    if (kbps >= SPEED_GOOD) return { label: fmtSpeed(kbps) + ' 流畅', cls: 'sp-ok' };
+    return { label: fmtSpeed(kbps) + ' 可能卡顿', cls: 'sp-mid' };
+  }
+
+  // A1 最快线：已测 ≥SPEED_FAIR 且该集地址含流后缀中取 KB/s 最大；无有效测速退回现状默认选线（首个流后缀线）
+  function pickBestLine(episodes, speeds, curEp = 0) {
+    let bi = -1, best = 0;
+    (episodes || []).forEach((g, i) => {
+      const k = speeds && speeds[i];
+      if (k == null || k < SPEED_FAIR) return;
+      const u = g.list[curEp] || g.list[0];
+      if (!u || !isStreamLink(u.link)) return;
+      if (k > best) { best = k; bi = i; }
+    });
+    if (bi >= 0) return bi;
+    let fi = (episodes || []).findIndex(g => g.list.length && g.list.some(x => isStreamLink(x.link)));
+    if (fi < 0) fi = (episodes || []).findIndex(g => g.list.length);
+    return fi < 0 ? 0 : fi;
   }
 
   /* ===== 地区分类中间件（docs/2026-10-30-遥控可用性复盘与优化方案.md R8）=====
@@ -334,6 +365,6 @@
     动漫: [['全部', []], ['国产', ['DOM']], ['日漫', ['JP']], ['韩漫', ['KR']], ['欧美', ['EUUS']]],
   };
 
-  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };
+  const PerfCore = { norm, createDedupe, orderSources, splitBatches, searchKey, SEARCH_TTL, splitTtl, createEpoch, rewriteM3u8, createPinIndex, coreName, truncateByQuery, normName, tsNum, nowNum, parseXmltv, epgFor, epgNow, isStreamLink, pickNextLine, lineSpeedTag, pickBestLine, fmtSpeed, SPEED_GOOD, SPEED_FAIR, classifyVod, regionLabels, regionOfArea, VOD_FILTERS };
   g.PerfCore = PerfCore;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

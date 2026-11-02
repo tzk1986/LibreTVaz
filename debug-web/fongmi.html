@@ -67,11 +67,15 @@
   .btn.on { color: #000; background: var(--accent); }
   .btn.prog { position: relative; }
   .btn.prog::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: #e53935; }
+  /* A1 线路测速三档标签（绿/黄/红，同 .ok/#ffd76e/.err 色系）；速度独立一行显示（对标影视仓播放页线路按钮） */
+  .sp-ok { color: #81c995; font-size: 11px; } .sp-mid { color: #ffd76e; font-size: 11px; } .sp-bad { color: #f28b82; font-size: 11px; } .sp-dim { color: var(--dim); font-size: 11px; }
+  .card .pic .spTag { position: absolute; left: 4px; top: 4px; z-index: 2; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.62); font-size: 10px; }
+  .btn .spsub { display: block; font-size: 11px; font-weight: 400; margin-top: 2px; }
 
   /* 遥控器焦点 */
   .focus { border-color: #fff !important; transform: scale(1.05); box-shadow: 0 0 14px rgba(255,255,255,.35); position: relative; z-index: 5; }
   .chip.focus, .btn.focus { background: #fff; color: #000; transform: none; } /* 反色已足够醒目，放大反而整行抖动错位（走查统一） */
-  .lpanel .li.focus, .srcrow.focus { transform: none; } /* 列表行横向缩放会溢出列宽 */
+  .lpanel .li.focus, .srcrow.focus, .setrow.focus { transform: none; } /* 列表行横向缩放会溢出列宽 */
 
   .muted { color: var(--dim); } .err { color: #f28b82; } .ok { color: #81c995; }
   .hint { color: #6d7378; font-size: 12px; padding: 4px 28px 8px; flex: none; }
@@ -80,9 +84,12 @@
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: none; z-index: 40; }
   .modal.open { display: block; }
   .sitegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; padding: 60px 48px; max-height: 100vh; overflow: auto; }
-  .siteitem { background: var(--card); border: 2px solid transparent; border-radius: 8px; padding: 14px; cursor: pointer; text-align: center; }
+  .siteitem { background: var(--card); border: 2px solid transparent; border-radius: 8px; padding: 14px; cursor: pointer; text-align: center; position: relative; }
   .siteitem.on { border-color: var(--accent); }
   .siteitem.dead { opacity: .45; }
+  .siteitem .sdel { position: absolute; right: 5px; top: 5px; font-size: 12px; line-height: 1; padding: 4px 7px; border-radius: 5px; border: 2px solid transparent; background: rgba(0,0,0,.35); opacity: .55; }
+  .siteitem:hover .sdel, .siteitem .sdel.focus { opacity: 1; }
+  .siteitem .sdel.focus { background: #fff; }
 
   /* 源管理弹窗 */
   .srcmgr { padding: 56px 48px; max-height: 100vh; overflow: auto; }
@@ -91,6 +98,16 @@
   .srcrow .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .srcrow .url { color: var(--dim); font-size: 11px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .srcrow .rm { color: #f28b82; cursor: pointer; padding: 2px 10px; border: 2px solid transparent; border-radius: 4px; }
+
+  /* 设置页（A2 四列「标签+值」网格）+ 通用配置弹窗（A2/A3 枚举/Tab/实验室共用） */
+  .setgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 48px; align-content: start; }
+  .setrow { background: var(--card); border: 2px solid transparent; border-radius: 8px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 12px; }
+  .setrow b { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .setrow.focus { border-color: var(--accent); }
+  .cfgbox { max-width: 760px; margin: 8vh auto 0; padding: 20px 24px; background: var(--card); border-radius: 12px; max-height: 82vh; overflow: auto; }
+  .cfgbox h3 { margin: 0 0 12px; font-size: 16px; }
+  .tabrow { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: var(--bg2); margin-bottom: 8px; }
+  .tabrow > span { flex: 1; }
 
   /* 直播：全屏播放器 + 叠加层 + 右侧三列面板 */
   .livewrap { position: relative; flex: 1; min-height: 0; margin: 0 28px 12px; background: #000; border-radius: 8px; overflow: hidden; }
@@ -172,6 +189,7 @@
   <div id="findRes" style="max-height:60vh;overflow:auto;background:var(--card);border-radius:8px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px"></div>
 </div></div>
 <div class="modal" id="srcModal"><div class="srcmgr" id="srcMgr"></div></div>
+<div class="modal" id="cfgModal"><div class="cfgbox"><h3 id="cfgTitle"></h3><div id="cfgBody"></div><div class="hrow" style="justify-content:center;margin-top:12px"><button class="btn" data-focus id="cfgCancel">关闭</button></div></div></div>
 <div class="modal" id="qrModal"><div style="max-width:520px;margin:5vh auto 0;padding:0 20px;text-align:center">
   <div id="qrBig" style="display:flex;justify-content:center"></div>
   <p class="muted" id="qrHint" style="margin:12px 0 6px;font-size:13px"></p>
@@ -196,6 +214,7 @@
 <script src="vendor/hls.min.js?v=20261030a"></script>
 <script src="vendor/qrcode.js?v=20261030a"></script>
 <script src="perf-core.js?v=20261030a"></script>
+<script src="sources.local.js"></script>
 <script src="fongmi.js?v=20261030a"></script>
 </body>
 </html>
