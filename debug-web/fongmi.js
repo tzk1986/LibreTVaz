@@ -75,6 +75,21 @@ const cacheSet = (k, d) => {
 /* 按前缀清缓存分片 / 统计占用（设置页「清理缓存」与点播刷新钮共用） */
 const purgeCache = p => Object.keys(localStorage).forEach(x => { if (x.startsWith('fongmi_cache:' + p)) localStorage.removeItem(x); });
 const cacheBytes = () => { let n = 0; for (const x of Object.keys(localStorage)) if (x.startsWith('fongmi_cache:')) n += x.length + (localStorage.getItem(x) || '').length; return n; };
+/* 过期分片定时硬清（2026-11-02 用户需求两端对齐：缓存不能只增不减）：
+   7 天未更新的 fongmi_cache:* 分片批量删除——SWR 的 fresh/stale 窗口逻辑不变，这只是防 localStorage 无界膨胀的兜底；
+   页面加载 4s 后跑一次、以后每 30 分钟一次。APK 侧等价物见方案 B11（DiskCache 退出修剪+WorkManager 周期清理+视频 SimpleCache 200MB LRU） */
+function pruneExpiredCache() {
+  const cut = Date.now() - 7 * 864e5;
+  let n = 0;
+  for (const x of Object.keys(localStorage)) {
+    if (!x.startsWith('fongmi_cache:')) continue;
+    const v = cacheRaw(x.slice(13));
+    if (!v || !v.t || v.t < cut) { localStorage.removeItem(x); n++; }
+  }
+  return n;
+}
+setTimeout(pruneExpiredCache, 4000);
+setInterval(pruneExpiredCache, 30 * 60e3);
 const fmtBytes = b => (b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const norm = u => String(u || '').trim().replace(/\/+$/, '');
 const apiUrl = (base, query) => { const b = norm(base).replace(/\?+$/, ''); return b + (b.includes('?') ? '&' : '?') + query; };
