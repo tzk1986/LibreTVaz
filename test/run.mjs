@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 
-const PORT = 8799;
+const PORT = +(process.env.TEST_PORT || 8799); // 8799 被 Windows 孤儿监听套接字（OwningProcess=0）占死时可 TEST_PORT 换口
 const args = process.argv.slice(2);
 
 const server = spawn(process.execPath, ['debug-web/server.mjs'], { env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -27,13 +27,14 @@ if (!await waitUp()) {
   process.exit(1);
 }
 
-// 冒烟源：与 fongmi.js BUILTIN_SOURCES 第一个一致（非凡，实测 ac=list/videolist/搜索全通）
+// 冒烟源：非凡（内置源之一，实测 ac=list/videolist/搜索全通）
 const firstCmsApi = () => 'https://cj.ffzyapi.com/api.php/provide/vod';
 
 const jobs = [
   ['classify', ['test/classify.test.mjs'], {}],
   ['cache-inval', ['test/cache-inval.test.mjs'], {}],
   ['proxy', ['test/proxy.test.mjs', String(PORT)], {}],
+  ['linespeed', ['test/linespeed.test.mjs', String(PORT)], {}],
   ['remote', ['test/remote.test.mjs', String(PORT)], {}],
 ];
 if (args.includes('--record-baseline')) jobs.push(['search-perf(record)', ['test/search-perf.test.mjs', '--record', String(PORT)], {}]);

@@ -1,57 +1,57 @@
 {
-  "recordedAt": "2026-10-30T02:02:56.243Z",
+  "recordedAt": "2026-11-02T06:39:46.227Z",
   "kw": "庆余年",
   "top": 8,
-  "firstTab": 687,
-  "allDone": 10772,
+  "firstTab": 2600,
+  "allDone": 5000,
   "per": [
     {
-      "name": "非凡资源",
-      "ms": 853,
-      "hits": 8,
+      "name": "暴风资源",
+      "ms": 1229,
+      "hits": 11,
       "err": null
     },
     {
-      "name": "量子资源",
-      "ms": 797,
-      "hits": 3,
-      "err": null
-    },
-    {
-      "name": "360采集",
-      "ms": 718,
-      "hits": 3,
-      "err": null
-    },
-    {
-      "name": "索尼采集",
-      "ms": 5526,
-      "hits": 0,
-      "err": "Unexpected token '暂', \"暂不支持搜索\" is not va"
-    },
-    {
-      "name": "天天采集",
-      "ms": 646,
+      "name": "最大资源",
+      "ms": 1149,
       "hits": 7,
       "err": null
     },
     {
-      "name": "茅台采集",
-      "ms": 1543,
-      "hits": 0,
+      "name": "爱坤资源",
+      "ms": 1392,
+      "hits": 3,
       "err": null
     },
     {
-      "name": "火狐采集",
-      "ms": 10729,
-      "hits": 0,
-      "err": "HTTP 502"
+      "name": "无尽资源",
+      "ms": 1137,
+      "hits": 9,
+      "err": null
     },
     {
-      "name": "无尽资源",
-      "ms": 10730,
-      "hits": 0,
-      "err": "HTTP 502"
+      "name": "瑞源资源",
+      "ms": 1797,
+      "hits": 3,
+      "err": null
+    },
+    {
+      "name": "速播资源",
+      "ms": 1276,
+      "hits": 8,
+      "err": null
+    },
+    {
+      "name": "红牛资源",
+      "ms": 1538,
+      "hits": 8,
+      "err": null
+    },
+    {
+      "name": "非凡资源",
+      "ms": 1860,
+      "hits": 8,
+      "err": null
     }
   ]
 }
