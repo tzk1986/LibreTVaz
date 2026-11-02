@@ -123,44 +123,61 @@ function parseFilterMeta(text) {
     return null;
   } catch { return null; }
 }
-/* 词库与拼音联想（docs/2026-10-30-图片播放与拼音候选提速方案.md ③.5）：
+/* 词库与拼音联想双池（docs/2026-10-30-图片播放与拼音候选提速方案.md ③.5 + 2026-11-02 搜索双池隔离）：
    预计算索引在 PerfCore.createPinIndex（每词一次算首字母、多音字变体、前2字母分桶、词频权重）；
-   搜索出结果 +1 / 进详情 +2；持久化键不变 fongmi_words，权重新增 fongmi_wfreq；索引不可用时退化子串匹配 */
+   搜索出结果 +1 / 进详情 +2；点播池键 fongmi_words/fongmi_wfreq，专区池键加 _zone 后缀，互不可见；
+   索引不可用时退化子串匹配。z=true 路由专区池 */
 // ①核心词归一化：片名入库时同步派生核心词（复仇者联盟4：终局之战→复仇者联盟），简拼可直中本体
 const coreNameOf = n => (typeof PerfCore !== 'undefined' && PerfCore.coreName ? PerfCore.coreName(n) : '');
-const pinIndex = (typeof PerfCore !== 'undefined' && PerfCore.createPinIndex)
-  ? PerfCore.createPinIndex({ weights: LS('fongmi_wfreq', {}) }) : null;
-if (pinIndex) { // 恢复存量词库时补派生一次，老 localStorage 立即可用核心词
-  const saved = LS('fongmi_words', []);
-  pinIndex.addMany(saved);
-  for (const w of saved) { const c = coreNameOf(w); if (c && c !== w) pinIndex.add(c); }
-}
-let VOCAB = pinIndex ? pinIndex.list() : LS('fongmi_words', []);
-const persistVocab = () => {
-  try {
-    if (pinIndex) { localStorage.setItem('fongmi_words', JSON.stringify(pinIndex.list())); localStorage.setItem('fongmi_wfreq', JSON.stringify(pinIndex.weights())); }
-    else localStorage.setItem('fongmi_words', JSON.stringify(VOCAB));
-  } catch { /* 满 */ }
-};
-let vocabSaveTimer = null;
-const persistSoon = () => { clearTimeout(vocabSaveTimer); vocabSaveTimer = setTimeout(persistVocab, 500); };
-const vocabSize = () => (pinIndex ? pinIndex.size() : VOCAB.length);
-const addWords = names => {
-  if (pinIndex) {
-    for (const n of names) {
-      if (!n) continue;
-      pinIndex.add(n); pinIndex.bump(n, 1);
-      const c = coreNameOf(n);
-      if (c && c !== n) { pinIndex.add(c); pinIndex.bump(c, 1); }
-    }
-    persistSoon();
-  } else {
-    const set = new Set(VOCAB); let dirty = false;
-    const pushW = t => { if (t && !set.has(t)) { set.add(t); VOCAB.push(t); dirty = true; } };
-    for (const n of names) { pushW(n); pushW(coreNameOf(n)); }
-    if (VOCAB.length > 2000) VOCAB = VOCAB.slice(-2000);
-    if (dirty) persistSoon();
+function createVocabPool(wordsKey, wfreqKey) {
+  const index = (typeof PerfCore !== 'undefined' && PerfCore.createPinIndex)
+    ? PerfCore.createPinIndex({ weights: LS(wfreqKey, {}) }) : null;
+  let words = index ? index.list() : LS(wordsKey, []);
+  if (index) { // 恢复存量词库时补派生一次，老 localStorage 立即可用核心词
+    const saved = LS(wordsKey, []);
+    index.addMany(saved);
+    for (const w of saved) { const c = coreNameOf(w); if (c && c !== w) index.add(c); }
   }
+  let timer = null;
+  const persist = () => {
+    try {
+      if (index) { localStorage.setItem(wordsKey, JSON.stringify(index.list())); localStorage.setItem(wfreqKey, JSON.stringify(index.weights())); }
+      else localStorage.setItem(wordsKey, JSON.stringify(words));
+    } catch { /* 满 */ }
+  };
+  const persistSoon = () => { clearTimeout(timer); timer = setTimeout(persist, 500); };
+  return {
+    index,
+    add(names) {
+      if (index) {
+        for (const n of names) {
+          if (!n) continue;
+          index.add(n); index.bump(n, 1);
+          const c = coreNameOf(n);
+          if (c && c !== n) { index.add(c); index.bump(c, 1); }
+        }
+        persistSoon();
+      } else {
+        const set = new Set(words); let dirty = false;
+        const pushW = t => { if (t && !set.has(t)) { set.add(t); words.push(t); dirty = true; } };
+        for (const n of names) { pushW(n); pushW(coreNameOf(n)); }
+        if (words.length > 2000) words = words.slice(-2000);
+        if (dirty) persistSoon();
+      }
+    },
+    bump(n, k) { if (index && n) { index.bump(n, k); persistSoon(); } },
+    size: () => (index ? index.size() : words.length),
+    list: () => (index ? index.list() : words),
+  };
+}
+const VocabPools = { vod: createVocabPool('fongmi_words', 'fongmi_wfreq'), zone: createVocabPool('fongmi_words_zone', 'fongmi_wfreq_zone') };
+const vocab = z => (z ? VocabPools.zone : VocabPools.vod);
+const addWords = (names, z) => vocab(z).add(names);
+const vocabSize = z => vocab(z).size();
+const pushKw = (kw, z) => {
+  const k = z ? 'fongmi_kw_zone' : 'fongmi_kw';
+  const h = LS(k, []).filter(x => x !== kw); h.unshift(kw);
+  localStorage.setItem(k, JSON.stringify(h.slice(0, 10)));
 };
 /* 扫码远程输入：「远程输入」按钮弹大码窗（同一 sid，URL 带 m=search/sub，手机扫码直达对应输入框并聚焦） */
 const RemoteIn = { sid: Math.random().toString(36).slice(2, 10), base: '', onSearch: null };
@@ -363,6 +380,7 @@ function onEsc() {
   if (App.view === 'live' && Live.panelOpen) return togglePanel(false);
   if (App.view === 'video') return switchView(App.videoBack || 'vod');
   if (App.view === 'collect') { Collect.stop = true; return switchView(Collect.back || 'search'); }
+  if (App.view === 'search') return switchView(Search.mode === 'zone' ? 'zone' : 'vod'); // 资源口池搜索页 Esc 回资源口
   if (App.view === 'zone') return switchView('settings');
   if (App.view === 'zonehist' || App.view === 'zonekeep') return switchView('zone'); // 资源口子页 Esc 回资源口
   if (App.view !== 'vod') return switchView('vod'); // 点播即首页：其余视图 Esc 一律回点播（P8）
@@ -1222,6 +1240,7 @@ function renderVod() {
     const nav = f.dataset.nav;
     if (nav === 'sources') return openSrcMgr();
     if (nav === 'server') return void window.open('/', '_blank');
+    if (nav === 'search') return openSearch(false); // 点播池入口（三栏搜索页）
     switchView(nav);
   };
   $('#vodRefresh').onclick = () => { // 只清点播相关分片（历史/收藏/测速不动），重走 loadTypes→缓存已空即全量拉新
@@ -1390,7 +1409,7 @@ async function runAggWall(cat) {
     const items = dedupByName(all);
     if (!items.length) return false;
     Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
-    addWords(items.map(it => it.name));
+    addWords(items.map(it => it.name), Zone.active);
     drawVodGrid();
     return true;
   };
@@ -1654,7 +1673,7 @@ function renderZone() {
   Vod.agg = true; Vod.types = []; Vod.filters = null; Vod.merged = null; Vod.tab = null;
   Zone.tags = {}; // 每次进入重建标签（localStorage 7 天缓存仍命中，不重复采样）
   resetFilterVals();
-  body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="zoneBack">← 返回</button><button class="btn" data-focus id="zoneRefresh" title="清除资源口聚合分片并重新拉取当前墙">🔄 刷新</button><button class="btn" data-focus id="zoneFind">🔎 搜索</button><button class="btn" data-focus id="zoneSpeed" title="重新测当前墙条目的起播速度">⚡ 测速</button><button class="btn" data-focus id="zoneHist" title="仅显示资源口观看历史">🕛 历史</button><button class="btn" data-focus id="zoneKeep" title="仅显示资源口收藏">⭐ 收藏</button></div>
+  body.innerHTML = `<div class="hrow" style="padding:6px 28px 0;justify-content:flex-end"><button class="btn" data-focus id="zoneBack">← 返回</button><button class="btn" data-focus id="zoneRefresh" title="清除资源口聚合分片并重新拉取当前墙">🔄 刷新</button><button class="btn" data-focus id="zoneFind" title="在当前聚合墙内按片名定位">🔎 找片</button><button class="btn" data-focus id="zoneSearch" title="资源口聚合搜索（与点播搜索页同构，历史/词库/热门榜数据互相隔离）">🔍 搜索</button><button class="btn" data-focus id="zoneSpeed" title="重新测当前墙条目的起播速度">⚡ 测速</button><button class="btn" data-focus id="zoneHist" title="仅显示资源口观看历史">🕛 历史</button><button class="btn" data-focus id="zoneKeep" title="仅显示资源口收藏">⭐ 收藏</button></div>
     <div class="hrow" id="typeRow" style="padding:6px 28px"></div>
     <main id="scroller"><div class="grid" id="vodGrid"></div></main>`;
   const tabs = [{ id: '', name: '🔞 最新' }, ...AGG_CATS.map(c => ({ id: 'cat:' + c.key, name: c.key }))];
@@ -1678,6 +1697,7 @@ function renderZone() {
     toast('已清资源口缓存，重新拉取中…');
   };
   $('#zoneFind').onclick = () => openFindBox('', () => ({ line: 0, ep: 0, sec: 0 }), true);
+  $('#zoneSearch').onclick = () => openSearch(true); // 资源口池搜索页（与点播同构三栏，数据隔离）
   $('#zoneSpeed').onclick = () => zoneSpeedWall(true);
   $('#zoneHist').onclick = () => switchView('zonehist');
   $('#zoneKeep').onclick = () => switchView('zonekeep');
@@ -1734,14 +1754,16 @@ function reapplyZoneTags(shown) {
   }
 }
 
-/* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想 */
-let vocabSeeding = false;
-async function seedVocab(min = 600) {
-  if (vocabSeeding || vocabSize() >= min) return;
-  vocabSeeding = true;
+/* 词库自举：从多个健康源各拉若干页片名入库，保证首次进搜索页就有候选/联想；按池隔离（专区词只进专区池） */
+const vocabSeeding = { vod: false, zone: false };
+async function seedVocabPool(zone, min = 600) {
+  const pk = zone ? 'zone' : 'vod';
+  if (vocabSeeding[pk] || vocabSize(zone) >= min) return;
+  vocabSeeding[pk] = true;
   try {
-    const pool = SRC.vod.filter(s => !isDead(s.url) && !s.isAdult);
-    const order = [SRC.vod[Home.srcIdx], ...pool].filter(Boolean);
+    const pool = SRC.vod.filter(s => !isDead(s.url) && !!s.isAdult === !!zone);
+    const cur = SRC.vod[Home.srcIdx];
+    const order = (zone ? pool : [cur && !cur.isAdult ? cur : null, ...pool]).filter(Boolean);
     const seen = new Set();
     const uniq = [];
     for (const s of order) {
@@ -1751,74 +1773,105 @@ async function seedVocab(min = 600) {
     }
     await pMap(uniq, async s => { // 并发 3：词库尽早可用；每源拉 2 页（方案③.5 扩词库）
       for (const pg of [1, 2]) {
-        if (vocabSize() >= min) return;
-        try { addWords(parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), s), 12000).map(it => it.name).filter(Boolean)); }
+        if (vocabSize(zone) >= min) return;
+        try { addWords(parseList(await httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), s), 12000).map(it => it.name).filter(Boolean), zone); }
         catch { break; /* 单源失败跳过 */ }
       }
     }, 3);
-  } finally { vocabSeeding = false; }
+  } finally { vocabSeeding[pk] = false; }
 }
-/* ================= 搜索输入页（SearchActivity） ================= */
+const seedVocab = (min = 600) => seedVocabPool(false, min);
+const seedZoneVocab = (min = 400) => seedVocabPool(true, min);
+/* ================= 搜索输入页（SearchActivity：三栏，对标影视仓搜索页） =================
+   左列搜索历史（竖排+清空）｜中列指定源+按钮组+六列矩阵键盘（A-Z0-9 共36键）+拼音联想｜右列热门搜索榜
+   点播/资源口两池共用本页同构布局，数据全隔离：历史 fongmi_kw(_zone)、词库/词频 fongmi_words(_zone)/fongmi_wfreq(_zone)、源池与结果均由 Search.mode 决定 */
+const Search = { mode: 'vod', srcSel: null }; // srcSel={si,name}|null（null=全部源聚合）
+function openSearch(zone) {
+  const m = zone ? 'zone' : 'vod';
+  if (Search.mode !== m) { Search.mode = m; Search.srcSel = null; } // 跨池切换清空指定源
+  switchView('search');
+}
 function renderSearch() {
-  const KB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索" data-focus><button class="btn" data-focus id="qrBtn">📱 远程输入</button><button class="btn" data-focus id="searchBack">← 点播</button></div>
-    <div class="hrow" id="kbRow" style="padding:0 28px 6px;flex-wrap:wrap">
-      ${KB.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')}
-      <button class="btn" data-focus data-kb="⌫">退格</button>
-      <button class="btn" data-focus data-kb="CLR">清空</button>
-    </div>
-    <div class="hrow" id="sugRow" style="padding:0 28px 6px"></div>
-    <div class="hrow" id="candRow" style="padding:0 28px 6px"></div>
-    <main id="scroller">
-      ${LS('fongmi_kw', []).length ? `<div class="rowhead">搜索历史</div><div class="hrow">${LS('fongmi_kw', []).map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}
-      <div class="rowhead">拼音选词</div><p class="muted">依次点选片名的拼音首字母（如「庆余年」按 QYN），下方实时联想当前源里的片名，遥控选中即填入。候选词进入本页时自动从当前源拉取积累；手机扫码可与电视同步输入。</p>
-    </main>`;
-  bindBack('searchBack', () => switchView('vod'));
+  const zone = Search.mode === 'zone';
+  const pool = vocab(zone);
+  const pi = pool.index;
+  const kwKey = zone ? 'fongmi_kw_zone' : 'fongmi_kw';
+  const KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...'0123456789'];
+  const krows = [];
+  for (let i = 0; i < 36; i += 6) krows.push(KEYS.slice(i, i + 6));
+  body.innerHTML = `<div class="sbox"><input id="kw" placeholder="输入/点选键盘/手机扫码输入，回车搜索（${zone ? '资源口' : '点播'}池）" data-focus><button class="btn" data-focus id="searchBack">← ${zone ? '资源口' : '点播'}</button></div>
+    <main id="scroller"><div class="search3">
+      <section class="scol"><div class="rowhead">搜索历史 <button class="chip" data-focus id="histClear">清空</button></div><div class="vcol" id="histList"></div></section>
+      <section class="scol">
+        <div class="hrow"><button class="btn srcpick" data-focus id="srcName">全部源（聚合）</button><button class="btn" data-focus id="srcPick">指定源</button></div>
+        <div class="hrow" style="padding-top:8px"><button class="btn" data-focus id="goBtn">🔍 搜索</button><button class="btn" data-focus data-kb="⌫">⌫ 退格</button><button class="btn" data-focus data-kb="CLR">清空</button><button class="btn" data-focus id="qrBtn">📱 远程输入</button></div>
+        <div class="kbg">${krows.map(r => r.map(c => `<button class="btn kb" data-focus data-kb="${c}">${c}</button>`).join('')).join('')}</div>
+        <div class="hrow" id="sugRow" style="padding:8px 0 0;flex-wrap:wrap"></div>
+        <p class="muted" style="font-size:12px;padding-top:6px">依次点选片名拼音首字母（如「庆余年」按 QYN）或用数字键，下方实时联想本池片名；手机扫码可与电视同步输入。</p>
+      </section>
+      <section class="scol"><div class="rowhead">热门搜索 <button class="chip" data-focus id="delHist" title="清空本池搜索历史">删除历史</button></div><div class="vcol" id="hotList"></div></section>
+    </div></main>`;
+  bindBack('searchBack', () => switchView(zone ? 'zone' : 'vod'));
   const run = () => {
     const kw = $('#kw').value.trim(); if (!kw) return;
-    const h = LS('fongmi_kw', []).filter(x => x !== kw); h.unshift(kw);
-    localStorage.setItem('fongmi_kw', JSON.stringify(h.slice(0, 10)));
-    Collect.kw = kw; Collect.done = 0; Collect.stop = false; Collect.bySite = {}; Collect.back = 'search'; Collect.zone = false;
+    pushKw(kw, zone); drawHist();
+    Collect.kw = kw; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
+    Collect.back = 'search'; Collect.zone = zone; Collect.srcSel = Search.srcSel;
     switchView('collect'); renderCollect();
+  };
+  const drawHist = () => {
+    const el = $('#histList'); if (!el) return;
+    const h = LS(kwKey, []);
+    el.innerHTML = h.length
+      ? h.map(k => `<button class="btn" data-focus data-k="${esc(k)}">${esc(k)}</button>`).join('')
+      : '<span class="muted" style="font-size:12px">暂无本池搜索历史</span>';
+  };
+  const drawHot = () => {
+    const el = $('#hotList'); if (!el) return;
+    const words = pi ? pi.top(20) : pool.list().slice(-20).reverse();
+    el.innerHTML = words.length
+      ? words.map((w, i) => `<button class="btn" data-focus data-k="${esc(w)}">${i < 3 ? '🔥 ' : ''}${esc(w)}</button>`).join('')
+      : '<span class="muted" style="font-size:12px">词库建设中…（搜索/进墙自动积累本池片名）</span>';
   };
   const drawSug = () => {
     const inp = $('#kw'); if (!inp) return;
     const q = inp.value.trim().toLowerCase();
     const row = $('#sugRow'); if (!row) return;
     if (!q) { row.innerHTML = ''; return; }
-    let hits = /^[a-z]+$/.test(q) && pinIndex ? pinIndex.suggest(q, 30) : [];
-    if (!hits.length) hits = (pinIndex ? pinIndex.list() : VOCAB).filter(w => w.toLowerCase().includes(q));
+    let hits = /^[a-z0-9]+$/.test(q) && pi ? pi.suggest(q, 30) : [];
+    if (!hits.length) hits = pool.list().filter(w => w.toLowerCase().includes(q));
     else { // ②模糊补足：首字母串包含查询的相关词（fcz→非凡创作者类），排精确命中后
       const seen = new Set(hits);
-      for (const w of pinIndex.fuzzy(q, 30 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
+      for (const w of pi.fuzzy(q, 30 - hits.length)) if (!seen.has(w)) { hits.push(w); seen.add(w); }
     }
     hits = [...new Set(hits)];
     // ②截断核心词：查询在首字母串的匹配位置对齐截断（fcz→复仇者、lm→联盟），置顶带标，点选即搜
-    const truncs = /^[a-z]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3, 2, pinIndex && (w => pinIndex.variants(w))) : [];
+    const truncs = /^[a-z0-9]+$/.test(q) && typeof PerfCore !== 'undefined' ? PerfCore.truncateByQuery(q, hits, 3, 2, pi && (w => pi.variants(w))) : [];
     const marked = new Set(truncs);
     hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 30);
     row.innerHTML = hits.length
       ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}${marked.has(w) ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
-      : '<span class="muted" style="font-size:12px">没有匹配的片名，可点候选词或换字母试试</span>';
+      : '<span class="muted" style="font-size:12px">没有匹配的片名，可点热榜词或换字母试试</span>';
   };
-  const drawCand = () => {
-    const row = $('#candRow'); if (!row) return;
-    const q = ($('#kw')?.value || '').trim().toLowerCase();
-    const isPy = /^[a-z]+$/.test(q);
-    const pre = isPy && pinIndex ? pinIndex.suggest(q, 12) : [];
-    if (isPy && pinIndex && pre.length < 12) { // ②候选词同样模糊补足
-      const seen = new Set(pre);
-      for (const w of pinIndex.fuzzy(q, 12 - pre.length)) if (!seen.has(w)) { pre.push(w); seen.add(w); }
-    }
-    const words = pinIndex
-      ? [...new Set([...pre, ...pinIndex.top(48)])].slice(0, 48) // 高频 top48 + 当前输入前缀命中置顶
-      : [...new Set(VOCAB.slice(-600).reverse())].slice(0, 48);
-    row.innerHTML = words.length
-      ? `<span class="muted" style="font-size:12px;white-space:nowrap">资源候选词</span>` + words.map(w => `<button class="chip" data-focus data-k="${esc(w)}">${esc(w)}</button>`).join('')
-      : '<span class="muted" style="font-size:12px">候选词加载中…（需有点播源）</span>';
+  const drawSrc = () => { const b = $('#srcName'); if (b) b.textContent = Search.srcSel ? `📌 ${Search.srcSel.name}` : '全部源（聚合）'; };
+  const clearHist = () => { localStorage.removeItem(kwKey); drawHist(); toast(`已清空${zone ? '资源口' : '点播'}搜索历史`); };
+  $('#histClear').onclick = $('#delHist').onclick = clearHist;
+  $('#goBtn').onclick = run;
+  const openSrcPick = () => {
+    const items = SRC.vod.map((s, si) => ({ s, si })).filter(x => zone ? x.s.isAdult : !x.s.isAdult);
+    openCfg(`指定搜索源（${zone ? '资源口' : '点播'}）`,
+      `<div class="tabrow"><span>全部源（聚合）</span><button class="chip${Search.srcSel ? '' : ' on'}" data-focus data-v="-1">${Search.srcSel ? '改回' : '当前'}</button></div>`
+      + items.map(({ s, si }) => `<div class="tabrow"><span>${esc(s.name)}</span><button class="chip${Search.srcSel && Search.srcSel.si === si ? ' on' : ''}" data-focus data-v="${si}">${Search.srcSel && Search.srcSel.si === si ? '当前' : '选择'}</button></div>`).join('')
+      + '<p class="muted" style="font-size:12px">选定后本次仅搜该源；结果页仍按源分 Tab（只有一页）</p>',
+      v => {
+        const si = +v;
+        Search.srcSel = si < 0 ? null : { si, name: (SRC.vod[si] && SRC.vod[si].name) || '' };
+        drawSrc(); closeCfg(); Focus.set($('#srcPick'));
+      });
   };
+  $('#srcPick').onclick = $('#srcName').onclick = openSrcPick;
   let sugTimer = null;
-  const onKwInput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(() => { drawSug(); drawCand(); }, 80); }; // 80ms 防抖：连打不卡
+  const onKwInput = () => { clearTimeout(sugTimer); sugTimer = setTimeout(drawSug, 80); }; // 80ms 防抖：连打不卡
   RemoteIn.onSearch = t => { const inp = $('#kw'); if (!inp) return; inp.value = t; drawSug(); run(); };
   $('#kw').onkeydown = e => { if (e.key === 'Enter') return run(); }; // 两段式：编辑态方向键归光标，退编辑靠 Esc，无需再特例跳按钮
   $('#kw').oninput = onKwInput;
@@ -1836,8 +1889,8 @@ function renderSearch() {
     const b = e.target.closest('[data-k]'); if (b) { $('#kw').value = b.dataset.k; run(); }
   };
   $('#qrBtn').onclick = () => openQrModal('search');
-  drawCand();
-  seedVocab().then(() => { if (App.view === 'search') { drawCand(); drawSug(); } });
+  drawHist(); drawHot(); drawSrc();
+  (zone ? seedZoneVocab() : seedVocab()).then(() => { if (App.view === 'search') { drawHot(); drawSug(); } });
   Focus.set($('#kw')); // 仅选中不弹键盘：OK 才进编辑（两段式 R1）
 }
 
@@ -1845,7 +1898,7 @@ function renderSearch() {
    提速策略（docs/2026-10-30-搜索与加载提速方案.md ①）：
    源序=当前源→测速 ms 升序；首批 top8 立即发、其余 1.2s 次批；超时 8s；
    SWR 分片缓存 search:<词> 先上屏后台替换；epoch 丢弃换词后的旧回调（对齐 FongMi ViewModelSearchRunner） */
-const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false };
+const Collect = { kw: '', stop: false, done: 0, total: 0, bySite: {}, tabIdx: '', epoch: 0, back: 'search', zone: false, srcSel: null };
 function collectSources(zone) { // zone=true 只搜专区源（资源口/专区作品）；常规搜索排除专区源——专区内容仅在设置·实验室「资源口」入口可见
   const items = SRC.vod.map((s, si) => ({ s, si }))
     .filter(x => zone ? x.s.isAdult : !x.s.isAdult)
@@ -1856,7 +1909,7 @@ function searchShardSet(ck, u, items) { const v = cacheRaw(ck) || {}; v[u] = { t
 function addSiteTab(s, si, list) {
   if (!list.length) return;
   Collect.bySite[si] = list;
-  addWords(list.map(v => v.name));
+  addWords(list.map(v => v.name), !!Collect.zone);
   const tabs = $('#cTabs'); if (!tabs) return;
   let tab = tabs.querySelector(`[data-t="${si}"]`);
   if (!tab) { tab = document.createElement('button'); tab.className = 'chip'; tab.dataset.focus = ''; tab.dataset.t = si; tabs.appendChild(tab); }
@@ -1875,7 +1928,8 @@ function renderCollect() {
   };
   const ep = ++Collect.epoch;
   Collect.bySite = {}; Collect.tabIdx = ''; Collect.done = 0;
-  const sources = collectSources(!!Collect.zone);
+  let sources = collectSources(!!Collect.zone);
+  if (Collect.srcSel && sources.some(x => x.si === Collect.srcSel.si)) sources = sources.filter(x => x.si === Collect.srcSel.si); // 指定源生效：仅搜该源；源已删除/失效则回退聚合
   Collect.total = sources.length; // O3c 判「各源已返回完」做无结果推荐
   if (!sources.length) { $('#cGrid').innerHTML = '<p class="err">无点播源</p>'; return; }
   const ck = PerfCore.searchKey(Collect.kw);
@@ -1921,10 +1975,11 @@ function drawCollectTab() {
     const kw = String(Collect.kw || '').trim();
     const q = kw.toLowerCase();
     let sug = [];
-    if (Collect.tabIdx === '' && allDone && /^[a-z]{2,}$/.test(q) && pinIndex && typeof PerfCore !== 'undefined') {
-      const hits = pinIndex.suggest(q, 30);
-      const pool = [...new Set([...hits, ...pinIndex.fuzzy(q, 30)])];
-      sug = PerfCore.truncateByQuery(q, pool, 2, 2, w => pinIndex.variants(w));
+    const pi = vocab(!!Collect.zone).index; // 无结果推荐按本池词库出词
+    if (Collect.tabIdx === '' && allDone && /^[a-z0-9]{2,}$/.test(q) && pi && typeof PerfCore !== 'undefined') {
+      const hits = pi.suggest(q, 30);
+      const cand = [...new Set([...hits, ...pi.fuzzy(q, 30)])];
+      sug = PerfCore.truncateByQuery(q, cand, 2, 2, w => pi.variants(w));
       if (!sug.length) sug = hits.slice(0, 2);
     }
     grid.innerHTML = `<p class="muted" style="padding:20px 0">${allDone ? '各源均无结果' : '等待各源返回…'}${Collect.tabIdx !== '' ? ' · 该 Tab 暂无数据' : ''}<br>`
@@ -1932,8 +1987,7 @@ function drawCollectTab() {
     grid.onclick = e => {
       const b = e.target.closest('[data-kw]'); if (!b) return;
       const w = b.dataset.kw;
-      const h = LS('fongmi_kw', []).filter(x => x !== w); h.unshift(w);
-      localStorage.setItem('fongmi_kw', JSON.stringify(h.slice(0, 10)));
+      pushKw(w, !!Collect.zone);
       Collect.kw = w; Collect.done = 0; Collect.stop = false; Collect.bySite = {};
       renderCollect();
     };
@@ -1945,7 +1999,7 @@ function drawCollectTab() {
 
 /* ================= 详情/播放一体页（VideoActivity） ================= */
 async function openDetail(item) {
-  if (item.name && pinIndex) { pinIndex.bump(item.name, 2); persistSoon(); } // 进详情 +2 权重（方案③.5）
+  vocab(Zone.active || !!(item.source && item.source.isAdult)).bump(item.name, 2); // 进详情 +2 权重（方案③.5，按池路由）
   const s = item.source || SRC.vod[Home.srcIdx];
   // 播放页内「搜本作/换源/自动换源」再进详情：App.view 已是 video，保持原返回目标不丢
   if (App.view !== 'video') App.videoBack = ({ collect: 'collect', keep: 'keep', hist: 'hist', search: 'search', zone: 'zone', zonehist: 'zonehist', zonekeep: 'zonekeep' })[App.view] || 'vod';

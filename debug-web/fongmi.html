@@ -155,6 +155,17 @@
   /* 两段式：选中=白框，编辑=accent 描边+发光（区分「选中框」与「正在输入」） */
   input.editing { border-color: var(--accent) !important; box-shadow: 0 0 12px rgba(62,166,255,.45); }
   .colhead { padding: 6px 28px 0; font-size: 18px; font-weight: 600; flex: none; }
+  /* 搜索页三栏（对标影视仓搜索页：左历史/中键盘/右热榜；点播与资源口同构、数据分池） */
+  .search3 { display: grid; grid-template-columns: 200px minmax(0,1fr) 190px; gap: 18px; padding: 4px 28px 16px; align-items: start; }
+  .scol { min-width: 0; }
+  .scol .rowhead { margin-top: 8px; }
+  .vcol { display: flex; flex-direction: column; gap: 6px; align-items: stretch; max-height: 62vh; overflow-y: auto; scrollbar-width: none; }
+  .vcol::-webkit-scrollbar { display: none; }
+  .vcol .btn { text-align: left; overflow: hidden; text-overflow: ellipsis; }
+  .kbg { display: grid; grid-template-columns: repeat(6, 46px); gap: 7px; justify-content: center; padding: 8px 0 2px; }
+  .kbg .kb { width: auto; }
+  .srcpick { flex: 1; min-width: 0; text-align: left; color: var(--fg); text-overflow: ellipsis; overflow: hidden; }
+  @media (max-width: 900px) { .search3 { grid-template-columns: 1fr; } .kbg { grid-template-columns: repeat(6, 42px); } }
 
   #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); background: rgba(0,0,0,.8); border-radius: 6px; padding: 8px 22px; font-size: 14px; display: none; z-index: 60; }
 
