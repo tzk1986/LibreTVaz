@@ -84,6 +84,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_ZONE_SEED, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_ZONE_SEED, value).apply()
 
+    /** 首页点播墙聚合模式（对应 web fongmi_agg；源选择弹窗「🌐 聚合」，默认单源） */
+    var aggMode: Boolean
+        get() = prefs.getBoolean(KEY_AGG_MODE, false)
+        set(value) = prefs.edit().putBoolean(KEY_AGG_MODE, value).apply()
+
     /** 当前点播源下标（对应 web fongmi_site_idx；跨页面共享，测速墙点行可切换） */
     var siteIdx: Int
         get() = prefs.getInt(KEY_SITE_IDX, 0).coerceAtLeast(0)
@@ -113,6 +118,7 @@ class SettingsStore(context: Context) {
         private const val KEY_EP_FULL = "ep_full"
         private const val KEY_CACHE_TIER = "cache_tier"
         private const val KEY_TABS = "tabs"
+        private const val KEY_AGG_MODE = "agg_mode"
     }
 }
 

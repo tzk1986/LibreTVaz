@@ -137,7 +137,7 @@ object CmsParser {
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             val id = o.optString("type_id")
             val name = o.optString("type_name")
-            if (id.isEmpty() || name.isEmpty()) null else VodType(id, name)
+            if (id.isEmpty() || name.isEmpty()) null else VodType(id, name, o.optString("type_pid"))
         }
     }
 

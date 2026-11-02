@@ -82,8 +82,8 @@ fun SettingsScreen(
             item { SettingCard("历史记录条数", "$histMax 条") { dlg = "histmax" } }
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }
             item { SettingCard("清理缓存", purgeMsg) {
-                clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll()
-                purgeMsg = "已清理（搜索分片/专区角标/线路测速）"
+                clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll(); Agg.clearAll()
+                purgeMsg = "已清理（搜索分片/专区角标/线路测速/聚合墙）"
             } }
             item { SettingCard("导航栏", "显隐与排序（${tabOrder.count { it.second }}/${functionCards().size} 显示）") {
                 tabOrder = loadTabOrder(store); dlg = "tabs"

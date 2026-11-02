@@ -49,6 +49,8 @@ data class VideoDetail(
 data class VodType(
     val id: String,
     val name: String,
+    /** 父分类 id（type_pid）；空或 "0"=顶层。聚合墙取子类、地区定向靠它 */
+    val pid: String = "",
 )
 
 data class LiveChannel(
