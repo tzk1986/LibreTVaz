@@ -32,17 +32,23 @@ fun DetailScreen(
     val scope = rememberCoroutineScope()
     val repo = remember { CmsRepository() }
     val store = remember { SourceStore(context) }
+    val hist = remember { HistStore(context) }
+    val keep = remember { KeepStore(context) }
+    val settings = remember { SettingsStore(context) }
     val source = remember(item) { VodSource(item.sourceName, item.sourceUrl, isAdult = item.isAdult) }
     var detail by remember { mutableStateOf<VideoDetail?>(null) }
     var failed by remember { mutableStateOf(false) }
     var line by remember { mutableStateOf(0) }
     var finding by remember { mutableStateOf(false) }
     var switchHint by remember { mutableStateOf<String?>(null) }
+    var kept by remember { mutableStateOf(keep.contains(item)) }
 
     LaunchedEffect(item) {
         detail = null
         failed = false
         switchHint = null
+        // 进详情写当前池历史（web fongmi_hist：同名去重可选、每池按上限截断）
+        hist.push(item, mergeName = settings.histMerge, maxPerPool = settings.histMax)
         val d = repo.detail(source, item.vodId)
         if (d == null || d.lines.isEmpty()) {
             failed = true
@@ -69,6 +75,10 @@ fun DetailScreen(
                 )
             }
             OutlinedButton(onClick = { finding = true }) { Text("🔎 搜关联") }
+            // 收藏切换（web keepBtn：两池各 50 上限，条目带 isAdult 归池）
+            OutlinedButton(onClick = { kept = keep.toggle(item) }) {
+                Text(if (kept) "★ 已收藏" else "☆ 收藏")
+            }
         }
         switchHint?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
 

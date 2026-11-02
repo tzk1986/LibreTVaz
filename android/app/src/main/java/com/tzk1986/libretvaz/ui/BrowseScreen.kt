@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.perf.PerfCore
 import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
@@ -43,6 +44,8 @@ fun BrowseScreen(
     onLive: () -> Unit,
     onSources: () -> Unit,
     onSettings: () -> Unit,
+    onKeep: () -> Unit,
+    onHist: () -> Unit,
     onPick: (VodSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -58,6 +61,8 @@ fun BrowseScreen(
     var loading by remember { mutableStateOf(false) }
     var canLoadMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 地区筛选墙（web VOD_FILTERS）：分类命中预设时按 classifyVod 客户端过滤，null=全部
+    var preset by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
 
     // 从源管理返回时刷新源列表
     LaunchedEffect(Unit) { sources = store.vodSources() }
@@ -66,6 +71,8 @@ fun BrowseScreen(
 
     LaunchedEffect(source) {
         type = null
+        preset = null
+        targetPage = 1
         types = source?.let { repo.types(it) } ?: emptyList()
     }
 
@@ -84,7 +91,10 @@ fun BrowseScreen(
     }
 
     val gridState = rememberLazyGridState()
-    AutoLoadMore(gridState, items.size, loading, canLoadMore) { targetPage++ }
+    val regionSel = preset?.second ?: emptyList()
+    val shown = if (regionSel.isEmpty()) items
+        else items.filter { regionSel.contains(PerfCore.classifyVod(it.typeName, it.area)) }
+    AutoLoadMore(gridState, shown.size, loading, canLoadMore) { targetPage++ }
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -133,6 +143,8 @@ fun BrowseScreen(
                             "vod" -> vodMode = true
                             "live" -> onLive()
                             "search" -> onSearch()
+                            "keep" -> onKeep()
+                            "hist" -> onHist()
                             "sources" -> onSources()
                             "settings" -> onSettings()
                         }
@@ -148,15 +160,29 @@ fun BrowseScreen(
                 item {
                     FilterChip(
                         selected = currentType == null,
-                        onClick = { type = null; targetPage = 1 },
+                        onClick = { type = null; preset = null; targetPage = 1 },
                         label = { Text("更新推荐") },
                     )
                 }
                 items(typeList) { t ->
                     FilterChip(
                         selected = t.id == currentType?.id,
-                        onClick = { type = t; targetPage = 1 },
+                        onClick = { type = t; preset = null; targetPage = 1 },
                         label = { Text(t.name) },
+                    )
+                }
+            }
+        }
+
+        // 地区筛选 chips：仅当前分类命中预设（电影/电视剧/综艺/动漫）时出现，切换回第 1 页重拉
+        val typeFilters = type?.let { PerfCore.VOD_FILTERS[it.name] }
+        if (vodMode && typeFilters != null) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(typeFilters) { (label, regions) ->
+                    FilterChip(
+                        selected = (preset?.first ?: "全部") == label,
+                        onClick = { preset = label to regions; targetPage = 1 },
+                        label = { Text(label) },
                     )
                 }
             }
@@ -178,7 +204,7 @@ fun BrowseScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            itemsIndexed(items) { _, item ->
+            itemsIndexed(shown) { _, item ->
                 PosterCard(item = item, onClick = { onPick(item) })
             }
             if (canLoadMore && loading) {
@@ -253,8 +279,10 @@ private fun functionCards() = listOf(
     FuncCardSpec("vod", "点播", "分类浏览"),
     FuncCardSpec("live", "直播", "看电视"),
     FuncCardSpec("search", "搜索", "多源聚合"),
+    FuncCardSpec("keep", "收藏", "追剧收藏"),
+    FuncCardSpec("hist", "历史", "播放记录"),
     FuncCardSpec("sources", "源管理", "导入订阅/源设置"),
-    FuncCardSpec("settings", "服务器模式", "LibreTV 服务器配置"),
+    FuncCardSpec("settings", "设置", "播放/服务器/代理"),
 )
 
 @Composable

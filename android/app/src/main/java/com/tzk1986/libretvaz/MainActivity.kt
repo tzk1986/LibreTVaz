@@ -15,6 +15,8 @@ import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.ui.BrowseScreen
 import com.tzk1986.libretvaz.ui.DetailScreen
+import com.tzk1986.libretvaz.ui.HistScreen
+import com.tzk1986.libretvaz.ui.KeepScreen
 import com.tzk1986.libretvaz.ui.LiveScreen
 import com.tzk1986.libretvaz.ui.PlayerScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
@@ -28,6 +30,9 @@ sealed class Screen {
     data object Settings : Screen()
     data object Search : Screen()
     data object Browse : Screen()
+    /** 四池：点播/专区各自的收藏与历史（zone=true 为专区池，对应 web keep/hist/zonekeep/zonehist） */
+    data class Keep(val zone: Boolean) : Screen()
+    data class Hist(val zone: Boolean) : Screen()
     data class Detail(val item: VodSummary, val backTo: Screen) : Screen()
     /** 播放页携带完整多线路上下文，页内直接换集/换线/搜本作（对齐 web openDetail 闭包） */
     /** 直播等单地址场景的轻量播放页 */
@@ -66,12 +71,24 @@ class MainActivity : ComponentActivity() {
                             onBack = { screen = Screen.Browse },
                             onPick = { screen = Screen.Detail(it, Screen.Search) },
                         )
+                        is Screen.Keep -> KeepScreen(
+                            zone = current.zone,
+                            onBack = { screen = Screen.Browse },
+                            onPick = { screen = Screen.Detail(it, current) },
+                        )
+                        is Screen.Hist -> HistScreen(
+                            zone = current.zone,
+                            onBack = { screen = Screen.Browse },
+                            onPick = { screen = Screen.Detail(it, current) },
+                        )
                         Screen.Browse -> BrowseScreen(
                             store = sourceStore,
                             onSearch = { screen = Screen.Search },
                             onLive = { screen = Screen.Live },
                             onSources = { screen = Screen.Sources },
                             onSettings = { screen = Screen.Settings },
+                            onKeep = { screen = Screen.Keep(false) },
+                            onHist = { screen = Screen.Hist(false) },
                             onPick = { screen = Screen.Detail(it, Screen.Browse) },
                         )
                         is Screen.Detail -> DetailScreen(

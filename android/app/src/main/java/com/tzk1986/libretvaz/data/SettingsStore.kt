@@ -24,6 +24,16 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_RESUME, true)
         set(value) = prefs.edit().putBoolean(KEY_RESUME, value).apply()
 
+    /** 对齐 web fongmi_histmerge：历史按片名去重（同名跨源只留最新一条） */
+    var histMerge: Boolean
+        get() = prefs.getBoolean(KEY_HIST_MERGE, true)
+        set(value) = prefs.edit().putBoolean(KEY_HIST_MERGE, value).apply()
+
+    /** 对齐 web fongmi_histmax：历史每池保留条数（30/60/100） */
+    var histMax: Int
+        get() = prefs.getInt(KEY_HIST_MAX, 60)
+        set(value) = prefs.edit().putInt(KEY_HIST_MAX, value).apply()
+
     /** 「host:port」可选 HTTP 代理——TV 盒无系统代理时救活被 reset 的源站；空=直连 */
     var proxyUrl: String
         get() = prefs.getString(KEY_PROXY, "").orEmpty()
@@ -34,6 +44,8 @@ class SettingsStore(context: Context) {
         private const val KEY_AUTO_NEXT = "auto_next"
         private const val KEY_AUTO_LINE = "auto_line"
         private const val KEY_RESUME = "resume_play"
+        private const val KEY_HIST_MERGE = "hist_merge"
+        private const val KEY_HIST_MAX = "hist_max"
         private const val KEY_PROXY = "proxy_url"
     }
 }
