@@ -1932,7 +1932,7 @@ function renderSearch() {
   };
   const drawHot = () => {
     const el = $('#hotList'); if (!el) return;
-    const words = pi ? pi.top(20) : pool.list().slice(-20).reverse();
+    const words = pi ? pi.top(40) : pool.list().slice(-40).reverse();
     el.innerHTML = words.length
       ? words.map((w, i) => `<button class="btn" data-focus data-k="${esc(w)}">${i < 3 ? '🔥 ' : ''}${esc(w)}</button>`).join('')
       : '<span class="muted" style="font-size:12px">词库建设中…（搜索/进墙自动积累本池片名）</span>';
@@ -1954,7 +1954,7 @@ function renderSearch() {
     const marked = new Set(truncs);
     hits = [...truncs, ...hits.filter(w => !marked.has(w))].slice(0, 30);
     row.innerHTML = hits.length
-      ? hits.map(w => `<button class="chip" data-focus data-w="${esc(w)}">${esc(w)}${marked.has(w) ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
+      ? hits.map(w => `<button class="btn" data-focus data-w="${esc(w)}">${esc(w)}${marked.has(w) ? '<span style="font-size:10px;color:var(--accent)">·截断</span>' : ''}</button>`).join('')
       : '<span class="muted" style="font-size:12px">没有匹配的片名，可点热榜词或换字母试试</span>';
   };
   const drawSrc = () => { const b = $('#srcName'); if (b) b.textContent = Search.srcSel ? `📌 ${Search.srcSel.name}` : '全部源（聚合）'; };

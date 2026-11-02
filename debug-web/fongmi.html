@@ -156,12 +156,13 @@
   input.editing { border-color: var(--accent) !important; box-shadow: 0 0 12px rgba(62,166,255,.45); }
   .colhead { padding: 6px 28px 0; font-size: 18px; font-weight: 600; flex: none; }
   /* 搜索页三栏（对标影视仓搜索页：左历史/中键盘/右热榜；点播与资源口同构、数据分池） */
-  .search3 { display: grid; grid-template-columns: 200px minmax(0,1fr) 190px; gap: 18px; padding: 4px 28px 16px; align-items: start; }
+  .search3 { display: grid; grid-template-columns: 220px minmax(0,1fr) 230px; gap: 18px; padding: 4px 28px 16px; align-items: start; }
   .scol { min-width: 0; }
   .scol .rowhead { margin-top: 8px; }
   .vcol { display: flex; flex-direction: column; gap: 6px; align-items: stretch; max-height: 62vh; overflow-y: auto; scrollbar-width: none; }
   .vcol::-webkit-scrollbar { display: none; }
-  .vcol .btn { text-align: left; overflow: hidden; text-overflow: ellipsis; }
+  .vcol .btn { text-align: left; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; } /* flex:0 0 auto：overflow:hidden 令按钮最小高归零，超高列表曾被压扁裁字而非滚动 */
+  #sugRow .btn { white-space: nowrap; } /* 联想词与键盘同级按钮样式，可选中反色 */
   .kbg { display: grid; grid-template-columns: repeat(6, 46px); gap: 7px; justify-content: center; padding: 8px 0 2px; }
   .kbg .kb { width: auto; }
   .morebtn { grid-column: 1 / -1; text-align: center; padding: 12px 0; color: var(--dim); } /* S4 海报墙尾部无限下拉哨兵：横跨整行 */
