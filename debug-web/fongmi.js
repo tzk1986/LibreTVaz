@@ -374,7 +374,13 @@ document.addEventListener('keydown', e => {
   if (D) {
     if (editing) return; // 编辑态方向键=光标/选区，放行原生
     if (Focus.el?.tagName === 'VIDEO' && (App.view === 'video' || document.fullscreenElement) && (D === 'L' || D === 'R')) { seekVideo(Focus.el, D === 'L' ? -15 : 15); e.preventDefault(); return; } // R5 详情/全屏 ←→=±15s
+    const prevF = Focus.el;
     Focus.move(D); e.preventDefault();
+    // S4：墙已到底、焦点无处可去时，继续按 ↓ 直接触发哨兵加载（无需先对准按钮）
+    if (D === 'D' && Focus.el === prevF && (App.view === 'vod' || App.view === 'zone') && prevF?.closest?.('#vodGrid')) {
+      const sc = $('#scroller'), mb = $('#moreBtn');
+      if (sc && mb && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48) { Focus.set(mb); mb.click(); }
+    }
     const fe = Focus.el; // 键盘移动后同样记录最后聚焦频道行（favCur 定位用）
     if (App.view === 'live' && fe?.dataset?.i != null && fe.closest?.('#colChan')) Live.hi = Number(fe.dataset.i);
   }
@@ -785,12 +791,12 @@ function parseRoot(root) {
     if (has && !root.some(o => o && o.url && !o.baseUrl)) {
       format = 'source-catalog';
       for (const o of root) {
-        if (o && o.baseUrl && o.enabled !== false && isCmsApi(o.baseUrl)) pushVod({ name: o.name || o.baseUrl, url: normUrl(o.baseUrl), isAdult: !!o.isAdult });
+        if (o && o.baseUrl && o.enabled !== false && isCmsApi(o.baseUrl)) pushVod({ name: o.name || o.baseUrl, url: normUrl(o.baseUrl), isAdult: !!o.isAdult || isAdultType(o.name) });
         else skipped++;
       }
     } else {
       for (const o of root) {
-        if (o && o.url && isCmsApi(o.url)) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult });
+        if (o && o.url && isCmsApi(o.url)) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult || isAdultType(o.name) });
         else skipped++;
       }
     }
@@ -810,7 +816,7 @@ function parseRoot(root) {
         else skipped++;
       }
     } else if (root.sources) {
-      for (const o of root.sources) if (o && o.url) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult }); else skipped++;
+      for (const o of root.sources) if (o && o.url) pushVod({ name: o.name || o.url, url: o.url, detail: o.detail || null, isAdult: !!o.isAdult || isAdultType(o.name) }); else skipped++;
       for (const o of root.liveSources || []) if (o && o.url) pushLive({ name: o.name || o.url, url: o.url, epg: o.epg || null }); else skipped++;
     } else skipped++;
   }
@@ -1576,14 +1582,15 @@ async function loadMerged(pg, srvIds) { // srvIds=R8 预设命中子分类数组
     httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}${extra}&pg=${pg}`))
       .then(raw => parseList(raw, s)));
   if (rid !== Vod.reqId || App.view !== 'vod' || !$('#vodGrid')) return;
-  const fresh = dedupById(pages.flat());
+  const fresh = dedupByName(dedupById(pages.flat())); // 页内先按 id+片名去重，防子类合并撞车
   if (pg === 1 && !fresh.length && cachedShown) { Vod.loading = false; return; } // 拉新为空保留缓存首屏
   Vod.loading = false; Vod.page = pg;
   if (pg === 1 && fresh.length) cacheSet(ck, fresh);
   if (pg === 1) { Vod.filters = buildFilters(t, null); if (Vod.showFilters) drawSubRow(); }
   addWords(fresh.map(it => it.name));
-  Vod.items = pg === 1 ? fresh : dedupById(Vod.items.concat(fresh));
-  Vod.more = pages.some(p => p.length > 0);
+  const prevLen = pg === 1 ? 0 : Vod.items.length;
+  Vod.items = pg === 1 ? fresh : dedupByName(dedupById(Vod.items.concat(fresh))); // 追加轮按 id+片名去重，防重复上墙
+  Vod.more = pg === 1 ? pages.some(p => p.length > 0) : Vod.items.length > prevLen; // pg>1 有新增才能继续（防无视 pg 恒回首页的源空转）
   drawVodGrid();
 }
 async function loadVod(pg = 1) {
@@ -1618,11 +1625,12 @@ async function loadVod(pg = 1) {
     grid.innerHTML = `<p class="err">${esc(err)}</p>`; return;
   }
   Vod.loading = false; Vod.page = pg;
-  if (pg === 1 && items.length) cacheSet(ck, items);
+  if (pg === 1 && items.length) cacheSet(ck, dedupByName(items));
   if (pg === 1 && t) { Vod.filters = buildFilters(t, raw); if (Vod.showFilters) drawSubRow(); }
   addWords(items.map(it => it.name));
-  Vod.items = pg === 1 ? items : Vod.items.concat(items);
-  Vod.more = items.length > 0;
+  const prevLen = pg === 1 ? 0 : Vod.items.length;
+  Vod.items = pg === 1 ? dedupByName(items) : dedupByName(dedupById(Vod.items.concat(items))); // 追加轮去重：源无视 pg 回重复页不再上重复卡
+  Vod.more = pg === 1 ? items.length > 0 : Vod.items.length > prevLen; // pg>1 以“是否有新增”判底，全重复=到底，防无限空转
   drawVodGrid();
 }
 /* 默认呈现最新：按 vod_year 倒序（同年保持源返回的更新时间序），无需再点筛选 */
