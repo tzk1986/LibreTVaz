@@ -1210,14 +1210,16 @@ const Home = { srcIdx: Math.max(0, LS('fongmi_site_idx', 0)), aggMode: localStor
 function onScroll() {
   const sc = $('#scroller'); if (!sc) return;
   $('#bar').classList.toggle('hide', sc.scrollTop > 90);
-  if (App.view === 'vod') { // 点播=App 首页，滚动到底翻页
-    if (Vod.preset && !Vod.pSrv && Vod.page >= 10) return; // R8 三级 (b)：客户端地区过滤 10 页封顶停止翻页
-    if (Vod.more && !Vod.loading && sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200) loadVod(Vod.page + 1);
-  }
+  if (App.view !== 'vod' && App.view !== 'zone') return;
+  const bottom = sc.scrollTop + sc.clientHeight > sc.scrollHeight - 200;
+  if (Vod.agg) { if (Vod.more && !Vod.loading && !Vod.loadingMore && bottom) aggLoadMore(); return; } // 聚合墙（点播聚合/资源口）滚到底续轮
+  if (App.view !== 'vod') return;
+  if (Vod.preset && !Vod.pSrv && Vod.page >= 10) return; // R8 三级 (b)：客户端地区过滤 10 页封顶停止翻页
+  if (Vod.more && !Vod.loading && bottom) loadVod(Vod.page + 1);
 }
 
 /* ================= 点播页（VodActivity：类型 chips + 网格） ================= */
-const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '' };
+const Vod = { types: [], tab: null, page: 1, items: [], loading: false, more: false, reqId: 0, filters: null, sub: '', area: '', year: '', lang: '', showFilters: false, merged: null, agg: false, preset: '', pSrv: null, presetInfo: '', aggCat: null, loadingMore: false };
 function renderVod() {
   if (App.srcDirty) { App.srcDirty = false; Vod.tab = null; } // 重进点播消费源变更（等效原强刷的 tab 重置）
   const hist = LS('fongmi_hist', []).filter(h => SRC.vod[h.si] && !isZoneRec(h));
@@ -1378,8 +1380,8 @@ function hasRegionKid(types, cat) {
   if (!p) return false;
   return types.some(c => c.pid === p.id && c.id !== p.id && PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
 }
-async function fetchAggSource(s, cat) {
-  if (!cat) return httpGet(listUrl(s.url, 'ac=videolist&pg=1'), 8000).then(raw => parseList(raw, s)).catch(() => []);
+async function fetchAggSource(s, cat, pg = 1) {
+  if (!cat) return httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), 8000).then(raw => parseList(raw, s)).catch(() => []);
   const types = await getSrcTypes(s);
   const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
   if (!p) return [];
@@ -1390,7 +1392,7 @@ async function fetchAggSource(s, cat) {
     qs = reg.length ? reg.slice(0, 4) : [p];
   } else qs = kids.length ? kids.slice(0, 3) : [p];
   const sub = await pMap(qs, c =>
-    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=1`), 8000).then(raw => parseList(raw, s)), qs.length); // 子类全并行+8s 快断：慢源不再拖聚合首屏
+    httpGet(listUrl(s.url, `ac=videolist&t=${encodeURIComponent(c.id)}&pg=${pg}`), 8000).then(raw => parseList(raw, s)), qs.length); // 子类全并行+8s 快断：慢源不再拖聚合首屏
   return sub.flat();
 }
 const aggKey = (s, cat) => 'aggs:' + s.url + '|' + (cat ? cat.key + (cat.rlabs ? '@' + cat.rlabs.join(',') : '') : 'latest');
@@ -1402,13 +1404,14 @@ async function runAggWall(cat) {
   const grid = $('#vodGrid'); if (!grid) return;
   const rid = ++Vod.reqId, token = ++aggToken;
   const pool = aggPool();
+  Vod.aggCat = cat || null; // S4 无限下拉：加载更多按同一分类续页
   const alive = () => rid === Vod.reqId && token === aggToken && Vod.agg && (App.view === 'vod' || App.view === 'zone') && $('#vodGrid');
   const merge = () => {
     const all = [];
     for (const s of pool) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
     const items = dedupByName(all);
     if (!items.length) return false;
-    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = false; Vod.loading = false;
+    Vod.items = sortByYearDesc(items); Vod.page = 1; Vod.more = true; Vod.loading = false; // S4：聚合墙可无限下拉（拉到空轮/10 轮封顶才关）
     addWords(items.map(it => it.name), Zone.active);
     drawVodGrid();
     return true;
@@ -1442,6 +1445,40 @@ async function runAggWall(cat) {
 }
 const loadAgg = () => runAggWall(null);
 const loadAggCat = cat => runAggWall(cat);
+/* S4 无限下拉（图片流式）：聚合墙（点播聚合/资源口）哨兵「加载更多」OK 触发——各源同分类拉下一轮页，
+   追加进分片缓存后整墙重并（dedupByName 旧位保留）；全空轮或 10 轮封顶→「已到上限」。并发 6、单源 8s 快断、
+   失败静默；epoch/token 防切类换墙串数据；单源模式走既有 loadVod(pg+1) */
+async function aggLoadMore() {
+  if (!Vod.agg || Vod.loadingMore || !Vod.more) return;
+  const cat = Vod.aggCat || null;
+  const rid = Vod.reqId, token = aggToken;
+  const pg = (Vod.page || 1) + 1;
+  if (pg > 10) { Vod.more = false; drawVodGrid(); return; }
+  Vod.loadingMore = true;
+  const btn = $('#moreBtn'); if (btn) btn.textContent = '加载中…';
+  const pool = aggPool();
+  let any = false;
+  await pMap(pool, async s => {
+    try {
+      const more = await fetchAggSource(s, cat, pg);
+      if (!more.length) return;
+      any = true;
+      const k = aggKey(s, cat);
+      const old = (cacheRaw(k) && cacheRaw(k).d) || [];
+      cacheSet(k, dedupById(old.concat(more)).slice(0, 800)); // 分片封顶 800 条防内存膨胀
+    } catch { /* 单源失败跳过 */ }
+  }, 6);
+  Vod.loadingMore = false;
+  if (rid !== Vod.reqId || token !== aggToken || (App.view !== 'vod' && App.view !== 'zone') || !Vod.agg) return;
+  Vod.page = pg;
+  Vod.more = any && pg < 10;
+  const all = [];
+  for (const s of aggPool()) { const v = cacheRaw(aggKey(s, cat)); if (v && Array.isArray(v.d)) all.push(...v.d); }
+  const items = dedupByName(all);
+  if (items.length) { Vod.items = sortByYearDesc(items); addWords(items.map(it => it.name), Zone.active); }
+  drawVodGrid();
+  toast(any ? `第 ${pg} 轮加载完成，共 ${Vod.items.length} 部` : '各源均无更多内容');
+}
 /* 预取其余分类的源分片（只入缓存不渲染），低并发避免抢当前请求带宽 */
 async function aggPrefetch(rid, token, skip) {
   if (rid !== Vod.reqId || token !== aggToken) return;
@@ -1592,11 +1629,20 @@ function drawVodGrid() {
       ? `地区「${Vod.preset}」：服务端 ${Vod.pSrv.length} 个分类合并`
       : `地区「${Vod.preset}」：${Vod.agg ? '聚合' : `已拉 ${Vod.page} 页`} ${Vod.items.length} 部，筛出 ${shown.length} 部${unknown ? ` · ${unknown} 部无地区信息未显示` : ''}${!Vod.agg && Vod.page >= 10 ? ' · 已拉满 10 页上限' : ''}`;
   } else Vod.presetInfo = '';
-  grid.innerHTML = shown.length
+  const wasMore = Focus.el && Focus.el.id === 'moreBtn'; // S4 哨兵重绘后焦点归位，遥控可连续 OK 下拉
+  const atCap = !Vod.agg && Vod.preset && !Vod.pSrv && Vod.page >= 10;
+  const canMore = !!Vod.more && !atCap;
+  grid.innerHTML = (shown.length
     ? shown.map((it, i) => cardHtml(it, i, { showSite: Vod.agg })).join('')
-    : `<p class="muted">${Vod.preset ? esc(Vod.presetInfo) + '（仍无数据可继续下滑拉取或选「全部」）' : (Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据')}</p>`;
+    : `<p class="muted">${Vod.preset ? esc(Vod.presetInfo) + '（仍无数据可继续下滑拉取或选「全部」）' : (Vod.agg ? '聚合无数据：请检查点播源' : '该分类暂无数据')}</p>`)
+    + (shown.length ? `<button class="btn morebtn" data-focus id="moreBtn">${Vod.loadingMore ? '加载中…' : (canMore ? '⌄ 加载更多（OK 键继续下刷）' : '已到上限')}</button>` : '');
   if (Zone.active) reapplyZoneTags(shown); // 资源口墙增量重绘后回贴测速标签
   $('#presetInfo') && ($('#presetInfo').textContent = Vod.presetInfo || '');
+  const mb = $('#moreBtn');
+  if (mb) {
+    mb.onclick = () => { if (Vod.agg) aggLoadMore(); else if (!Vod.loading && canMore) loadVod(Vod.page + 1); };
+    if (wasMore) Focus.set(mb);
+  }
   bindGrid(grid, shown, it => {
     if (!Vod.agg) { openDetail(it); return; }
     // 聚合墙：点击片名进入跨源搜索（影视仓豆瓣式：先统一展示，选中资源再全源查找）
@@ -1698,6 +1744,7 @@ function renderZone() {
   };
   $('#zoneFind').onclick = () => openFindBox('', () => ({ line: 0, ep: 0, sec: 0 }), true);
   $('#zoneSearch').onclick = () => openSearch(true); // 资源口池搜索页（与点播同构三栏，数据隔离）
+  $('#scroller').addEventListener('scroll', onScroll); // S4：资源口墙滚到底自动续轮（与点播墙同款无限下拉）
   $('#zoneSpeed').onclick = () => zoneSpeedWall(true);
   $('#zoneHist').onclick = () => switchView('zonehist');
   $('#zoneKeep').onclick = () => switchView('zonekeep');
