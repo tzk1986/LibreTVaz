@@ -14,8 +14,8 @@ object Playback {
 
     data class LineCandidate(val index: Int, val episode: PlayEpisode)
 
-    /** 自动换线候选（B4 起测速版请直接用 PerfCore.pickNextLine 传 speeds） */
-    fun pickNextLine(lines: List<PlayLine>, line: Int, curEp: Int, tried: Set<Int>): List<LineCandidate> =
-        PerfCore.pickNextLine(lines, line, curEp, tried, null)
+    /** 自动换线候选：B4 起带 speeds（实测慢/不可用线沉底，null=未知不惩罚） */
+    fun pickNextLine(lines: List<PlayLine>, line: Int, curEp: Int, tried: Set<Int>, speeds: List<Long?>? = null): List<LineCandidate> =
+        PerfCore.pickNextLine(lines, line, curEp, tried, speeds)
             .map { LineCandidate(it.index, it.episode) }
 }

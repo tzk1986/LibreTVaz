@@ -28,12 +28,22 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import com.tzk1986.libretvaz.data.*
+import com.tzk1986.libretvaz.data.perf.LineSpeed
+import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 进程内续播表（对齐 web fongmi_resume 的内存级进度）：key=源|vodId → 线路/集/毫秒 */
 private val RESUME_MAP = java.util.concurrent.ConcurrentHashMap<String, Triple<Int, Int, Long>>()
 private fun resumeKey(it: VodSummary) = "${it.sourceKey}|${it.vodId}"
+
+/** 测速标签配色（对齐 web sp-ok/sp-mid/sp-bad/sp-dim 语义色） */
+private fun speedTagColor(cls: String): Color = when (cls) {
+    "sp-ok" -> Color(0xFF66BB6A)
+    "sp-mid" -> Color(0xFFFFC107)
+    "sp-bad" -> Color(0xFFEF5350)
+    else -> Color(0xFF9E9E9E)
+}
 
 private fun buildPlayer(context: android.content.Context): ExoPlayer {
     // 代理经 Http.applyGlobalProxy() 的 JVM 全局 ProxySelector 生效（media3 无 setProxy API）
@@ -80,6 +90,10 @@ fun PlayerScreen(
     var errorHint by remember { mutableStateOf<String?>(null) }
     var controlsVisible by remember { mutableStateOf(true) }
     var dlg by remember { mutableStateOf("") } // "" / line / ep / find
+    // B4 线路测速：当前「作品|集」的速度表（null 元素=未测；-1=采样失败但播放正常）
+    var speeds by remember { mutableStateOf<List<Long?>?>(null) }
+    var userPickedLine by remember { mutableStateOf(false) }
+    var probeSeq by remember { mutableIntStateOf(0) }
 
     val player = remember { buildPlayer(context) }
 
@@ -92,6 +106,48 @@ fun PlayerScreen(
         player.setMediaItem(MediaItem.fromUri(u), startPosMs)
         player.prepare()
     }
+    // ===== B4 线路测速（对齐 web speedProbe/flagBtnHtml）=====
+    fun playingHealthy() = player.playbackState == Player.STATE_READY && player.currentPosition > 0
+    /** 假阴性防护：判慢但播放器实际流畅 → 黄标「播放中」，不判死（web flagBtnHtml） */
+    fun tagFor(i: Int): PerfCore.SpeedTag? {
+        val k = speeds?.getOrNull(i) ?: return null
+        var t = PerfCore.lineSpeedTag(k) ?: return null
+        if (t.cls == "sp-bad" && i == line && playingHealthy()) {
+            t = PerfCore.SpeedTag(if (k > 0) PerfCore.fmtSpeed(k) + " · 播放中" else "播放中（测速失败）", "sp-mid")
+        }
+        return t
+    }
+    fun probeSpeeds(epIdx: Int) {
+        if (!settings.lineSpeed || detailS.lines.isEmpty()) return
+        val seq = probeSeq + 1; probeSeq = seq
+        val key = LineSpeed.key(itemS.sourceKey, itemS.vodId, epIdx)
+        val lines = detailS.lines
+        if (LineSpeed.cached(key) == null) speeds = List(minOf(lines.size, LineSpeed.MAX_LINES)) { null }
+        scope.launch {
+            val sp = LineSpeed.measure(key, lines, epIdx, line, { playingHealthy() }) {
+                if (seq == probeSeq) speeds = it
+            }
+            if (seq != probeSeq) return@launch
+            speeds = sp
+            // 起播偏晚补判：全测完当前线仍 0 但播放已流畅 → -1（web speedProbe.then 内同逻辑）
+            val curK = sp.getOrNull(line)
+            var finalSp = sp
+            if (curK == 0L && playingHealthy()) {
+                finalSp = sp.toMutableList().also { it[line] = -1L }
+                LineSpeed.put(key, finalSp)
+                speeds = finalSp
+            }
+            if (userPickedLine || !settings.autoBestLine || ep != epIdx) return@launch
+            val best = PerfCore.pickBestLine(lines, finalSp, epIdx)
+            if (best < 0 || best == line || best >= lines.size) return@launch
+            val eIdx = epIdx.coerceAtMost(lines[best].list.size - 1)
+            val sec = player.currentPosition
+            line = best; ep = eIdx; tried = setOf(best)
+            toast("已切换到最快线路「${lines[best].flag}」")
+            playAt(best, eIdx, sec)
+        }
+    }
+
     fun goEp(step: Int) {
         val g = detailS.lines.getOrNull(line) ?: return
         val ni = ep + step
@@ -100,12 +156,14 @@ fun PlayerScreen(
         ep = ni
         tried = setOf(line) // 手动换集重置换线记录（对齐 web goEp）
         playAt(line, ni)
+        probeSpeeds(ni) // 换集重测本集各线（对齐 web speedProbe(curEp)）
     }
     // 手动点选集（对齐 web epRow.onclick：curEp=选中; tried 重置为新集起点）
     fun goEpTo(i: Int) {
         ep = i
         tried = setOf(line)
         playAt(line, i)
+        probeSpeeds(i)
     }
 
     // 监听只注册一次；回调内引用的都是 delegate state，读到最新值
@@ -133,13 +191,14 @@ fun PlayerScreen(
                     errorHint = "播放失败（${error.errorCodeName}），可手动换线路"
                     return
                 }
-                val cand = Playback.pickNextLine(detailS.lines, line, ep, tried)
+                val cand = Playback.pickNextLine(detailS.lines, line, ep, tried, speeds)
                 if (cand.isEmpty()) {
                     errorHint = "已尝试全部 ${detailS.lines.size} 条线路均无法播放，请「搜关联」换源"
                     return
                 }
                 val ni = cand[0].index
                 tried = tried + ni
+                speeds = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, ep))
                 line = ni
                 toast("该线路无法播放，3 秒后自动切换「${detailS.lines[ni].flag}」")
                 scope.launch {
@@ -170,6 +229,7 @@ fun PlayerScreen(
         }
         if (pos > 0) toast("已从上次播放位置续播")
         playAt(l, e, pos)
+        probeSpeeds(e)
     }
 
     val g = detailS.lines.getOrNull(line)
@@ -203,7 +263,11 @@ fun PlayerScreen(
             ) {
                 Button(onClick = onBack) { Text("← 返回") }
                 OutlinedButton(onClick = { dlg = "line" }) {
-                    Text("线路：${g?.flag ?: "-"}（${detailS.lines.size}条）")
+                    val tag = tagFor(line)
+                    Text(
+                        "线路：${g?.flag ?: "-"}（${detailS.lines.size}条）" + (tag?.let { " ${it.label}" } ?: ""),
+                        color = tag?.let { speedTagColor(it.cls) } ?: Color.Unspecified,
+                    )
                 }
                 OutlinedButton(onClick = { dlg = "ep" }) { Text("第${ep + 1}/${total}集") }
                 Button(onClick = { goEp(-1) }, enabled = ep > 0) { Text("⏮ 上一集") }
@@ -231,14 +295,25 @@ fun PlayerScreen(
     }, text = {
         LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
             itemsIndexed(detailS.lines) { i, lg ->
+                val tag = tagFor(i)
                 TextButton(
                     onClick = {
                         dlg = ""
                         line = i; ep = 0; tried = setOf(i)
+                        userPickedLine = true // 手动换线后测速不再抢跳最快线（对齐 web userPickedLine）
                         playAt(i, 0)
+                        probeSpeeds(0)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("${lg.flag}（${lg.list.size}集）${if (i == line) " ◀ 当前" else ""}", modifier = Modifier.fillMaxWidth()) }
+                ) {
+                    Text(
+                        "${lg.flag}（${lg.list.size}集）${if (i == line) " ◀ 当前" else ""}",
+                        modifier = Modifier.weight(1f),
+                    )
+                    tag?.let {
+                        Text(it.label, color = speedTagColor(it.cls), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
             }
         }
     })
@@ -276,7 +351,9 @@ fun PlayerScreen(
                 detailS = d2
                 itemS = sum
                 line = li; ep = ei; tried = setOf(li)
+                userPickedLine = false // 换源视同重新进入播放页（对齐 web openDetail 重跑）
                 playAt(li, ei, keepSec)
+                probeSpeeds(ei)
                 toast("已切换到「${sum.sourceName}」续播")
             }
         },

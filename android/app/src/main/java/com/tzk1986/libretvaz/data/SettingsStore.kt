@@ -34,6 +34,16 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_HIST_MAX, 60)
         set(value) = prefs.edit().putInt(KEY_HIST_MAX, value).apply()
 
+    /** 对齐 web fongmi_linespeed：播放页对各线路做吞吐采样并显示速度标签 */
+    var lineSpeed: Boolean
+        get() = prefs.getBoolean(KEY_LINE_SPEED, true)
+        set(value) = prefs.edit().putBoolean(KEY_LINE_SPEED, value).apply()
+
+    /** 对齐 web fongmi_autobestline：测速完成后自动跳到最快线（用户手动换过线则不抢） */
+    var autoBestLine: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_BEST_LINE, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_BEST_LINE, value).apply()
+
     /** 「host:port」可选 HTTP 代理——TV 盒无系统代理时救活被 reset 的源站；空=直连 */
     var proxyUrl: String
         get() = prefs.getString(KEY_PROXY, "").orEmpty()
@@ -46,6 +56,8 @@ class SettingsStore(context: Context) {
         private const val KEY_RESUME = "resume_play"
         private const val KEY_HIST_MERGE = "hist_merge"
         private const val KEY_HIST_MAX = "hist_max"
+        private const val KEY_LINE_SPEED = "line_speed"
+        private const val KEY_AUTO_BEST_LINE = "auto_best_line"
         private const val KEY_PROXY = "proxy_url"
     }
 }
