@@ -20,6 +20,7 @@ import com.tzk1986.libretvaz.ui.KeepScreen
 import com.tzk1986.libretvaz.ui.LiveScreen
 import com.tzk1986.libretvaz.ui.PlayerScreen
 import com.tzk1986.libretvaz.ui.ProbeScreen
+import com.tzk1986.libretvaz.ui.CollectScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
 import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
@@ -30,7 +31,10 @@ sealed class Screen {
     data object Live : Screen()
     data object Sources : Screen()
     data object Settings : Screen()
-    data object Search : Screen()
+    /** 搜索页双池：zone=true 走资源口池（历史/词库/源池全隔离） */
+    data class Search(val zone: Boolean) : Screen()
+    /** 聚合搜索结果页：携带词/池/指定源，返回回对应池的搜索页 */
+    data class Collect(val kw: String, val zone: Boolean, val srcSel: com.tzk1986.libretvaz.ui.SpecSrc?) : Screen()
     data object Browse : Screen()
     data object Probe : Screen()
     data object Zone : Screen()
@@ -71,10 +75,19 @@ class MainActivity : ComponentActivity() {
                         )
                         Screen.Sources -> SourcesScreen(store = sourceStore, onBack = { screen = Screen.Browse })
                         Screen.Settings -> SettingsScreen(store = settingsStore, onBack = { screen = Screen.Browse })
-                        Screen.Search -> SearchScreen(
+                        is Screen.Search -> SearchScreen(
                             store = sourceStore,
-                            onBack = { screen = Screen.Browse },
-                            onPick = { screen = Screen.Detail(it, Screen.Search) },
+                            zone = current.zone,
+                            onBack = { screen = if (current.zone) Screen.Zone else Screen.Browse },
+                            onCollect = { kw, sel -> screen = Screen.Collect(kw, current.zone, sel) },
+                        )
+                        is Screen.Collect -> CollectScreen(
+                            kw0 = current.kw,
+                            zone = current.zone,
+                            srcSel = current.srcSel,
+                            store = sourceStore,
+                            onBack = { screen = Screen.Search(current.zone) },
+                            onPick = { screen = Screen.Detail(it, current) },
                         )
                         is Screen.Keep -> KeepScreen(
                             zone = current.zone,
@@ -88,7 +101,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Screen.Browse -> BrowseScreen(
                             store = sourceStore,
-                            onSearch = { screen = Screen.Search },
+                            onSearch = { screen = Screen.Search(false) },
                             onLive = { screen = Screen.Live },
                             onSources = { screen = Screen.Sources },
                             onSettings = { screen = Screen.Settings },
@@ -101,7 +114,7 @@ class MainActivity : ComponentActivity() {
                         Screen.Zone -> ZoneScreen(
                             store = sourceStore,
                             onBack = { screen = Screen.Browse },
-                            onSearch = { screen = Screen.Search },
+                            onSearch = { screen = Screen.Search(true) },
                             onKeep = { screen = Screen.Keep(true, Screen.Zone) },
                             onHist = { screen = Screen.Hist(true, Screen.Zone) },
                             onPick = { screen = Screen.Detail(it, Screen.Zone) },

@@ -53,6 +53,12 @@ class CmsRepository {
         SearchOutcome(filtered, errorMessages)
     }
 
+    /** 单源搜索仅第 1 页（web Collect 一源一次 ac=videolist&wd=&pg=1 等价，交给上层并发） */
+    suspend fun searchSourcePage1(source: VodSource, wd: String): List<VodSummary> = withContext(Dispatchers.IO) {
+        val query = "ac=videolist&wd=${URLEncoder.encode(wd, "UTF-8")}&pg=1"
+        CmsParser.parseSearchList(fetchJson(apiUrl(source, query)), source)
+    }
+
     private suspend fun searchOneSource(source: VodSource, wd: String): List<VodSummary> {
         val query = "ac=videolist&wd=${URLEncoder.encode(wd, "UTF-8")}"
         val firstJson = fetchJson(apiUrl(source, "$query&pg=1"))

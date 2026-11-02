@@ -147,6 +147,7 @@ fun ZoneScreen(
                     if (my != wallSeq || items.isEmpty()) return@launch
                     val fresh = items.filter { drawn.add(CmsParser.normalizeTitle(it.name)) }
                     if (fresh.isEmpty()) return@launch
+                    VocabPools.get(context).addWords(fresh.map { it.name }, true) // 专区墙片名入专区词库
                     wall = if (!firstDrawn) {
                         firstDrawn = true
                         (wall + fresh).sortedByDescending { it.year?.toIntOrNull() ?: 0 } // 首绘年降序一次，后续只追加队尾

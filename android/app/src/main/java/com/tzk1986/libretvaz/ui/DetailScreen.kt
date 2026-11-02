@@ -49,6 +49,7 @@ fun DetailScreen(
         switchHint = null
         // 进详情写当前池历史（web fongmi_hist：同名去重可选、每池按上限截断）
         hist.push(item, mergeName = settings.histMerge, maxPerPool = settings.histMax)
+        VocabPools.get(context).bump(item.name, 2, item.isAdult) // 词权重：进详情 +2，按池路由（web vocab().bump 等价）
         val d = repo.detail(source, item.vodId)
         if (d == null || d.lines.isEmpty()) {
             failed = true

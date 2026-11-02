@@ -29,6 +29,7 @@ import coil.compose.AsyncImage
 import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.VocabPools
 import com.tzk1986.libretvaz.data.perf.PerfCore
 import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
@@ -89,6 +90,7 @@ fun BrowseScreen(
         error = null
         val page = if (t == null) repo.home(s, targetPage) else repo.listByType(s, t.id, targetPage)
         if (targetPage == 1) items = page else items = items + page
+        if (page.isNotEmpty()) VocabPools.get(context).addWords(page.map { it.name }, false) // 进墙片名入点播池词库
         canLoadMore = page.isNotEmpty()
         if (page.isEmpty() && targetPage == 1) {
             error = if (type == null) "源未返回最近更新数据，可点「点播」按分类浏览" else "该分类暂无数据，源可能不支持分类列表"
@@ -322,7 +324,7 @@ private fun FuncCard(title: String, caption: String, selected: Boolean, onClick:
 }
 
 @Composable
-private fun PosterCard(item: VodSummary, onClick: () -> Unit) {
+internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null) {
     Column(modifier = Modifier.clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
@@ -357,6 +359,21 @@ private fun PosterCard(item: VodSummary, onClick: () -> Unit) {
                         .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+            siteLabel?.let { t ->
+                Text(
+                    text = t,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
                 )
             }
         }
