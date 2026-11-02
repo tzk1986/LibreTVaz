@@ -19,6 +19,7 @@ import com.tzk1986.libretvaz.ui.HistScreen
 import com.tzk1986.libretvaz.ui.KeepScreen
 import com.tzk1986.libretvaz.ui.LiveScreen
 import com.tzk1986.libretvaz.ui.PlayerScreen
+import com.tzk1986.libretvaz.ui.ProbeScreen
 import com.tzk1986.libretvaz.ui.SearchScreen
 import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
@@ -30,6 +31,7 @@ sealed class Screen {
     data object Settings : Screen()
     data object Search : Screen()
     data object Browse : Screen()
+    data object Probe : Screen()
     /** 四池：点播/专区各自的收藏与历史（zone=true 为专区池，对应 web keep/hist/zonekeep/zonehist） */
     data class Keep(val zone: Boolean) : Screen()
     data class Hist(val zone: Boolean) : Screen()
@@ -89,7 +91,16 @@ class MainActivity : ComponentActivity() {
                             onSettings = { screen = Screen.Settings },
                             onKeep = { screen = Screen.Keep(false) },
                             onHist = { screen = Screen.Hist(false) },
+                            onProbe = { screen = Screen.Probe },
                             onPick = { screen = Screen.Detail(it, Screen.Browse) },
+                        )
+                        Screen.Probe -> ProbeScreen(
+                            store = sourceStore,
+                            onBack = { screen = Screen.Browse },
+                            onPick = { idx ->
+                                settingsStore.siteIdx = idx
+                                screen = Screen.Browse
+                            },
                         )
                         is Screen.Detail -> DetailScreen(
                             item = current.item,

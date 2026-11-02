@@ -44,6 +44,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_BEST_LINE, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_BEST_LINE, value).apply()
 
+    /** 当前点播源下标（对应 web fongmi_site_idx；跨页面共享，测速墙点行可切换） */
+    var siteIdx: Int
+        get() = prefs.getInt(KEY_SITE_IDX, 0).coerceAtLeast(0)
+        set(value) = prefs.edit().putInt(KEY_SITE_IDX, value.coerceAtLeast(0)).apply()
+
     /** 「host:port」可选 HTTP 代理——TV 盒无系统代理时救活被 reset 的源站；空=直连 */
     var proxyUrl: String
         get() = prefs.getString(KEY_PROXY, "").orEmpty()
@@ -58,6 +63,7 @@ class SettingsStore(context: Context) {
         private const val KEY_HIST_MAX = "hist_max"
         private const val KEY_LINE_SPEED = "line_speed"
         private const val KEY_AUTO_BEST_LINE = "auto_best_line"
+        private const val KEY_SITE_IDX = "site_idx"
         private const val KEY_PROXY = "proxy_url"
     }
 }

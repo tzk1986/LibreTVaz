@@ -35,6 +35,9 @@ class SourceStore(context: Context) {
         url.startsWith("http://") || url.startsWith("https://")
 
     fun removeVodAt(index: Int) = mutateVod { list -> list.removeAt(index); true }
+
+    /** 整表替换（健康清理死源后用） */
+    fun replaceVod(list: List<VodSource>) = mutateVod { l -> l.clear(); l.addAll(list); true }
     fun removeLiveAt(index: Int) = mutateLive { list -> list.removeAt(index); true }
 
     /** 拉取订阅链接并合并入库；返回导入结果。失败抛异常由调用方展示 */
