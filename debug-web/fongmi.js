@@ -25,7 +25,7 @@ async function httpGet(url, timeout = 12000) {
 /* ================= 数据层（与 CmsRepository 同规则） ================= */
 const loadSrc = () => { try { const o = JSON.parse(localStorage.getItem('libretvaz_sources')) || {}; return { vod: o.vod || [], live: o.live || [], subs: o.subs || [] }; } catch { return { vod: [], live: [], subs: [] }; } };
 let SRC = loadSrc();
-const syncSrc = () => { SRC = loadSrc(); fixZoneIdx(); };
+const syncSrc = () => { SRC = loadSrc(); if (alignZonePool()) return; fixZoneIdx(); };
 /* 专区源不进常规上下文（只在资源口展示）：当前下标指向专区源时改指首个非专区源 */
 function fixZoneIdx() {
   if (!SRC.vod[Home.srcIdx]?.isAdult) return;
@@ -44,6 +44,28 @@ function seedZoneSources() {
   if (!add.length) return;
   SRC.vod.push(...add);
   saveSrc();
+}
+/* 专区池对齐（只升不降）：凡主机名命中资源口预置站单的源强制 isAdult=true，同主机多路径变体
+   （如 …/provide/vod 与 …/provide/vod/at/json）只留第一条——各导入路径按精确 URL 跳过已存在源、
+   从不回写标记，专区源不会被重复导入改回普通；但同站不同路径的变体 URL 不相等会漏进常规池，此处按主机名收编 */
+const hostOf = u => { try { return new URL(u).hostname.toLowerCase(); } catch { return null; } };
+function alignZonePool() {
+  if (!ZONE_SOURCES.length) return false;
+  const zoneHosts = new Set(ZONE_SOURCES.map(s => hostOf(s.url)).filter(Boolean));
+  const before = JSON.stringify(SRC.vod);
+  SRC.vod.forEach(s => { const h = hostOf(s.url); if (h && zoneHosts.has(h)) s.isAdult = true; });
+  const seenH = new Set();
+  SRC.vod = SRC.vod.filter(s => {
+    const h = hostOf(s.url);
+    if (!h || !zoneHosts.has(h)) return true;
+    if (seenH.has(h)) return false;
+    seenH.add(h);
+    return true;
+  });
+  if (Home.srcIdx >= SRC.vod.length) { Home.srcIdx = 0; localStorage.setItem('fongmi_site_idx', '0'); } // 去重删行后下标防越界
+  if (JSON.stringify(SRC.vod) === before) return false;
+  saveSrc(); fixZoneIdx();
+  return true;
 }
 // 多标签页共用 localStorage：聚焦时重同步，否则本窗旧快照会在 saveSrc 时把别的标签页删掉的源写回去
 window.addEventListener('focus', () => {
@@ -933,6 +955,7 @@ async function doImport(url) {
     SRC.live = [...SRC.live, ...nl].slice(0, 50);
     if (!SRC.subs.includes(normUrl(url))) SRC.subs.push(normUrl(url));
     saveSrc();
+    alignZonePool(); // 订阅内命中预置站单的源（含同站路径变体）即收进专区池并去重
     if (msg) msg.innerHTML = `<span class="ok">导入成功（${p.format}）：点播 +${nv.length} · 直播 +${nl.length}${p.repos ? ` · 仓库 ${p.repos - p.reposFailed}/${p.repos}` : ''}${p.skipped ? ` · 跳过 ${p.skipped}` : ''}</span>`;
     drawSrcMgr(); refreshAfterSourceChange();
   } catch (e) {
@@ -1031,7 +1054,7 @@ async function refreshSubsIfStale() {
   if (added) { // 并发去重：两个订阅同时返回同 URL 时只留一个
     const seen = new Set();
     SRC.vod = SRC.vod.filter(v => !seen.has(normUrl(v.url)) && seen.add(normUrl(v.url)));
-    saveSrc(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源（翻页或重进后生效）`);
+    saveSrc(); alignZonePool(); refreshAfterSourceChange(); toast(`订阅自动更新：新增 ${added} 个源（翻页或重进后生效）`);
   }
 }
 let guarding = false;
@@ -2804,6 +2827,7 @@ function inputDigit(k) {
 }
 
 /* ================= 启动 ================= */
+if (alignZonePool()) toast('源列表已按资源口站单自动归池去重'); // 订阅里混入的预置站（含同站路径变体）收进专区池
 fixZoneIdx(); // 存档/导入后的当前下标若落在专区源，先纠正（专区源仅资源口可达）
 switchView('vod');
 setTimeout(sourceGuard, 1500); // 点播首页先出，再静默维护（测活/订阅更新/自动切换）
