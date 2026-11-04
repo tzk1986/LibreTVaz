@@ -37,15 +37,25 @@ object Zone {
         ZoneTag("动漫", listOf("动漫", "动画", "番")),        // 里番动漫/国漫/日番
     )
 
+    // 用户 2026-11-04「其他分类可用就加入」：新增 7 项+扩词 3 项。依据=30 站 ac=list 实测分类分布
+    // （tmp_verify/zone_cats_probe.json：6 站可达共 159 类，跨站高频=中文字幕/国产自拍/欧美/巨乳/熟女乱伦/黑料吃瓜/主播/人妖/VR；
+    // 24 站 PC 侧超时未计入，命中以 typeName 优先+片名兜底，纯客户端零重拉）
     val ZONE_FILTERS = listOf(
         ZoneTag("人妻", listOf("人妻")),
-        ZoneTag("制服", listOf("制服")),                     // 制服诱惑
+        ZoneTag("制服", listOf("制服", "学生", "jk")),                     // 制服诱惑/校园
         ZoneTag("萝莉", listOf("萝莉")),                     // 萝莉少女
+        ZoneTag("熟女乱伦", listOf("熟女", "少妇", "乱伦", "姐夫", "嫂", "母女")),
+        ZoneTag("巨乳", listOf("巨乳", "美乳", "爆乳", "罩杯")),
+        ZoneTag("中文字幕", listOf("中文字幕", "中字", "字幕")),
+        ZoneTag("欧美", listOf("欧美", "西洋", "美国", "欧洲")),
+        ZoneTag("黑料吃瓜", listOf("黑料", "吃瓜", "爆料", "门事件")),
         ZoneTag("韩国伦理", listOf("韩国伦理", "韩日", "韩国特")),
-        ZoneTag("伦理福利", listOf("伦理", "福利", "擦边", "色情")),
-        ZoneTag("自拍国产", listOf("自拍", "偷拍", "91", "国产传媒", "国产", "mini", "SWAG", "网红主播")),
+        ZoneTag("伦理三级", listOf("伦理", "福利", "擦边", "色情", "三级")),
+        ZoneTag("自拍国产", listOf("自拍", "偷拍", "91", "国产传媒", "国产", "mini", "SWAG", "网红主播", "主播")),
         ZoneTag("cosplay", listOf("cosplay")),
         ZoneTag("同性", listOf("同性")),
+        ZoneTag("人妖", listOf("人妖")),
+        ZoneTag("VR", listOf("VR")),
     )
 
     /** 条目命中：分类名或片名包含任一关键词（忽略大小写；latest 池分类名粗，关键词多在片名） */

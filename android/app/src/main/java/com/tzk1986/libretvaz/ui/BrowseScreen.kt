@@ -47,9 +47,11 @@ import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
 import com.tzk1986.libretvaz.data.VodFilters
 import com.tzk1986.libretvaz.data.CmsParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * FongMi leanback 同款根页面（P9 点播即首页）：
@@ -320,10 +322,11 @@ fun BrowseScreen(
         }
     }
 
-    // S4 无限下拉：各源同分类 pg+1 追加分片→整墙重并；本轮整墙有新增就能一直按（无轮次上限）
+    // S4 无限下拉：各源同分类 pg+1 追加进分片（dedupById+800 封顶）。逐源到达即增量上墙+单源 9s 封顶
+    // （用户 2026-11-04 复刻资源口提速：不再整轮等最慢源，快源 1~3s 先出图）
     fun aggLoadMore() {
         if (!aggMode || !aggMore || aggLoadingMore) return
-        if (aggPage >= Agg.FUSE_ROUND) { aggMore = false; return } // 极端保险丝，正常以增量判底
+        if (aggPage >= Agg.FUSE_ROUND) { aggMore = false; return } // 极端保险丝；判底=全池 800 封顶（空轮仍继续，用户 2026-11-04）
         val refocus = sentinelFocused
         val my = wallSeq
         val pg = aggPage + 1
@@ -331,27 +334,35 @@ fun BrowseScreen(
         val pool = Agg.poolOf(sources) { s -> Agg.healthMs(health, s) }
         aggLoadingMore = true
         scope.launch {
-            coroutineScope {
-                pool.forEach { s ->
-                    launch {
-                        val more = runCatching { Agg.fetchSource(repo, s, cat, pg) }.getOrDefault(emptyList())
-                        Agg.appendShard(s, cat, more) // 分片 dedupById + 800 封顶
+            val done = java.util.concurrent.atomic.AtomicInteger(0)
+            pool.forEach { s ->
+                launch(Dispatchers.IO) {
+                    val more = runCatching {
+                        kotlinx.coroutines.withTimeout(9_000) { Agg.fetchSource(repo, s, cat, pg) }
+                    }.getOrDefault(emptyList())
+                    if (more.isNotEmpty()) Agg.appendShard(s, cat, more)
+                    if (my != wallSeq) return@launch
+                    // 本源一回就重并上墙（主线程写状态）
+                    withContext(Dispatchers.Main) {
+                        val all = Agg.mergeShards(pool, cat)
+                        val onWall = items.mapTo(HashSet()) { Agg.nameKey(it) }
+                        val added = all.filter { onWall.add(Agg.nameKey(it)) } // 本轮见过的不再上墙
+                        if (added.isNotEmpty()) {
+                            items = items + added
+                            VocabPools.get(context).addWords(added.map { it.name }, false)
+                        }
                     }
-                }
-            }
-            aggLoadingMore = false
-            if (my != wallSeq) return@launch
-            aggPage = pg
-            val all = Agg.mergeShards(pool, cat)
-            val onWall = items.mapTo(HashSet()) { Agg.nameKey(it) }
-            val added = all.filter { onWall.add(Agg.nameKey(it)) } // 本轮见过的不再上墙
-            aggMore = added.isNotEmpty() // 全重复/空=到底
-            if (added.isNotEmpty()) {
-                items = items + added
-                VocabPools.get(context).addWords(added.map { it.name }, false)
-                if (refocus) {
-                    delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
-                    runCatching { sentinelFr.requestFocus() }
+                    if (done.incrementAndGet() == pool.size) {
+                        aggLoadingMore = false
+                        aggPage = pg
+                        // 空轮不判到底（用户 2026-11-04：下拉要继续拉更多——CMS 尾页常整页重复、后页反有新数据；
+                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）
+                        aggMore = aggPage < Agg.FUSE_ROUND && pool.any { (Agg.shards.getRaw(Agg.key(it, cat))?.v?.size ?: 0) < Agg.DEPTH }
+                        if (refocus) {
+                            delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
+                            runCatching { sentinelFr.requestFocus() }
+                        }
+                    }
                 }
             }
         }
@@ -378,9 +389,13 @@ fun BrowseScreen(
     val aggExpandable = aggShown.size > aggWin
     val aggView = if (aggExpandable) aggShown.take(aggWin) else aggShown
     fun aggMoreOrExpand() { if (aggExpandable) aggWin += 240 else aggLoadMore() }
+    // 顶栏收缩（用户 2026-11-04 复刻资源口方案）：顶栏=墙 item0（仅首页在）、分类 tab=stickyHeader 吸顶，
+    // AutoLoadMore 绝对索引偏移=墙前 header 数（atHomeNow 时 +2=顶栏+吸顶，否则 +1=吸顶）；空墙传 0 保持零触发
+    val atHomeNow = if (aggMode) aggCat == -1 else type == null
+    val hdrOff = if (atHomeNow) 2 else 1
     AutoLoadMore(
         gridState,
-        if (aggMode) aggView.size else shown.size,
+        if (aggMode) { if (aggView.isEmpty()) 0 else aggView.size + hdrOff } else { if (shown.isEmpty()) 0 else shown.size + hdrOff },
         if (aggMode) aggLoadingMore else loading,
         if (aggMode) aggExpandable || aggMore else canLoadMore,
     ) { if (aggMode) aggMoreOrExpand() else targetPage++ }
@@ -410,18 +425,15 @@ fun BrowseScreen(
         }
     }
 
-    // 紧凑化（用户 2026-11-03 TV/投影要求）：列间距 8→4dp，chip 行最小触控 48→26dp，标题降字号——纵向全让海报墙
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        // 顶栏（用户 2026-11-03：功能行并入此行、源钮改同款小方块，再省一行空间）：仅首页显示，
-        // 一行＝源钮+刷新+导航小方块（横滚）+ 右网络·时钟（状态栏已隐藏，此处自绘替代）；换源回首页切
-        val atHomeNow = if (aggMode) aggCat == -1 else type == null
-        // web 导航「收藏·N更」徽标：回首页重读更新数（checkKeeps 由收藏页触发写库，此处只展示）
-        val keepUpdCount = remember { mutableIntStateOf(0) }
-        LaunchedEffect(atHomeNow) {
-            if (atHomeNow) keepUpdCount.intValue = KeepStore(context).updatedCount(false)
-        }
-        if (atHomeNow) {
+    // 顶栏（用户 2026-11-03：功能行并入一行、源钮同款小方块，一行＝源钮+刷新+导航小方块（横滚）+ 右网络·时钟，
+    // 状态栏已隐藏此处自绘替代；换源回首页切）；2026-11-04 收缩优化（复刻资源口方案）：改由墙 item0 承载，
+    // 随下拉逐渐隐去、回顶自然复原——抽成 browseTopBar 组合 lambda，由 grid/空态两分支各自调用
+    // web 导航「收藏·N更」徽标：回首页重读更新数（checkKeeps 由收藏页触发写库，此处只展示）
+    val keepUpdCount = remember { mutableIntStateOf(0) }
+    LaunchedEffect(atHomeNow) {
+        if (atHomeNow) keepUpdCount.intValue = KeepStore(context).updatedCount(false)
+    }
+    val browseTopBar: @Composable () -> Unit = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -467,10 +479,14 @@ fun BrowseScreen(
                 StatCard(netLabel)
                 StatCard(clockText)
             }
-        }
+    }
 
+    // 紧凑化（用户 2026-11-03 TV/投影要求）：列间距 8→4dp，chip 行最小触控 48→26dp，标题降字号——纵向全让海报墙
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 点播即首页（web P8）：无源时保留顶栏骨架，内容区仅提示（对齐 web typeRow 文案）
         if (sources.isEmpty()) {
+            if (atHomeNow) browseTopBar()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
@@ -482,7 +498,23 @@ fun BrowseScreen(
             return@Column
         }
 
-        CompactChips {
+        // 海报墙（顶栏收缩后顶栏/tab 均为墙内 item：item0=顶栏、stickyHeader=分类行）
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Adaptive(minSize = 120.dp),
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (atHomeNow) item(span = { GridItemSpan(maxLineSpan) }) { browseTopBar() }
+            // 分类 tab 改 stickyHeader 吸顶常驻（用户 2026-11-04 复刻资源口方案）：半透明浮层，
+            // 海报从底下穿过做整体背景；error 提示并入吸顶列常驻可见
+            stickyHeader {
+                CompactChips {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f)),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
         if (aggMode) {
             // 聚合墙分类标签（web AGG_CATS：最新+固定四大类，不依赖单源分类树）
             val aggIdx = aggCat
@@ -640,21 +672,12 @@ fun BrowseScreen(
                 }
             }
         }
-        }
-
-        // 功能行已并入首页顶栏（用户 2026-11-03：源旁同款小方块，再省一行让位海报墙）
-
-        // 分类/预设提示行整体撤销（用户 2026-11-03：各分类筛选后的提示文字全部去除，空间全让海报墙；
-        // 加载态由哨兵行呈现，错误仍由下方 error 行兜底）
-        if (error != null && !loading) Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
-
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Adaptive(minSize = 120.dp),
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+                        // 功能行已并入首页顶栏（用户 2026-11-03：源旁同款小方块，空间全让海报墙）；
+                        // 分类/预设提示文字已全撤（用户 2026-11-03 定稿）；加载态由墙尾哨兵呈现，error 由吸顶列兜底常驻可见
+                        if (error != null && !loading) Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
             if (aggMode) {
                 // 聚合墙卡片（用户 2026-11-03 要求，偏离 web 点卡直达详情）：只显示海报+名称（数据层
                 // mergeShards 已按归一剧名去重），点击=带剧名进搜索页全源聚合，用户再选源播放
@@ -777,7 +800,7 @@ private fun PickerRow(name: String, sub: String?, selected: Boolean, onClick: ()
     }
 }
 
-/** 焦点/滚动到最后一项时自动翻页（FongMi onLoadMore 行为） */
+/** 焦点/滚动接近末行时自动翻页（FongMi onLoadMore 行为；用户 2026-11-04：遥控下按/手机上滑即拉更多——提前一屏行数预取，拉到底数据已备好） */
 @Composable
 internal fun AutoLoadMore(
     gridState: LazyGridState,
@@ -788,8 +811,10 @@ internal fun AutoLoadMore(
 ) {
     LaunchedEffect(gridState, itemCount, loading, canLoadMore) {
         snapshotFlow {
-            val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            last to (itemCount > 0 && canLoadMore && !loading && last >= itemCount - 1)
+            val vis = gridState.layoutInfo.visibleItemsInfo
+            val last = vis.lastOrNull()?.index ?: -1
+            val cols = vis.groupBy { it.row }.values.maxOfOrNull { it.size } ?: 1
+            last to (itemCount > 0 && canLoadMore && !loading && last >= itemCount - 1 - cols)
         }
             .collect { (_, shouldLoad) -> if (shouldLoad) onLoadMore() }
     }

@@ -2,6 +2,9 @@ package com.tzk1986.libretvaz.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +15,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -97,6 +102,11 @@ fun SearchScreen(
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
     val vocab = remember { VocabPools.get(context) }
+    // 触屏判定仅作 36 键默认态与是否自动聚焦的依据：触屏默认关内建键盘用系统输入法（TVBox 手机版同款，
+    // 且横屏浮动 IME 不派发 insets 侦不到，键盘常显会裁按钮——用户手机实测）；非触屏默认开+进页自动聚焦供遥控直输
+    val hasTouch = remember {
+        context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)
+    }
 
     var query by remember { mutableStateOf("") }
     var srcSel by remember { mutableStateOf<SpecSrc?>(null) }
@@ -113,7 +123,8 @@ fun SearchScreen(
         if (backStage == 0) { focusManager.clearFocus(true); backStage = 1 }
         else onBack()
     }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // 触屏不自动弹软键盘（TVBox 手机版交互：进页先看全布局，点输入框再出键盘）；非触屏 TV/投影保持进页即聚焦供遥控直输
+    LaunchedEffect(Unit) { if (!hasTouch) runCatching { focus.requestFocus() } }
 
     // 进页词库种子（web seedVocab/seedZoneVocab 等价：本池健康源目录剧名，6h 节流，达标早停）
     LaunchedEffect(zone) {
@@ -187,8 +198,10 @@ fun SearchScreen(
         }
     }
 
-    // 手机/投影适配（用户 2026-11-04 13T 实测键盘被裁）：软键盘弹出时隐藏我方 36 键（TV 无 IME 不受影响）；列宽按屏宽断点
+    // 手机/投影适配（用户 2026-11-04 包c 实测：多数投影仪 FEATURE_TOUCHSCREEN 也为真，触屏默认隐藏 36 键后
+    // 遥控无键可输）：36 键改「⌨键盘」钮手动开合，默认=非触屏开/触屏关；系统 IME 真弹出时自动收起我方键盘防双键盘
     val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    var kbShow by remember { mutableStateOf(!hasTouch) }
     val swDp = LocalConfiguration.current.screenWidthDp
     val leftW = if (swDp >= 820) 300.dp else 260.dp
     val rightW = if (swDp >= 820) 200.dp else 170.dp
@@ -226,21 +239,47 @@ fun SearchScreen(
                     TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        placeholder = { Text("请输入要搜索的内容", maxLines = 1) },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        // 手机横屏软键盘 Enter=搜索（用户 2026-11-04 适配：IME 占半屏时左列按钮被遮，✓ 键直发；web 无软键盘不涉及）
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            imeAction = androidx.compose.ui.text.input.ImeAction.Search,
-                        ),
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onSearch = { search(query) },
-                        ),
-                        modifier = Modifier.weight(1f).focusRequester(focus),
-                    )
+                    // 输入框缩高（用户 2026-11-04：默认 OutlinedTextField 56dp 太大，与热门/历史 chip 同级）：
+                    // m3 不支持改内容内边距→自绘描边容器+BasicTextField，字号与 IME 行为原样保留
+                    val tfSrc = remember { MutableInteractionSource() }
+                    val tfFocused by tfSrc.collectIsFocusedAsState()
+                    Box(
+                        modifier = Modifier.weight(1f).height(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                if (tfFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(8.dp),
+                            )
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (query.isEmpty()) {
+                            Text(
+                                "请输入要搜索的内容",
+                                maxLines = 1,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            interactionSource = tfSrc,
+                            // 手机横屏软键盘 Enter=搜索（用户 2026-11-04 适配：IME 占半屏时左列按钮被遮，✓ 键直发；web 无软键盘不涉及）
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Search,
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onSearch = { search(query) },
+                            ),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                        )
+                    }
+                    HomeBtn(if (kbShow) "⌨隐藏" else "⌨键盘", fill = false, onClick = { kbShow = !kbShow })
                     HomeBtn(srcSel?.let { "📌${it.name.take(4)}" } ?: "⚙", fill = false, onClick = { showSrcPick = true })
                 }
                 // 首页同款小方块钮（用户 2026-11-04 统一样式）：搜索/清空/远程/删除 + 36 键键盘全走 HomeBtn
@@ -252,8 +291,8 @@ fun SearchScreen(
                     HomeBtn("远程搜索", modifier = Modifier.weight(1f)) { showQr = true }
                     HomeBtn("⌫ 删除", modifier = Modifier.weight(1f)) { pressKey("⌫") }
                 }
-                // 软键盘弹出=手机在打字，36 键矩阵隐藏让位（TV 无 IME 恒显示，web KEYS 等价不受影响）
-                if (!imeUp) KB_ROWS.forEach { row ->
+                // 「⌨键盘」开且系统 IME 未弹出时显示 36 键矩阵（web KEYS 等价）；投影仪默认触屏=true 也可手动开键后用遥控输入
+                if (kbShow && !imeUp) KB_ROWS.forEach { row ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         row.forEach { c ->
                             HomeBtn(c.toString(), modifier = Modifier.weight(1f), tight = true) { pressKey(c.toString()) }

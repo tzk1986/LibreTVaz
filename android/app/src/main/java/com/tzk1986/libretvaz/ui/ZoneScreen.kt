@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -57,7 +58,9 @@ internal fun clearZoneCaches() { ZSP.clear(); ZDETAIL.clear() }
  *   无新增即停），聚合池越滚越大；
  * ③纯客户端过滤：一级分类行=最新/有码/无码/动漫，二级筛选行=人妻/制服/萝莉/…（单选+交集，Zone.ZONE_CATS/
  *   ZONE_FILTERS 关键词匹配 typeName/片名），切类切筛选零重拉零请求（沿用地区筛选 2026-11-04 定稿思路）；
- * 顶栏=点播同款 FuncCard+网络·时钟；测速后置：进墙只回填 ZSP 7 天缓存角标，拉流毕才采样；
+ *   二级行默认折叠：再点当前一级分类展开/收起，选中具体筛选即收起（对齐首页 showFilters，用户 2026-11-04）；
+ * 顶栏=点播同款 FuncCard+网络·时钟，做成墙 item0 随下拉逐渐隐去、分类 tab stickyHeader 吸顶、回顶复原
+ * （用户 2026-11-04 滚动收缩需求）；测速后置：进墙只回填 ZSP 7 天缓存角标，拉流毕才采样；
  * 刷新清本池分片重跑；找片钮已去除（用户 2026-11-04：与「搜索」功能重复，统一走搜索→CollectScreen 番号秒查链路）；
  * 入口=设置→影视仓实验室。公开克隆无站单=空态「恢复预置」。
  */
@@ -78,6 +81,7 @@ fun ZoneScreen(
     val settings = remember { SettingsStore(context) }
     var cat by remember { mutableStateOf(-1) } // -1=最新；0..2=Zone.ZONE_CATS（客户端过滤，不重拉）
     var flt by remember { mutableStateOf(-1) } // -1=全部；0..n=Zone.ZONE_FILTERS（与一级分类取交集）
+    var showSub by remember { mutableStateOf(false) } // 二级筛选行折叠（对齐首页 showFilters：再点当前一级=展开/收起，选中筛选即收起）
     var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
     var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
     var wall by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
@@ -258,7 +262,8 @@ fun ZoneScreen(
         }
     }
 
-    // S4 无限下拉：各源同分类 pg+1 追加进分片（dedupById+800 封顶）再整墙重并，增量判底
+    // S4 无限下拉：各源同分类 pg+1 追加进分片（dedupById+800 封顶）。逐源到达即增量上墙+单源 9s 封顶
+    // （用户 2026-11-04：「显示加载中要等很久」——不再整轮等最慢源，快源 1~3s 先出图）
     fun aggLoadMore() {
         if (!aggMore || aggLoadingMore) return
         if (aggPage >= Agg.FUSE_ROUND) { aggMore = false; return }
@@ -268,28 +273,36 @@ fun ZoneScreen(
         val pool = zonePoolNow()
         aggLoadingMore = true
         scope.launch {
-            coroutineScope {
-                pool.forEach { s ->
-                    launch {
-                        val more = runCatching { Agg.fetchSource(repo, s, null, pg) }.getOrDefault(emptyList())
-                        Agg.appendShard(s, null, more)
+            val done = java.util.concurrent.atomic.AtomicInteger(0)
+            pool.forEach { s ->
+                launch(Dispatchers.IO) {
+                    val more = runCatching {
+                        kotlinx.coroutines.withTimeout(9_000) { Agg.fetchSource(repo, s, null, pg) }
+                    }.getOrDefault(emptyList())
+                    if (more.isNotEmpty()) Agg.appendShard(s, null, more)
+                    if (my != wallSeq) return@launch
+                    // 本源一回就重并上墙（主线程写状态）
+                    withContext(Dispatchers.Main) {
+                        val all = Agg.mergeShards(pool, null)
+                        val onWall = wall.mapTo(HashSet()) { Agg.nameKey(it) }
+                        val added = all.filter { onWall.add(Agg.nameKey(it)) }
+                        if (added.isNotEmpty()) {
+                            wall = wall + added
+                            VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true)
+                        }
                     }
-                }
-            }
-            aggLoadingMore = false
-            if (my != wallSeq) return@launch
-            aggPage = pg
-            val all = Agg.mergeShards(pool, null)
-            val onWall = wall.mapTo(HashSet()) { Agg.nameKey(it) }
-            val added = all.filter { onWall.add(Agg.nameKey(it)) }
-            aggMore = added.isNotEmpty()
-            if (added.isNotEmpty()) {
-                wall = wall + added
-                VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true)
-                speedTest()
-                if (refocus) {
-                    delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
-                    runCatching { sentinelFr.requestFocus() }
+                    if (done.incrementAndGet() == pool.size) {
+                        aggLoadingMore = false
+                        aggPage = pg
+                        // 空轮不判到底（用户 2026-11-04：下拉要继续拉更多——CMS 尾页常整页重复、后页反有新数据；
+                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）
+                        aggMore = aggPage < Agg.FUSE_ROUND && pool.any { (Agg.shards.getRaw(Agg.key(it, null))?.v?.size ?: 0) < Agg.DEPTH }
+                        speedTest()
+                        if (refocus) {
+                            delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
+                            runCatching { sentinelFr.requestFocus() }
+                        }
+                    }
                 }
             }
         }
@@ -301,7 +314,8 @@ fun ZoneScreen(
     val expandable = shown.value.size > aggWin
     val view = if (expandable) shown.value.take(aggWin) else shown.value
     fun aggMoreOrExpand() { if (expandable) aggWin += 240 else aggLoadMore() }
-    AutoLoadMore(gridState, view.size, aggLoadingMore, expandable || aggMore) { aggMoreOrExpand() }
+    // +2=顶栏 item+吸顶 tab 占位（绝对索引偏移）；空墙传 0 保持零触发
+    AutoLoadMore(gridState, if (view.isEmpty()) 0 else view.size + 2, aggLoadingMore, expandable || aggMore) { aggMoreOrExpand() }
 
     /** 🔄 刷新钮（web zoneRefresh 等价）：只清本池源的聚合分片，当前墙立即重拉 */
     fun refreshZone() {
@@ -310,10 +324,11 @@ fun ZoneScreen(
         nonce++
     }
 
-    // 紧凑化对齐点播首页（用户 2026-11-04）：横向 16 + 上 8/下 4、行距 4dp，纵向全让海报墙
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        // 顶栏（对齐点播同款）：单行 FuncCard 小方块横滚 + 右网络/时钟，替代大标题+OutlinedButton 行
+    // 紧凑化对齐点播首页（用户 2026-11-04）：横向 16 + 上 8/下 4，纵向全让海报墙
+    // 顶栏滚动收缩（用户 2026-11-04 新需求）：功能顶栏=墙列表 item0，随下拉 1:1 逐渐隐去、滚回顶部自然复原；
+    // 分类 tab 改 stickyHeader 吸顶常驻（背景铺满防海报透出）；BackHandler「未滚顶先回顶」语义不变（index0=顶栏）
+    val srcLabel = if (selUrl.isEmpty()) "源:聚合▾" else "源:${poolCache.firstOrNull { it.url == selUrl }?.name?.take(6) ?: "聚合"}▾"
+    val zoneTopBar: @Composable () -> Unit = {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -325,8 +340,7 @@ fun ZoneScreen(
                 item { FuncCard(icon = null, name = "返回", onClick = onBack) }
                 item {
                     // 源选择钮：默认聚合；单源显示源名缩写（用户 2026-11-04：给出源选择，默认聚合源）
-                    val selName = poolCache.firstOrNull { it.url == selUrl }?.name
-                    FuncCard(icon = null, name = if (selUrl.isEmpty()) "源:聚合▾" else "源:${selName?.take(6) ?: "聚合"}▾", onClick = { showSrc = true })
+                    FuncCard(icon = null, name = srcLabel, onClick = { showSrc = true })
                 }
                 item { FuncCard(icon = null, name = "刷新", onClick = { refreshZone() }) }
                 item { FuncCard(icon = null, name = "搜索", onClick = onSearch) }
@@ -336,7 +350,11 @@ fun ZoneScreen(
             }
             NetClockPair()
         }
+    }
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (poolCache.isEmpty()) {
+            zoneTopBar()
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
@@ -350,34 +368,6 @@ fun ZoneScreen(
             }
             return@Column
         }
-        // 专区专用过滤（与首页隔离）：一级分类行 + 二级成人细分筛选行，全部客户端过滤零重拉
-        CompactChips {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item {
-                        FilterChip(selected = cat == -1, onClick = { cat = -1 }, label = { Text("最新") })
-                    }
-                    itemsIndexed(Zone.ZONE_CATS) { i, c ->
-                        FilterChip(selected = cat == i, onClick = { cat = i }, label = { Text(c.key) })
-                    }
-                }
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item {
-                        FilterChip(selected = flt == -1, onClick = { flt = -1 }, label = { Text("全部") })
-                    }
-                    itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
-                        FilterChip(selected = flt == i, onClick = { flt = i }, label = { Text(f.key) })
-                    }
-                }
-            }
-        }
-        // 提示行整体撤销（对齐点播 2026-11-03 定稿：加载态由墙尾哨兵呈现，空间全让海报墙）；错误兜底保留
-        if (!loading && wall.isEmpty()) {
-            Text("专区源未返回数据：可点「测速」逐条验证起播，或稍后返回重进", color = MaterialTheme.colorScheme.error)
-        } else if (!loading && wall.isNotEmpty() && shown.value.isEmpty()) {
-            Text("当前分类/筛选暂无命中（全池 ${wall.size} 部，可切「最新+全部」或继续下拉加深数据）",
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        }
         LazyVerticalGrid(
             state = gridState,
             columns = GridCells.Adaptive(minSize = 120.dp),
@@ -385,6 +375,50 @@ fun ZoneScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item(span = { GridItemSpan(maxLineSpan) }) { zoneTopBar() }
+            // 专区专用过滤（与首页隔离）：一级分类行吸顶常显；二级成人细分筛选行折叠（用户 2026-11-04：像首页，
+            // 再点当前一级=展开/收起，选中具体筛选即收起让位海报墙；取消/全部保持展开），全部客户端过滤零重拉
+            stickyHeader {
+                CompactChips {
+                    // 半透明浮层（用户 2026-11-04：上滑后 tab 透明悬浮、海报从底下穿过做整体背景；
+                    // 未滚动时其后就是墙内容，透出感仅在滚动中出现）
+                    Column(
+                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f)),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item {
+                                FilterChip(
+                                    selected = cat == -1,
+                                    onClick = { if (cat == -1) showSub = !showSub else { cat = -1; showSub = false } },
+                                    label = { Text("最新") },
+                                )
+                            }
+                            itemsIndexed(Zone.ZONE_CATS) { i, c ->
+                                FilterChip(
+                                    selected = cat == i,
+                                    onClick = { if (cat == i) showSub = !showSub else { cat = i; showSub = false } },
+                                    label = { Text(c.key) },
+                                )
+                            }
+                        }
+                        if (showSub) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                item {
+                                    FilterChip(selected = flt == -1, onClick = { flt = -1 }, label = { Text("全部") })
+                                }
+                                itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
+                                    FilterChip(
+                                        selected = flt == i,
+                                        onClick = { if (flt == i) flt = -1 else { flt = i; showSub = false } },
+                                        label = { Text(f.key) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(view, key = { "${it.sourceUrl}|${it.vodId}" }) { it ->
                 ZonePoster(
                     item = it,
@@ -394,6 +428,15 @@ fun ZoneScreen(
                         selUrl = it.sourceUrl; settings.zoneSrc = it.sourceUrl; showSrc = false
                     },
                 )
+            }
+            // 错误/空态兜底（加载态由墙尾哨兵呈现，空间全让海报墙——点播 2026-11-03 定稿）
+            if (view.isEmpty() && !loading) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    if (wall.isEmpty()) Text("专区源未返回数据：可点「测速」逐条验证起播，或稍后返回重进",
+                        color = MaterialTheme.colorScheme.error)
+                    else Text("当前分类/筛选暂无命中（全池 ${wall.size} 部，可切「最新+全部」或继续下拉加深数据）",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
             }
             if (view.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
