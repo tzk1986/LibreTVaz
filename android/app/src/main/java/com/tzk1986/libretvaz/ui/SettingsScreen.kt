@@ -6,13 +6,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,10 +37,13 @@ import org.json.JSONObject
 fun SettingsScreen(
     store: SettingsStore,
     onBack: () -> Unit,
+    onZone: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    // 弹窗列表最大高=屏高 70%（用户 2026-11-04 手机横屏适配：原 420dp 固定值超出手机屏会被裁）
+    val dlgMaxH = (LocalConfiguration.current.screenHeightDp * 0.7f).dp
     var autoNext by remember { mutableStateOf(store.autoNext) }
     var autoLine by remember { mutableStateOf(store.autoLine) }
     var resume by remember { mutableStateOf(store.resumePlay) }
@@ -52,6 +58,7 @@ fun SettingsScreen(
     var histMerge by remember { mutableStateOf(store.histMerge) }
     var epFull by remember { mutableStateOf(store.epFull) }
     var purgeMsg by remember { mutableStateOf("点击清理") }
+    var errCount by remember { mutableIntStateOf(ErrLog.size()) }
     var dlg by remember { mutableStateOf("") } // server / proxy / tabs / lab / threads / histmax / cache
     var urlDraft by remember { mutableStateOf(store.serverUrl) }
     var proxyDraft by remember { mutableStateOf(store.proxyUrl) }
@@ -69,7 +76,7 @@ fun SettingsScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack) { Text("← 返回") }
+            TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
             Text("设置", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         }
         LazyVerticalGrid(
@@ -90,12 +97,16 @@ fun SettingsScreen(
                 scope.launch {
                     val freed = withContext(Dispatchers.IO) {
                         val sz = DiskCache.sizeBytes() + VideoCache.sizeBytes(context)
-                        clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll(); Agg.clearAll()
+                        clearSearchShardsCache(); clearZoneCaches(); LineSpeed.clearAll(); Agg.clearAll(); DetailCache.clearAll()
                         DiskCache.clearAll(); VideoCache.clear(context)
+                        ErrLog.repersist() // 日志 7 天保留（用户 2026-11-04）：清缓存把 errlog 盘片回写
                         sz
                     }
                     purgeMsg = "已清理内存+磁盘（回收 ${DiskCache.sizeLabel(freed)}）"
                 }
+            } }
+            item { SettingCard("报错日志", "${errCount} 条（7 天滚动保留，过期自动清除）") {
+                errCount = ErrLog.size(); dlg = "errlog"
             } }
             item { SettingCard("导航栏", "显隐与排序（${tabOrder.count { it.second }}/${functionCards().size} 显示）") {
                 tabOrder = loadTabOrder(store); dlg = "tabs"
@@ -126,14 +137,43 @@ fun SettingsScreen(
         confirmButton = { Button(onClick = { dlg = "" }) { Text("完成") } },
         title = { Text("影视仓实验室") },
         text = {
-            LazyColumn {
+            LazyColumn(modifier = Modifier.heightIn(max = dlgMaxH)) {
                 item { LabRow("播放线路吞吐测速", lineSpeed) { lineSpeed = it; store.lineSpeed = it } }
                 item { LabRow("测完自动跳最快线", autoBestLine) { autoBestLine = it; store.autoBestLine = it } }
                 item { LabRow("模糊搜索（核心片名互含）", fuzzy) { fuzzy = it; store.fuzzy = it } }
                 item { LabRow("全线失败自动搜关联换源", autoSrc) { autoSrc = it; store.autoSrc = it } }
                 item { LabRow("历史按片名跨源合并", histMerge) { histMerge = it; store.histMerge = it } }
                 item { LabRow("点选剧集后收起控制器", epFull) { epFull = it; store.epFull = it } }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("🎦 资源口（二级专区聚合）", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Button(onClick = { dlg = ""; onZone() }) { Text("进入") }
+                    }
+                }
             }
+        },
+    )
+
+    // 报错日志查看（用户 2026-11-03）：纯内存最小日志，供拍照反馈；清空钮即 ErrLog.clear()
+    if (dlg == "errlog") AlertDialog(
+        onDismissRequest = { dlg = "" },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.fillMaxWidth(0.86f),
+        confirmButton = {
+            TextButton(onClick = { ErrLog.clear(); errCount = 0; dlg = "" }) { Text("清空日志") }
+        },
+        dismissButton = { TextButton(onClick = { dlg = "" }) { Text("关闭") } },
+        title = { Text("报错日志（${ErrLog.size()} 条 · 7 天滚动保留，过期自动清除）") },
+        text = {
+            Text(
+                ErrLog.text(),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 18.sp,
+                modifier = Modifier.heightIn(max = dlgMaxH).verticalScroll(rememberScrollState()),
+            )
         },
     )
 
@@ -143,9 +183,9 @@ fun SettingsScreen(
             Button(onClick = { store.tabsJson = saveTabsJson(tabOrder); dlg = "" }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = { dlg = "" }) { Text("取消") } },
-        title = { Text("导航栏：↑↓ 调序，开关控显隐（点播恒为首位）") },
+        title = { Text("导航栏：↑↓ 调序，开关控显隐（点播为首页不入栏，刷新固定在栏首）") },
         text = {
-            LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+            LazyColumn(modifier = Modifier.heightIn(max = dlgMaxH)) {
                 itemsIndexed(tabOrder) { i, (id, show) ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -243,6 +283,21 @@ fun SettingsScreen(
 
 private fun onOff(b: Boolean): String = if (b) "开" else "关"
 
+/** 列表行小方块钮（用户 2026-11-04：默认 Button 48dp 在弹窗列表里过大堆叠，与搜索页 HomeBtn 同款） */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SmallPickBtn(label: String, onClick: () -> Unit) {
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 26.dp) {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        }
+    }
+}
+
 @Composable
 private fun SettingCard(label: String, value: String, onClick: () -> Unit) {
     Surface(
@@ -284,7 +339,7 @@ private fun PickerDialog(
                     ) {
                         Text(label, modifier = Modifier.weight(1f))
                         if (i == selectedIndex) Text("当前", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                        else Button(onClick = { onPick(i); onDismiss() }) { Text("选择") }
+                        else SmallPickBtn("选择") { onPick(i); onDismiss() }
                     }
                 }
             }
@@ -315,12 +370,11 @@ private fun loadTabOrder(store: SettingsStore): List<Pair<String, Boolean>> {
         }
     }.getOrDefault(emptyList())
     val ids = all.map { it.first }.toHashSet()
-    val out = saved.filter { it.first in ids && it.first != "vod" }.toMutableList()
+    val out = saved.filter { it.first in ids }.toMutableList() // 旧档遗留的 vod/zone 项一并丢弃
     for ((id, _) in all) {
-        if (id == "vod") continue
         if (out.none { it.first == id }) out.add(id to true)
     }
-    return listOf("vod" to true) + out // 消费侧点播恒首位且恒显示，编辑态同步强制
+    return out
 }
 
 private fun saveTabsJson(order: List<Pair<String, Boolean>>): String {
