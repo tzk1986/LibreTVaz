@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -49,13 +50,16 @@ internal const val ZDETAIL_TTL = 6 * 3600_000L
 internal fun clearZoneCaches() { ZSP.clear(); ZDETAIL.clear() }
 
 /**
- * 资源口（专区池聚合墙，web renderZone 等价+两波扩池）：专区源按健康 ms 取前 12 聚合（首波 6 先出墙、二波补量），
- * 一源返回即增量上墙（首绘年降序一次，后续未见片名按到达序追加队尾，不动已上屏条目）；
- * 顶栏=与点播首页同款紧凑小方块[返回/刷新/找片/搜索/测速/历史/收藏]+网络·时钟（用户 2026-11-04 样式对齐点播）
- * ——刷新只清本池分片重拉，找片=专区池全源搜索框，测速钮 force 重采样，墙 240 窗口本地展开；
- * 测速后置（用户 2026-11-04：海报墙优先，偏离 web 进墙即起测）：进墙只从 ZSP 7 天缓存回填旧角标不采样，
- * 全部拉流+预取结束后才起采样；并发 3、按年新的优先取前 60，失败不判死不移除。
- * 入口唯一=设置→影视仓实验室「进入」；返回落设置页。公开克隆无站单=空态「恢复预置」不报错。
+ * 资源口 v2（用户 2026-11-04 重设计，web 蓝本之外的增强；与首页点播 AGG_CATS/地区筛选完全隔离各用各的）：
+ * ①源选择钮：默认「聚合源」（专区池按健康 ms 取前 12 两波并发），可切单个专区源；选择持久化（settings.zoneSrc），
+ *   海报左下「来源标」点按=快速切到该源且保留当前分类/筛选；
+ * ②单池分批拉取：墙只拉各源 latest 分片（不再按分类换 tab 服务端重拉），二波后后台低并发续轮加深（2..7 轮，
+ *   无新增即停），聚合池越滚越大；
+ * ③纯客户端过滤：一级分类行=最新/有码/无码/动漫，二级筛选行=人妻/制服/萝莉/…（单选+交集，Zone.ZONE_CATS/
+ *   ZONE_FILTERS 关键词匹配 typeName/片名），切类切筛选零重拉零请求（沿用地区筛选 2026-11-04 定稿思路）；
+ * 顶栏=点播同款 FuncCard+网络·时钟；测速后置：进墙只回填 ZSP 7 天缓存角标，拉流毕才采样；
+ * 刷新清本池分片重跑；找片钮已去除（用户 2026-11-04：与「搜索」功能重复，统一走搜索→CollectScreen 番号秒查链路）；
+ * 入口=设置→影视仓实验室。公开克隆无站单=空态「恢复预置」。
  */
 @Composable
 fun ZoneScreen(
@@ -72,14 +76,16 @@ fun ZoneScreen(
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
     val settings = remember { SettingsStore(context) }
-    var cat by remember { mutableStateOf(-1) } // -1=最新；0..3=Agg.AGG_CATS
+    var cat by remember { mutableStateOf(-1) } // -1=最新；0..2=Zone.ZONE_CATS（客户端过滤，不重拉）
+    var flt by remember { mutableStateOf(-1) } // -1=全部；0..n=Zone.ZONE_FILTERS（与一级分类取交集）
+    var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
+    var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
     var wall by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var wallSeq by remember { mutableIntStateOf(0) }
     var nonce by remember { mutableIntStateOf(0) } // 🔄刷新钮轮次 token：清本池分片后重跑墙
     var speedSeq by remember { mutableIntStateOf(0) }
     var aggWin by remember { mutableIntStateOf(240) } // S4 窗口渲染：同点播墙，哨兵先本地展开零请求
-    var showFind by remember { mutableStateOf(false) } // 🔎 找片=专区池全源搜索框（web zoneFind→openFindBox zone 路由）
     val tags = remember { mutableStateMapOf<String, PerfCore.SpeedTag>() } // 「源|id」→角标
     var poolCache by remember { mutableStateOf(store.vodSources().filter { it.isAdult }) }
     // B10 无限下拉（与点播聚合墙同引擎）：分片秒开+续轮增量+哨兵回焦连按
@@ -91,14 +97,16 @@ fun ZoneScreen(
     val gridState = rememberLazyGridState()
 
     fun aggTtl() = CacheTiers.TIERS[settings.cacheTier].agg
-    fun zonePoolNow() = Agg.poolOf(poolCache) { s -> Agg.healthMs(health, s) }
-    fun zoneCatOf(): AggCat? = Agg.AGG_CATS.getOrNull(cat)
 
-    // 分层返回：找片窗开→关窗；未滚到顶→回顶；到顶且无弹窗→回设置页（子页永不直接退 app）
+    /** 当前墙取数池：聚合=健康 ms 前 12 两波；单源=只拉选中源（latest 分片同键复用聚合结果） */
+    fun zonePoolNow(): List<VodSource> =
+        if (selUrl.isNotEmpty()) poolCache.filter { it.url == selUrl }
+        else Agg.poolOf(poolCache) { s -> Agg.healthMs(health, s) }
+
+    // 分层返回：未滚到顶→回顶；到顶→回设置页（子页永不直接退 app）
     val atTop by remember { derivedStateOf { gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0 } }
     BackHandler {
         when {
-            showFind -> showFind = false
             !atTop -> scope.launch { gridState.animateScrollToItem(0) }
             else -> onBack()
         }
@@ -144,6 +152,8 @@ fun ZoneScreen(
         Zone.seedIfAbsent(context, store)
         store.alignZone()
         poolCache = store.vodSources().filter { it.isAdult }
+        // 选中源已被删除→回落聚合
+        if (selUrl.isNotEmpty() && poolCache.none { it.url == selUrl }) { selUrl = ""; settings.zoneSrc = "" }
     }
     LaunchedEffect(Unit) { reloadPool() }
 
@@ -164,14 +174,14 @@ fun ZoneScreen(
         }
     }
 
-    // 聚合墙（web runAggWall 等价）：陈旧分片秒开 → 逐源拉新即增量上墙 → 预取毕才起测
-    LaunchedEffect(nonce, cat, poolCache) {
+    // latest 单池墙（web runAggWall 等价改造）：陈旧分片秒开 → 首波逐源增量上墙 → 二波 → 缓存角标回填+起测 → 后台续轮加深；
+    // 分类/筛选为纯客户端过滤不在键内——切类切筛选零重拉（用户 2026-11-04：过滤模块只消费本池）
+    LaunchedEffect(nonce, selUrl, poolCache) {
         reloadPool()
         val my = wallSeq + 1
         wallSeq = my
         tags.clear()
         val pool = zonePoolNow()
-        val c = zoneCatOf()
         val ttl = aggTtl()
         wall = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
         if (pool.isEmpty()) { loading = false; return@LaunchedEffect }
@@ -179,7 +189,7 @@ fun ZoneScreen(
         val drawn = HashSet<String>()
         var firstDrawn = false
         fun mergeFrom(): Boolean {
-            val merged = Agg.mergeShards(pool, c)
+            val merged = Agg.mergeShards(pool, null)
             if (merged.isEmpty()) return false
             if (!firstDrawn) { firstDrawn = true; wall = Agg.yearDesc(merged) }
             else {
@@ -187,17 +197,18 @@ fun ZoneScreen(
                 if (fresh.isNotEmpty()) wall = wall + fresh
             }
             merged.forEach { drawn.add(Agg.nameKey(it)) }
-            VocabPools.get(context).addWords(merged.map { it.name }, true) // 专区墙片名入专区词库
+            // 专区墙片名+提取番号入专区词库（用户 2026-11-04 番号搜索：编号也进简拼提示候选）
+            VocabPools.get(context).addWords(merged.map { it.name } + merged.mapNotNull { CmsParser.codeRaw(it.name) }, true)
             aggMore = true
             return true
         }
         mergeFrom()
-        val need = pool.take(Agg.POOL_SIZE).filterNot { Agg.fresh(it, c, ttl) }
+        val need = pool.take(Agg.POOL_SIZE).filterNot { Agg.fresh(it, null, ttl) }
         coroutineScope {
             need.forEach { s ->
                 launch {
-                    val got = runCatching { Agg.fetchSource(repo, s, c, 1) }.getOrDefault(emptyList())
-                    Agg.putShard(s, c, got)
+                    val got = runCatching { Agg.fetchSource(repo, s, null, 1) }.getOrDefault(emptyList())
+                    Agg.putShard(s, null, got)
                     if (my == wallSeq) mergeFrom()
                 }
             }
@@ -206,21 +217,42 @@ fun ZoneScreen(
         loading = false
         if (wall.isNotEmpty()) {
             fillTagsFromCache() // 7 天内已测条目秒显角标；采样测速整体后置（用户 2026-11-04：海报墙优先不抢带宽）
-            // 二波补拉（7~12 名）：不阻塞交互，落分片后追加墙尾，再起预取；预取毕才起测
-            val back = pool.drop(Agg.POOL_SIZE).filterNot { Agg.fresh(it, c, ttl) }
+            // 二波补拉（7~12 名）：不阻塞交互，落分片后追加墙尾；毕起缓存回填+采样，再起后台续轮加深
+            val back = pool.drop(Agg.POOL_SIZE).filterNot { Agg.fresh(it, null, ttl) }
             launch {
                 coroutineScope {
                     back.forEach { s ->
                         launch {
-                            val got = runCatching { Agg.fetchSource(repo, s, c, 1) }.getOrDefault(emptyList())
-                            Agg.putShard(s, c, got)
+                            val got = runCatching { Agg.fetchSource(repo, s, null, 1) }.getOrDefault(emptyList())
+                            Agg.putShard(s, null, got)
                             if (my == wallSeq) mergeFrom()
                         }
                     }
                 }
                 if (my == wallSeq) {
-                    Agg.prefetch(repo, pool, aggTtl()) { my == wallSeq }
-                    if (my == wallSeq) { fillTagsFromCache(); speedTest() }
+                    fillTagsFromCache()
+                    speedTest()
+                    // 聚合加深（用户 2026-11-04：拉更多数据进全池）：latest pg 2..7 逐轮，并发 3，无新增即停
+                    for (pg in 2..7) {
+                        if (my != wallSeq || aggLoadingMore) break
+                        val before = wall.size
+                        coroutineScope {
+                            val sem = Semaphore(3)
+                            pool.forEach { s ->
+                                launch(Dispatchers.IO) {
+                                    sem.withPermit {
+                                        if (my != wallSeq) return@withPermit
+                                        val more = runCatching { Agg.fetchSource(repo, s, null, pg) }.getOrDefault(emptyList())
+                                        Agg.appendShard(s, null, more)
+                                    }
+                                }
+                            }
+                        }
+                        if (my != wallSeq) break
+                        aggPage = pg
+                        mergeFrom()
+                        if (wall.size == before) break // 全池无新增=自然到底
+                    }
                 }
             }
         }
@@ -233,28 +265,27 @@ fun ZoneScreen(
         val refocus = sentinelFocused
         val my = wallSeq
         val pg = aggPage + 1
-        val c = zoneCatOf()
         val pool = zonePoolNow()
         aggLoadingMore = true
         scope.launch {
             coroutineScope {
                 pool.forEach { s ->
                     launch {
-                        val more = runCatching { Agg.fetchSource(repo, s, c, pg) }.getOrDefault(emptyList())
-                        Agg.appendShard(s, c, more)
+                        val more = runCatching { Agg.fetchSource(repo, s, null, pg) }.getOrDefault(emptyList())
+                        Agg.appendShard(s, null, more)
                     }
                 }
             }
             aggLoadingMore = false
             if (my != wallSeq) return@launch
             aggPage = pg
-            val all = Agg.mergeShards(pool, c)
+            val all = Agg.mergeShards(pool, null)
             val onWall = wall.mapTo(HashSet()) { Agg.nameKey(it) }
             val added = all.filter { onWall.add(Agg.nameKey(it)) }
             aggMore = added.isNotEmpty()
             if (added.isNotEmpty()) {
                 wall = wall + added
-                VocabPools.get(context).addWords(added.map { it.name }, true)
+                VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true)
                 speedTest()
                 if (refocus) {
                     delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
@@ -264,9 +295,11 @@ fun ZoneScreen(
         }
     }
 
-    // S4 窗口渲染：本墙条目先只挂 aggWin 部，哨兵「展开更多」本地放量零请求，展完才联网续轮
-    val expandable = wall.size > aggWin
-    val view = if (expandable) wall.take(aggWin) else wall
+    // 客户端过滤（零重拉）：wall=latest 全池，shown=一级分类∩二级筛选；窗口渲染作用于过滤结果
+    val shown = remember { derivedStateOf { Zone.filterPool(wall, cat, flt) } }
+    LaunchedEffect(cat, flt) { aggWin = 240 }
+    val expandable = shown.value.size > aggWin
+    val view = if (expandable) shown.value.take(aggWin) else shown.value
     fun aggMoreOrExpand() { if (expandable) aggWin += 240 else aggLoadMore() }
     AutoLoadMore(gridState, view.size, aggLoadingMore, expandable || aggMore) { aggMoreOrExpand() }
 
@@ -290,8 +323,12 @@ fun ZoneScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item { FuncCard(icon = null, name = "返回", onClick = onBack) }
+                item {
+                    // 源选择钮：默认聚合；单源显示源名缩写（用户 2026-11-04：给出源选择，默认聚合源）
+                    val selName = poolCache.firstOrNull { it.url == selUrl }?.name
+                    FuncCard(icon = null, name = if (selUrl.isEmpty()) "源:聚合▾" else "源:${selName?.take(6) ?: "聚合"}▾", onClick = { showSrc = true })
+                }
                 item { FuncCard(icon = null, name = "刷新", onClick = { refreshZone() }) }
-                item { FuncCard(icon = null, name = "找片", onClick = { showFind = true }) }
                 item { FuncCard(icon = null, name = "搜索", onClick = onSearch) }
                 item { FuncCard(icon = null, name = "测速", onClick = { speedTest(true) }) }
                 item { FuncCard(icon = null, name = "历史", onClick = onHist) }
@@ -313,19 +350,33 @@ fun ZoneScreen(
             }
             return@Column
         }
+        // 专区专用过滤（与首页隔离）：一级分类行 + 二级成人细分筛选行，全部客户端过滤零重拉
         CompactChips {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    FilterChip(selected = cat == -1, onClick = { cat = -1 }, label = { Text("最新") })
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(selected = cat == -1, onClick = { cat = -1 }, label = { Text("最新") })
+                    }
+                    itemsIndexed(Zone.ZONE_CATS) { i, c ->
+                        FilterChip(selected = cat == i, onClick = { cat = i }, label = { Text(c.key) })
+                    }
                 }
-                itemsIndexed(Agg.AGG_CATS) { i, c ->
-                    FilterChip(selected = cat == i, onClick = { cat = i }, label = { Text(c.key) })
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(selected = flt == -1, onClick = { flt = -1 }, label = { Text("全部") })
+                    }
+                    itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
+                        FilterChip(selected = flt == i, onClick = { flt = i }, label = { Text(f.key) })
+                    }
                 }
             }
         }
         // 提示行整体撤销（对齐点播 2026-11-03 定稿：加载态由墙尾哨兵呈现，空间全让海报墙）；错误兜底保留
         if (!loading && wall.isEmpty()) {
             Text("专区源未返回数据：可点「测速」逐条验证起播，或稍后返回重进", color = MaterialTheme.colorScheme.error)
+        } else if (!loading && wall.isNotEmpty() && shown.value.isEmpty()) {
+            Text("当前分类/筛选暂无命中（全池 ${wall.size} 部，可切「最新+全部」或继续下拉加深数据）",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
         LazyVerticalGrid(
             state = gridState,
@@ -335,14 +386,21 @@ fun ZoneScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(view, key = { "${it.sourceUrl}|${it.vodId}" }) { it ->
-                ZonePoster(item = it, tag = tags[zspKey(it)], onClick = { onPick(it) })
+                ZonePoster(
+                    item = it,
+                    tag = tags[zspKey(it)],
+                    onClick = { onPick(it) },
+                    onSrc = { // 点来源标=切到该源继续查同类（筛选保留，用户 2026-11-04）
+                        selUrl = it.sourceUrl; settings.zoneSrc = it.sourceUrl; showSrc = false
+                    },
+                )
             }
             if (view.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     WallSentinel(
                         loading = aggLoadingMore,
                         canMore = expandable || aggMore,
-                        label = if (expandable) "⌄ 展开更多（本墙还有 ${wall.size - aggWin} 部）" else null,
+                        label = if (expandable) "⌄ 展开更多（当前过滤还有 ${shown.value.size - aggWin} 部）" else null,
                         fr = sentinelFr,
                         onFocus = { sentinelFocused = it },
                         onMore = { aggMoreOrExpand() },
@@ -352,18 +410,57 @@ fun ZoneScreen(
         }
     }
 
-    // 🔎 找片：专区池全源搜索（web openFindBox('','',zone=true)：空词不自动搜，手输/选词后点钮触发）
-    if (showFind) FindSourceDialog(
-        store = store,
-        title = "",
-        zone = true,
-        onDismiss = { showFind = false },
-        onPick = { showFind = false; onPick(it) },
-    )
+    // 源选择弹窗（用户 2026-11-04）：默认聚合源，可切单个专区源；切源仅重跑取数池，分类/筛选状态保留
+    if (showSrc) {
+        AlertDialog(
+            onDismissRequest = { showSrc = false },
+            confirmButton = {},
+            title = { Text("选择资源口源") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    item {
+                        SrcRow(
+                            selected = selUrl.isEmpty(),
+                            name = "聚合源（健康前 ${poolCache.size.coerceAtMost(Agg.POOL_LIMIT)} 源两波并发）",
+                            badge = null,
+                        ) { selUrl = ""; settings.zoneSrc = ""; showSrc = false }
+                    }
+                    itemsIndexed(poolCache) { _, s ->
+                        val h = health.of(s.url)
+                        SrcRow(
+                            selected = selUrl == s.url,
+                            name = s.name,
+                            badge = h?.let { if (it.fails >= HealthStore.DEAD_FAILS) "✗失效" else "✓${it.ms?.takeIf { m -> m > 0 } ?: ""}ms" },
+                        ) { selUrl = s.url; settings.zoneSrc = s.url; showSrc = false }
+                    }
+                }
+            },
+        )
+    }
+}
+
+// 源选择行（弹窗内）：当前项高亮 ●，附健康徽标
+@Composable
+private fun SrcRow(selected: Boolean, name: String, badge: String?, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(if (selected) "●" else "○", style = MaterialTheme.typography.labelSmall,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            badge?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall,
+                    color = if (it.startsWith("✗")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
 }
 
 @Composable
-private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () -> Unit) {
+private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () -> Unit, onSrc: () -> Unit) {
     Column(modifier = Modifier.clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
@@ -417,6 +514,21 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
+            // 来源标（用户 2026-11-04）：聚合下每部可辨出处；点标=切到该源继续查当前分类/筛选
+            Text(
+                text = item.sourceName,
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable(onClick = onSrc)
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            )
         }
         Text(
             text = item.name,
@@ -425,7 +537,8 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            text = listOfNotNull(item.year, item.area).joinToString(" · "),
+            // 专区源数据脏：year 常回 "0"/空，过滤后再拼
+            text = listOfNotNull(item.year?.takeIf { it.isNotBlank() && it.trim('0') != "" }, item.area?.takeIf { it.isNotBlank() }).joinToString(" · "),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             maxLines = 1,

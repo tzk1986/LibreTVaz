@@ -131,6 +131,91 @@ object CmsParser {
         return matchesPrepared(nName, query)
     }
 
+    // ===== 番号引擎（用户 2026-11-04 需求，web 蓝本之外的资源口搜索增强）=====
+    // hez-009 / ipzz-118 / FC2-4985073 / FC2PPV-1921054 / 101226_100 / carib-0011 等编号检索：
+    // 规范化键 `label|num`（num 去前导零，hez9=hez-009；fc2 开头去尾部 ppv，FC2-X=FC2PPV-X 同族兼容），
+    // 番号型查询改走标题提取精确匹配，绕开 isRelevant 数字边界完整规则对前导零/连字符的失配。
+
+    private val CODE_SEP = Regex("[\\s\\-_·]")
+    private val DATE_T = Regex("(?<!\\d)\\d{6}[-_]\\d{2,3}(?!\\d)")
+    /** 带分隔写法：HEZ-009 / FC2-PPV-1921054 / HEZ 009（label 可含连字符字母块） */
+    private val CODE_T_SEP = Regex(
+        "\\b([a-z][a-z0-9]*(?:[-_][a-z]{1,6})*)[-_ ]+(\\d{2,7})(?!\\d)",
+        RegexOption.IGNORE_CASE,
+    )
+    /** 粘连写法：HEZ009 / CARIB0011——label 必须以字母收尾，杜绝贪婪回溯把编号首位零切进厂牌（hez0|9） */
+    private val CODE_T_FLAT = Regex(
+        "\\b([a-z](?:[a-z0-9]*[a-z])?)(\\d{2,7})(?!\\d)",
+        RegexOption.IGNORE_CASE,
+    )
+    /** 画质/封装格式词不是厂牌，提取与查询双侧都排除（防「HD 1080」误提） */
+    private val CODE_STOP = setOf(
+        "hd", "sd", "fhd", "uhd", "xhd", "mp4", "mkv", "avi", "mp3", "rmvb", "rm",
+        "flv", "mov", "webm", "m4v", "x264", "x265", "dvd", "vcd", "ch", "ep",
+    )
+
+    /** 查询 → 番号规范键；非编号形态返回 null（调用方回落常规匹配） */
+    fun codeCanon(q: String): String? {
+        val s = q.trim().lowercase()
+        if (s.isEmpty() || !Regex("^[a-z0-9][a-z0-9 \\-_·]*$").matches(s)) return null
+        var label: String? = null
+        var num: String? = null
+        val sep = Regex("^(.+?)[ \\-_·]+(\\d{1,7})$").matchEntire(s)
+        if (sep != null) {
+            label = sep.groupValues[1]; num = sep.groupValues[2]
+        } else {
+            val flat = s.replace(CODE_SEP, "")
+            Regex("^(\\d{6})(\\d{2,3})$").matchEntire(flat)?.let {
+                label = it.groupValues[1]; num = it.groupValues[2]
+            } ?: Regex("^([a-z]+)(\\d{1,7})$").matchEntire(flat)?.let {
+                label = it.groupValues[1]; num = it.groupValues[2]
+            } ?: Regex("^([a-z][a-z0-9]*?)(\\d{2,7})$").matchEntire(flat)?.let {
+                label = it.groupValues[1]; num = it.groupValues[2]
+            }
+        }
+        val l = label?.replace(CODE_SEP, "") ?: return null
+        if (num == null || l.length > 12) return null
+        val okLabel = l.matches(Regex("[a-z][a-z0-9]*")) || l.matches(Regex("\\d{6}"))
+        if (!okLabel) return null
+        var lab = if (l.startsWith("fc2")) l.removeSuffix("ppv") else l
+        if (lab in CODE_STOP) return null
+        val n = num.trimStart('0')
+        if (n.isEmpty()) return null
+        return "$lab|$n"
+    }
+
+    /** 标题提取全部番号：规范键 → 原文（徽章/词库用原文）；LinkedHashMap 保首个=最像编号的一处 */
+    fun extractCodes(name: String): List<Pair<String, String>> {
+        if (name.isEmpty()) return emptyList()
+        val out = LinkedHashMap<String, String>()
+        for (m in DATE_T.findAll(name)) {
+            val p = m.value.split(Regex("[-_]"))
+            val n = p[1].trimStart('0')
+            if (n.isNotEmpty()) out.putIfAbsent("${p[0]}|$n", m.value)
+        }
+        for (rx in listOf(CODE_T_SEP, CODE_T_FLAT)) for (m in rx.findAll(name)) {
+            var l = m.groupValues[1].lowercase().replace(CODE_SEP, "")
+            if (l.length > 12 || !l.matches(Regex("[a-z][a-z0-9]*"))) continue
+            if (l.startsWith("fc2")) l = l.removeSuffix("ppv")
+            if (l in CODE_STOP) continue
+            val n = m.groupValues[2].trimStart('0')
+            if (n.isNotEmpty()) out.putIfAbsent("$l|$n", m.value)
+        }
+        return out.toList()
+    }
+
+    /** 标题首个番号原文（结果行徽章、词库种入用） */
+    fun codeRaw(name: String): String? = extractCodes(name).firstOrNull()?.second
+
+    /** 标题是否含指定规范键番号 */
+    fun codeMatch(name: String, canon: String): Boolean = extractCodes(name).any { it.first == canon }
+
+    /** 搜索相关性入口：番号形态查询走提取精确匹配，另兜底严格常规匹配（标题编号写法过糙提不出时不丢命中）；其余回落 isRelevant（web 语义不变） */
+    fun relevantForSearch(name: String, wd: String, fuzzy: Boolean = true): Boolean {
+        codeCanon(wd)?.let { c -> return codeMatch(name, c) || isRelevant(name, wd, false) }
+        return isRelevant(name, wd, fuzzy)
+    }
+
     /** ac=list 返回的 class 数组 → 分类列表 */
     fun parseTypes(data: JSONObject): List<VodType> {
         val arr = data.optJSONArray("class") ?: return emptyList()

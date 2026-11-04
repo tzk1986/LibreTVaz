@@ -141,7 +141,7 @@ fun FindSourceDialog(
                         raw.firstOrNull { CmsParser.normalizeTitle(it.name) == nt }
                             ?: raw.firstOrNull { CmsParser.normalizeTitle(it.name).contains(nt) },
                     )
-                } else raw.filter { CmsParser.isRelevant(it.name, query, settings.fuzzy) }
+                } else raw.filter { CmsParser.relevantForSearch(it.name, query, settings.fuzzy) }
                 if (!matchBest) {
                     val shards = shardsOf(ck)
                     shards[PerfCore.norm(x.second.url)] = PerfCore.Shard(System.currentTimeMillis(), list)

@@ -24,6 +24,42 @@ object Zone {
 
     fun isAdultType(t: String?): Boolean = !t.isNullOrEmpty() && ADULT_KEYWORDS.any { t.contains(it) }
 
+    /**
+     * 资源口专用过滤表（用户 2026-11-04 需求，web 蓝本之外的增强，与首页点播 AGG_CATS/地区筛选完全隔离各用各的）：
+     * 一级分类行=最新(全池)+有码+无码+动漫；二级筛选行=成人细分（单选，与一级取交集）。
+     * 全部为「latest 聚合池」纯客户端过滤：typeName 优先、片名兜底，切类/切筛选零重拉零请求。
+     */
+    data class ZoneTag(val key: String, val kw: List<String>)
+
+    val ZONE_CATS = listOf(
+        ZoneTag("有码", listOf("有码")),                     // 日本有码/有码高清 同含「有码」
+        ZoneTag("无码", listOf("无码")),                     // 「无码」不含子串「有码」，二者不误伤
+        ZoneTag("动漫", listOf("动漫", "动画", "番")),        // 里番动漫/国漫/日番
+    )
+
+    val ZONE_FILTERS = listOf(
+        ZoneTag("人妻", listOf("人妻")),
+        ZoneTag("制服", listOf("制服")),                     // 制服诱惑
+        ZoneTag("萝莉", listOf("萝莉")),                     // 萝莉少女
+        ZoneTag("韩国伦理", listOf("韩国伦理", "韩日", "韩国特")),
+        ZoneTag("伦理福利", listOf("伦理", "福利", "擦边", "色情")),
+        ZoneTag("自拍国产", listOf("自拍", "偷拍", "91", "国产传媒", "国产", "mini", "SWAG", "网红主播")),
+        ZoneTag("cosplay", listOf("cosplay")),
+        ZoneTag("同性", listOf("同性")),
+    )
+
+    /** 条目命中：分类名或片名包含任一关键词（忽略大小写；latest 池分类名粗，关键词多在片名） */
+    fun matchesTag(it: VodSummary, t: ZoneTag): Boolean =
+        t.kw.any { k -> it.typeName?.contains(k, true) == true || it.name.contains(k, true) }
+
+    /** 池过滤入口（cat/flt 均 -1=不限；两条件取交集） */
+    fun filterPool(pool: List<VodSummary>, cat: Int, flt: Int): List<VodSummary> {
+        val c = ZONE_CATS.getOrNull(cat)
+        val f = ZONE_FILTERS.getOrNull(flt)
+        if (c == null && f == null) return pool
+        return pool.filter { (c == null || matchesTag(it, c)) && (f == null || matchesTag(it, f)) }
+    }
+
     fun hostOf(u: String?): String? = try { URL(u).host.lowercase() } catch (e: Exception) { null }
 
     /** 读本地私有站单；缺失/损坏=空表（公开克隆形态） */

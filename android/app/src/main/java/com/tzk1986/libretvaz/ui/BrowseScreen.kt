@@ -908,7 +908,7 @@ internal fun NetClockPair() {
 }
 
 @Composable
-internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null) {
+internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null, codeBadge: Boolean = false) {
     Column(modifier = Modifier.clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
@@ -943,6 +943,21 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                         .clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+            // 番号徽章（用户 2026-11-04 搜索增强）：搜索墙左上角显示标题提取的编号原文，便于快速核对
+            if (codeBadge) CmsParser.codeRaw(item.name)?.let { c ->
+                Text(
+                    text = c.uppercase(),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
                 )
             }
             siteLabel?.let { t ->

@@ -115,7 +115,7 @@ fun CollectScreen(
         val (si, s) = x
         val list = runCatching {
             kotlinx.coroutines.withTimeout(SOURCE_TIMEOUT_MS) {
-                repo.searchSourcePage1(s, kwNow).filter { CmsParser.isRelevant(it.name, kwNow, settings.fuzzy) }
+                repo.searchSourcePage1(s, kwNow).filter { CmsParser.relevantForSearch(it.name, kwNow, settings.fuzzy) }
             }
         }.getOrNull()
         if (ep != runSeq) return list != null
@@ -144,6 +144,16 @@ fun CollectScreen(
             done = 0; fails = 0
             bySite.clear(); seq = emptyList(); tabIdx = null; noSources = items.isEmpty()
             if (items.isEmpty()) return@launch
+
+            // 番号查询本地秒查（用户 2026-11-04）：扫聚合 latest 分片（每源 ≤800 条）直接过滤命中即上屏，
+            // 服务端搜索并行进行、到达后经 appendTab 整替（含最新池外的全库条目）
+            CmsParser.codeCanon(kwNow)?.let { canon ->
+                items.forEach { (si, s) ->
+                    val hits = Agg.shards.getRaw(Agg.key(s, null))?.v
+                        ?.filter { CmsParser.codeMatch(it.name, canon) }.orEmpty()
+                    if (hits.isNotEmpty()) appendTab(ep, si, hits)
+                }
+            }
 
             // SWR：上轮分片（fresh+stale，含跨会话落盘回灌）先上屏，联网结果随后替换
             val ck = PerfCore.searchKey(kwNow)
@@ -273,7 +283,11 @@ fun CollectScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     gridItems(allItems, key = { "${it.sourceUrl}|${it.vodId}" }) { it ->
-                        PosterCard(item = it, onClick = { onPick(it) }, siteLabel = if (tabIdx == null) it.sourceName else null)
+                        PosterCard(
+                            item = it, onClick = { onPick(it) },
+                            siteLabel = if (tabIdx == null) it.sourceName else null,
+                            codeBadge = true,
+                        )
                     }
                 }
             }

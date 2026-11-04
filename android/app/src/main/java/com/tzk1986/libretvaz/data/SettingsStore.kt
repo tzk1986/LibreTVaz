@@ -86,6 +86,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_ZONE_SEED, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_ZONE_SEED, value).apply()
 
+    /** 资源口当前源（空=聚合全部专区源，非空=单源 url；海报来源标点选后记住，分类/筛选跨源保留） */
+    var zoneSrc: String
+        get() = prefs.getString(KEY_ZONE_SRC, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_ZONE_SRC, value).apply()
+
     /** 内置点播源已种版本号（首启自动种入闸门；用户删过不再回填，源管理可手动补） */
     var builtinSeedVer: String
         get() = prefs.getString(KEY_BUILTIN_SEED, "").orEmpty()
@@ -137,6 +142,7 @@ class SettingsStore(context: Context) {
         private const val KEY_AUTO_BEST_LINE = "auto_best_line"
         private const val KEY_SITE_IDX = "site_idx"
         private const val KEY_ZONE_SEED = "zone_seed"
+        private const val KEY_ZONE_SRC = "zone_src"
         private const val KEY_BUILTIN_SEED = "builtin_seed"
         private const val KEY_LIVE_SEED = "live_seed"
         private const val KEY_AUTO = "auto_maintain"
