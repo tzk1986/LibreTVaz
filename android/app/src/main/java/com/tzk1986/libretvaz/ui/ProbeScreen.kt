@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 /**
  * 连接·点播源测速墙（web renderProbe/probeAll 等价）：逐源 ac=list+首分类列表往返，
  * 完成一源原位刷一行；显示按 ms 升序（未测/失败沉底）；点行=切为当前点播源；
- * 全部测完后清理死满 7 天的普通源（专区源豁免）。
+ * 测速墙覆盖全量点播源（含专区，行序=vodSources 下标与 siteIdx 对齐）；全部测完后清理死满 7 天的普通源（专区源豁免）。
  */
 @Composable
 fun ProbeScreen(
@@ -35,7 +35,7 @@ fun ProbeScreen(
     val scope = rememberCoroutineScope()
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
-    var sources by remember { mutableStateOf(store.vodPool()) }
+    var sources by remember { mutableStateOf(store.vodSources()) } // 全量含专区：行下标即 siteIdx
     var rows by remember { mutableStateOf<List<ProbeRow>?>(null) } // 与 sources 下标对齐；null=未检测
     var running by remember { mutableStateOf(false) }
     var seq by remember { mutableIntStateOf(0) }
@@ -54,7 +54,7 @@ fun ProbeScreen(
             val (kept, removed) = health.pruneDead(store.vodSources())
             if (removed > 0) {
                 store.replaceVod(kept)
-                sources = store.vodPool()
+                sources = store.vodSources()
                 rows = null // 下标已变，清空待重测
             }
         }
@@ -72,7 +72,7 @@ fun ProbeScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onBack) { Text("← 返回") }
+            TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
             Text("连接 · 点播源测速", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.weight(1f))
             Button(onClick = { startProbe() }, enabled = !running) { Text(if (running) "检测中…" else "重新检测") }

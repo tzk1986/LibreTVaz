@@ -1,6 +1,7 @@
 package com.tzk1986.libretvaz.data
 
 import org.json.JSONObject
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -117,6 +118,29 @@ class CmsParserTest {
         assertEquals("1", types[0].id)
         assertEquals("电影", types[0].name)
         assertTrue(CmsParser.parseTypes(JSONObject("""{"code":200}""")).isEmpty())
+    }
+
+    @Test
+    fun `parseExtend handles object json-string and semicolon forms`() {
+        // web parseExtend 三形态：JSON 对象 / JSON 串 / "area,内地,港台;year,2026" 分号逗号串
+        val obj = CmsParser.parseExtend(JSONObject("""{"area":["内地","港台"],"year":"2026,2025"}"""))
+        assertEquals("内地,港台", obj["area"])
+        val sem = CmsParser.parseExtend("area,内地,港台;year,2026,2025")
+        assertEquals("内地,港台", sem["area"])
+        assertEquals("2026,2025", sem["year"])
+        assertTrue(CmsParser.parseExtend(null).isEmpty())
+        assertTrue(CmsParser.parseExtend("").isEmpty())
+    }
+
+    @Test
+    fun `parseTypes carries extend and parseFilterMeta picks first class with filters`() {
+        val json = JSONObject("""{"class":[{"type_id":"1","type_name":"电影","type_extend":"area,内地,港台;year,2026"},{"type_id":"2","type_name":"剧"}]}""")
+        val types = CmsParser.parseTypes(json)
+        assertEquals("内地,港台", types[0].extend["area"])
+        assertTrue(types[1].extend.isEmpty())
+        val meta = CmsParser.parseFilterMeta(json)
+        assertEquals("2026", meta!!["year"])
+        assertNull(CmsParser.parseFilterMeta(JSONObject("""{"class":[{"type_id":"1","type_name":"x"}]}""")))
     }
 
     @Test

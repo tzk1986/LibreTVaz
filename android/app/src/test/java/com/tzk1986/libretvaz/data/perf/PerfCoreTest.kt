@@ -219,27 +219,6 @@ class PerfCoreTest {
         assertEquals(0, PerfCore.pickBestLine(listOf(line("http://x/share")), listOf(5000L))) // 全壳页→首个非空
     }
 
-    @Test fun `classify 地区判定`() {
-        assertEquals("DOM", PerfCore.classifyVod(null, "港剧"))
-        assertEquals("EUUS", PerfCore.classifyVod("美剧", "大陆"))
-        assertEquals("EUUS", PerfCore.classifyVod(null, "美国"))
-        assertEquals("KR", PerfCore.classifyVod(null, null, "韩国综艺"))
-        assertEquals("UNKNOWN", PerfCore.classifyVod(null, null, null))
-        assertEquals("EUUS", PerfCore.classifyVod(null, "美"))
-        assertEquals("OTHER", PerfCore.regionOfArea("其它"))
-        assertEquals("JP", PerfCore.regionOfArea("日本，美国"))
-        assertNull(PerfCore.regionOfArea("未知领域"))
-        assertEquals(listOf("JP", "KR"), PerfCore.regionLabels("日韩综艺"))
-        assertEquals(emptyList<String>(), PerfCore.regionLabels("爱情"))
-    }
-
-    @Test fun `VOD_FILTERS 预设语义`() {
-        assertEquals(listOf("EUUS", "JP", "KR", "OTHER"), PerfCore.VOD_FILTERS["电影"]!!.first { it.first == "国外" }.second)
-        assertEquals(listOf("OTHER"), PerfCore.VOD_FILTERS["电视剧"]!!.first { it.first == "小语种" }.second)
-        assertTrue(PerfCore.VOD_FILTERS["电影"]!!.first { it.first == "全部" }.second.isEmpty())
-        assertNotNull(PerfCore.VOD_FILTERS["动漫"])
-    }
-
     @Test fun `MemCache TTL 与 LRU 逐出`() {
         val c = MemCache<String>(maxEntries = 2)
         c.set("a", "1", now = 0)

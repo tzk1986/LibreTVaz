@@ -19,14 +19,8 @@ object DiskCache {
     const val MAX_BYTES = 64L shl 20          // CMS 分片盘上限
     const val LOW_WATER_BYTES = 32L shl 20    // 退出修剪低水位
 
-    /** 周期/冷启动过期表：各命名空间的价值窗口（aggs 过期分片仍秒开首绘，给足 24h） */
-    val GC_TTL = listOf(
-        "types:" to 24 * 3600_000L,
-        "aggs:" to 24 * 3600_000L,
-        "detail:" to 24 * 3600_000L,
-        "zsp:" to 7 * 24 * 3600_000L,
-        "search:" to 2 * 3600_000L, // 搜索分片仅内存，保留前缀语义防手工落盘漏清
-    )
+    /** 过期硬清阈值（对齐 web pruneExpiredCache：所有分片按写入 t 统一 7 天，与 SWR 读写窗口无关） */
+    const val HARD_TTL_MS = 7 * 24 * 3600_000L
 
     private val pool = Executors.newSingleThreadExecutor { r -> Thread(r, "cms-disk").apply { isDaemon = true } }
     @Volatile private var dir: File? = null
@@ -85,13 +79,23 @@ object DiskCache {
         runCatching { File(d, fileName(key)).setLastModified(System.currentTimeMillis()) }
     }
 
-    /** 按 lastModified 过命名空间 TTL 删除（冷启动兜底 + WorkManager 6h 周期任务共用） */
+    /**
+     * 过期硬清（web pruneExpiredCache 等价）：按条目头写入时间 t 统一 7 天删除，
+     * 读命中 touch 不续命（t 记写入时刻，与 web 语义一致；LRU 逐出才看 lastModified）。
+     */
     fun purgeExpired(now: Long = System.currentTimeMillis()) {
-        val table = GC_TTL.map { sanitize(it.first) to it.second }
+        val cut = now - HARD_TTL_MS
         files().forEach { f ->
-            val ttl = table.firstOrNull { f.name.startsWith(it.first) }?.second ?: return@forEach
-            if (now - f.lastModified() > ttl) runCatching { f.delete() }
+            val t = runCatching { JSONObject(f.readText()).getLong("t") }.getOrDefault(0L)
+            if (t < cut) runCatching { f.delete() }
         }
+    }
+
+    /** 即时删+队尾再删一次：防「未落盘的挂起 write」在删除后又把文件写回来 */
+    fun remove(key: String) {
+        val d = dir ?: return
+        runCatching { File(d, fileName(key)).delete() }
+        pool.execute { runCatching { File(d, fileName(key)).delete() } }
     }
 
     fun removePrefix(ns: String): Int {
@@ -156,6 +160,10 @@ class DiskBacked<V>(
         DiskCache.write(key, now, s)
     }
 
+    fun remove(key: String) { mem.remove(key); DiskCache.remove(key) }
+
+    fun removePrefix(prefix: String) { mem.removePrefix(prefix); DiskCache.removePrefix(prefix) }
+
     fun clear() { mem.clear(); DiskCache.removePrefix(ns) }
 }
 
@@ -187,21 +195,25 @@ object CmsCodecs {
     }.getOrNull()
 
     fun encTypes(v: List<VodType>): String = JSONArray().apply {
-        v.forEach { put(JSONObject().put("i", it.id).put("n", it.name).put("p", it.pid)) }
+        v.forEach { put(JSONObject().put("i", it.id).put("n", it.name).put("p", it.pid)
+            .put("e", JSONObject(it.extend as Map<*, *>))
+            // 旧分片无 "e"，decTypes 按空 map 兼容
+        ) }
     }.toString()
 
     fun decTypes(s: String): List<VodType>? = runCatching {
         val a = JSONArray(s)
         (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
-            VodType(o.getString("i"), o.getString("n"), o.optString("p"))
+            val ext = CmsParser.parseExtend(o.opt("e"))
+            VodType(o.getString("i"), o.getString("n"), o.optString("p"), ext)
         }
     }.getOrNull()
 
     fun encDetail(v: VideoDetail): String = JSONObject()
         .put("t", v.title).put("c", v.cover).put("d", v.desc)
         .put("tp", v.typeName).put("yr", v.year).put("ar", v.area)
-        .put("ac", v.actor).put("di", v.director).put("sn", v.sourceName)
+        .put("ac", v.actor).put("di", v.director).put("rm", v.remarks).put("sn", v.sourceName)
         .put("ln", JSONArray().apply {
             v.lines.forEach { l -> put(JSONObject().put("f", l.flag).put("e", JSONArray().apply {
                 l.list.forEach { e -> put(JSONObject().put("n", e.name).put("l", e.link)) }
@@ -225,7 +237,7 @@ object CmsCodecs {
         }
         VideoDetail(
             o.getString("t"), nullStr(o, "c"), nullStr(o, "d"), nullStr(o, "tp"),
-            nullStr(o, "yr"), nullStr(o, "ar"), nullStr(o, "ac"), nullStr(o, "di"),
+            nullStr(o, "yr"), nullStr(o, "ar"), nullStr(o, "ac"), nullStr(o, "di"), nullStr(o, "rm"),
             o.getString("sn"), lines,
         )
     }.getOrNull()

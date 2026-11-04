@@ -1,5 +1,6 @@
 package com.tzk1986.libretvaz.data
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.regex.Pattern
 
@@ -137,8 +138,43 @@ object CmsParser {
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             val id = o.optString("type_id")
             val name = o.optString("type_name")
-            if (id.isEmpty() || name.isEmpty()) null else VodType(id, name, o.optString("type_pid"))
+            if (id.isEmpty() || name.isEmpty()) null
+            else VodType(id, name, o.optString("type_pid"), parseExtend(o.opt("type_extend")))
         }
+    }
+
+    /** web parseExtend 移植：对象 | JSON 串 | "k,v1,v2;k2,…" 分号串三种形态 → key→逗号串 */
+    fun parseExtend(v: Any?): Map<String, String> {
+        if (v == null || v == JSONObject.NULL) return emptyMap()
+        when (v) {
+            is JSONObject -> return v.keys().asSequence().associateWith { k -> joinVal(v.opt(k)) }
+            is JSONArray -> return emptyMap()
+        }
+        val s = v.toString()
+        if (s.isBlank()) return emptyMap()
+        runCatching { return parseExtend(JSONObject(s)) }
+        val out = LinkedHashMap<String, String>()
+        s.split(';').forEach { kv ->
+            val i = kv.indexOf(',')
+            if (i > 0) out[kv.substring(0, i).trim()] = kv.substring(i + 1).trim()
+        }
+        return out
+    }
+
+    private fun joinVal(v: Any?): String = when (v) {
+        is JSONArray -> (0 until v.length()).joinToString(",") { v.opt(it)?.toString() ?: "" }
+        is JSONObject, null, JSONObject.NULL -> ""
+        else -> v.toString()
+    }.let { it.split(",").filter { x -> x.isNotBlank() }.joinToString(",") }
+
+    /** web parseFilterMeta 移植：ac=videolist 响应 class[] 里首个带 area/year/lang 的 extend（部分源 ac=list 不带） */
+    fun parseFilterMeta(data: JSONObject): Map<String, String>? {
+        val arr = data.optJSONArray("class") ?: return null
+        for (i in 0 until arr.length()) {
+            val e = parseExtend(arr.optJSONObject(i)?.opt("type_extend"))
+            if (e.containsKey("area") || e.containsKey("year") || e.containsKey("lang")) return e
+        }
+        return null
     }
 
     fun parseSearchList(data: JSONObject, source: VodSource): List<VodSummary> {
@@ -211,6 +247,7 @@ object CmsParser {
             area = vod.optString("vod_area").ifBlank { null },
             actor = vod.optString("vod_actor").ifBlank { null },
             director = vod.optString("vod_director").ifBlank { null },
+            remarks = (vod.optString("vod_remarks").ifBlank { vod.optString("vod_notes") }).ifBlank { null },
             sourceName = source.name,
             lines = lines,
         )

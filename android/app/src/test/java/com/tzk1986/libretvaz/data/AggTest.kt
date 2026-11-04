@@ -27,13 +27,13 @@ class AggTest {
     }
 
     @Test
-    fun `poolOf takes six by health ascending`() {
-        val sources = (1..8).map { src("s$it", "http://s$it") }
-        val pool = Agg.poolOf(sources) { s -> if (s.url == "http://s7") 999L else s.name.last().digitToInt().toLong() }
-        assertEquals(6, pool.size)
+    fun `poolOf takes twelve by health ascending`() {
+        // B15 扩池定稿：POOL_LIMIT=12（首波 top6+二波 7~12），慢源 13 出局
+        val sources = (1..13).map { src("s$it", "http://s$it") }
+        val pool = Agg.poolOf(sources) { s -> if (s.url == "http://s13") 999L else s.name.substring(1).toLong() }
+        assertEquals(12, pool.size)
         assertEquals("s1", pool.first().name)
-        assertFalse(pool.any { it.name == "s7" }) // 7 排在 8 后？升序 1..6 取前 6，7/8 出局
-        assertFalse(pool.any { it.name == "s8" })
+        assertFalse(pool.any { it.name == "s13" })
     }
 
     private val tree = listOf(
@@ -53,9 +53,9 @@ class AggTest {
     fun `subCatsFor regular cat takes three kids, region cat filters by rlabs`() {
         val tv = Agg.AGG_CATS[1]
         assertEquals(listOf("21", "22", "23"), Agg.subCatsFor(tree, tv).map { it.id })
-        val jp = tv.copy(rlabs = listOf("JP")) // 日韩剧含「日韩」→ JP 码命中
+        val jp = tv.copy(rlabs = listOf("JP")) // 日韩剧含「日韩」→ JP 码命中（引擎保留定向能力；聚合墙已改纯客户端过滤不再改道）
         assertEquals(listOf("22"), Agg.subCatsFor(tree, jp).map { it.id })
-        // 地区无命中子类 → 回落父类混拉（靠条目 classifyVod 客户端过滤）
+        // 地区无命中子类 → 回落父类混拉（靠条目 Region.of 客户端过滤）
         val doc = Agg.AGG_CATS[0].copy(rlabs = listOf("JP"))
         assertEquals(listOf("1"), Agg.subCatsFor(tree, doc).map { it.id })
         // 源分类树无该父类 → 空贡献

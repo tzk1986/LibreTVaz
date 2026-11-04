@@ -44,6 +44,12 @@ class DiskCacheTest {
     }
 
     @Test
+    fun `types codec roundtrip keeps extend`() {
+        val ts = listOf(VodType("1", "电影", "0", mapOf("area" to "内地,港台", "year" to "2026,2025")))
+        assertEquals(ts, CmsCodecs.decTypes(CmsCodecs.encTypes(ts)))
+    }
+
+    @Test
     fun `detail codec roundtrip keeps lines and episodes`() {
         val d = VideoDetail(
             "T", cover = "http://c", desc = null, typeName = "剧情", year = "2025",
@@ -82,8 +88,7 @@ class DiskCacheTest {
     }
 
     @Test
-    fun `gc ttl table covers all cms namespaces`() {
-        val nss = DiskCache.GC_TTL.map { it.first }
-        listOf("types:", "aggs:", "detail:", "zsp:", "search:").forEach { assertTrue(nss.contains(it)) }
+    fun `hard ttl is 7 days like web prune`() {
+        assertEquals(7 * 24 * 3600_000L, DiskCache.HARD_TTL_MS)
     }
 }

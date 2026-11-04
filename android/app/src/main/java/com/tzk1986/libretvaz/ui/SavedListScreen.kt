@@ -11,7 +11,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.HistStore
+import com.tzk1986.libretvaz.data.KeepChk
 import com.tzk1986.libretvaz.data.KeepStore
 import com.tzk1986.libretvaz.data.SavedItem
 import com.tzk1986.libretvaz.data.VodSummary
@@ -31,7 +33,7 @@ fun SavedListScreen(
     BackHandler { onBack() }
     Column(modifier = modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onBack) { Text("← 返回") }
+            TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
             Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.weight(1f))
             if (onClear != null && items.isNotEmpty()) {
@@ -53,6 +55,14 @@ fun SavedListScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             AdultTag(s.vod.isAdult)
                             Text(s.vod.name, style = MaterialTheme.typography.bodyLarge)
+                            if (s.updated) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "已更新",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                         }
                         Text(
                             listOfNotNull(s.vod.year, s.vod.area, s.vod.remarks).joinToString(" · "),
@@ -72,13 +82,18 @@ fun SavedListScreen(
 fun KeepScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val store = remember { KeepStore(context) }
+    val repo = remember { CmsRepository() }
     var items by remember { mutableStateOf(store.list(zone)) }
+    // web checkKeeps：进页触发比对（30min 门控在引擎内），有变化即刷新
+    LaunchedEffect(zone) {
+        if (KeepChk.run(repo, store, zone)) items = store.list(zone)
+    }
     SavedListScreen(
         title = if (zone) "专区收藏" else "收藏",
         items = items,
         emptyText = if (zone) "暂无专区收藏，去资源口收藏作品后在此查看" else "暂无收藏，在详情页点「收藏」加入此处",
         onBack = onBack,
-        onPick = onPick,
+        onPick = { store.clearUpdated(it); onPick(it) },
         onRemove = { store.remove(it); items = store.list(zone) },
         modifier = modifier,
     )

@@ -52,6 +52,8 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
+    // B17 点播提速：OkHttp 播放数据源（HTTP/2 多路复用+大连接池，替代 HttpURLConnection）
+    implementation(libs.androidx.media3.datasource.okhttp)
     // B11 视频播放盘缓存 SimpleCache 需要数据库提供器；周期清理任务用 WorkManager
     implementation(libs.androidx.media3.database)
     implementation(libs.androidx.work.runtime.ktx)

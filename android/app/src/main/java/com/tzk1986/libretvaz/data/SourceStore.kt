@@ -1,6 +1,7 @@
 package com.tzk1986.libretvaz.data
 
 import android.content.Context
+import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -29,7 +30,7 @@ class SourceStore(context: Context) {
         // 源名命中专区分类词（web isAdultType）→ 直接归专区池
         val adult = source.isAdult || Zone.isAdultType(source.name)
         val ok = mutateVod { list ->
-            if (list.size >= MAX_VOD || list.any { it.url == url }) false
+            if (list.size >= MAX_VOD || list.any { PerfCore.norm(it.url) == PerfCore.norm(url) }) false
             else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url, isAdult = adult)); true }
         }
         if (ok) alignZone()
@@ -38,9 +39,10 @@ class SourceStore(context: Context) {
 
     fun addLive(source: LiveSource): Boolean {
         val url = source.url.trim()
-        if (!isHttp(url)) return false
+        // asset:// 为内置直播种子（B16），仅程序内种入，外部导入仍限 http(s)
+        if (!isHttp(url) && !url.startsWith("asset://")) return false
         return mutateLive { list ->
-            if (list.size >= MAX_LIVE || list.any { it.url == url }) false
+            if (list.size >= MAX_LIVE || list.any { PerfCore.norm(it.url) == PerfCore.norm(url) }) false
             else { list.add(source.copy(name = source.name.ifBlank { hostname(url) }, url = url)); true }
         }
     }
@@ -65,26 +67,58 @@ class SourceStore(context: Context) {
         val reposFailed: Int = 0,
     )
 
+    /** 订阅链接清单（web SRC.subs 等价，norm 去重；sourceGuard 每 24h 重拉消费） */
+    fun subs(): List<String> =
+        runCatching { val a = JSONArray(prefs.getString(KEY_SUBS, "[]") ?: "[]"); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())
+
+    private fun addSub(url: String) {
+        val u = PerfCore.norm(url)
+        val list = subs().toMutableList()
+        if (u.isNotBlank() && list.none { it == u }) { list.add(u); prefs.edit().putString(KEY_SUBS, JSONArray(list).toString()).apply() }
+    }
+
+    /** raw.githubusercontent 直连失败自动换 gh-proxy 前缀（web A5 doImport getSub 等价） */
+    private suspend fun getSub(u: String): String = withContext(Dispatchers.IO) {
+        try {
+            Http.get(PerfCore.norm(u), timeoutMs = 20000)
+        } catch (e: Exception) {
+            if (Regex("^https://raw\\.githubusercontent\\.com/", RegexOption.IGNORE_CASE).matches(u))
+                Http.get("https://gh-proxy.com/$u", timeoutMs = 20000)
+            else throw e
+        }
+    }
+
     suspend fun importFromUrl(url: String): ImportResult {
         val trimmed = url.trim().removeSuffix("/")
         require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) { "请输入 http(s) 配置链接" }
-        val text = withContext(Dispatchers.IO) { Http.get(trimmed, timeoutMs = 15000) }
-        val parsed = SubscriptionParser.parseExpanded(text) { repoUrl ->
-            withContext(Dispatchers.IO) { Http.get(repoUrl, timeoutMs = 15000) }
-        }
+        val text = getSub(trimmed)
+        val parsed = SubscriptionParser.parseExpanded(text) { repoUrl -> getSub(repoUrl) }
         var vodAdded = 0
         var liveAdded = 0
         mutateVod { list -> vodAdded = mergeVod(list, parsed.vod); true }
         mutateLive { list -> liveAdded = mergeLive(list, parsed.live); true }
+        addSub(trimmed) // 记入订阅清单，供 24h 自动重拉（web SRC.subs push 等价）
         alignZone() // 订阅内命中预置站单的源即收进专区池并去重（web syncSrc 同款）
         return ImportResult(vodAdded, liveAdded, parsed.skipped, parsed.format, parsed.name, parsed.repos, parsed.reposFailed)
+    }
+
+    /** 后台维护重拉专用（web refreshSubsIfStale 等价）：前 5 订阅、合并增量、norm 去重、200 封顶，返回新增数 */
+    suspend fun refreshSubs(): Int {
+        var added = 0
+        subs().take(5).forEach { sub ->
+            val parsed = runCatching { SubscriptionParser.parseExpanded(getSub(sub)) { repoUrl -> getSub(repoUrl) } }.getOrNull()
+                ?: return@forEach // 订阅暂时不可达，下个周期再试
+            mutateVod { list -> added += mergeVod(list, parsed.vod); true }
+        }
+        if (added > 0) alignZone()
+        return added
     }
 
     private fun mergeVod(target: MutableList<VodSource>, incoming: List<VodSource>): Int {
         var added = 0
         for (s in incoming) {
             if (target.size >= MAX_VOD) break
-            if (target.none { it.url == s.url }) {
+            if (target.none { PerfCore.norm(it.url) == PerfCore.norm(s.url) }) {
                 target.add(if (s.isAdult || Zone.isAdultType(s.name)) s.copy(isAdult = true) else s)
                 added++
             }
@@ -96,7 +130,7 @@ class SourceStore(context: Context) {
         var added = 0
         for (s in incoming) {
             if (target.size >= MAX_LIVE) break
-            if (target.none { it.url == s.url }) { target.add(s); added++ }
+            if (target.none { PerfCore.norm(it.url) == PerfCore.norm(s.url) }) { target.add(s); added++ }
         }
         return added
     }
@@ -159,6 +193,7 @@ class SourceStore(context: Context) {
     companion object {
         private const val KEY_VOD = "vod_sources"
         private const val KEY_LIVE = "live_sources"
+        private const val KEY_SUBS = "subs"
         const val MAX_VOD = 200
         private const val MAX_LIVE = 50
     }

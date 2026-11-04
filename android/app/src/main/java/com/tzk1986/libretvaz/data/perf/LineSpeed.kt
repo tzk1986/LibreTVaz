@@ -1,5 +1,6 @@
 package com.tzk1986.libretvaz.data.perf
 
+import com.tzk1986.libretvaz.data.DiskBacked
 import com.tzk1986.libretvaz.data.Http
 import com.tzk1986.libretvaz.data.PlayLine
 import kotlinx.coroutines.Dispatchers
@@ -7,6 +8,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -17,23 +20,41 @@ import java.util.concurrent.ConcurrentHashMap
  * A1 线路吞吐采样（对齐 web fongmi.js sampleKbps/lineSpeed/LINE_SPEED）：
  * Range 0-131071 限 128KB 成本；源站不支持 Range 则全速读、2.5s 预算到点即断同样得 KB/s；
  * m3u8 先拉清单取首分片采样（分片比清单文本更贴近真实带宽）。
- * 缓存仅存进程内存（key=「sourceKey|vodId|集号」，换集重测）；0=失败、-1=采样失败但播放中（不判死）。
+ * 内存工作表 + 6h 磁盘回灌（H5，web fongmi_lspeed 等价）：历史/收藏再进详情页直接复用旧速度与旧快线；
+ * 仅测出有效值（含 0/-1 判定的终表）才落盘，进行中的半截表只留内存。0=失败、-1=采样失败但播放中（不判死）。
  */
 object LineSpeed {
     const val CONCURRENCY = 4
     const val MAX_LINES = 10
+    const val DISK_TTL = 6 * 3600_000L          // 6h 持久复用窗口（web fongmi_lspeed.t 判定同值）
     private const val BUDGET_MS = 2500L
 
     private val cache = ConcurrentHashMap<String, List<Long?>>()
+    private val disk = DiskBacked(
+        MemCache<List<Long?>>(256), "ls:",
+        { v -> JSONArray().apply { v.forEach { if (it == null) put(JSONObject.NULL) else put(it) } }.toString() },
+        { s -> runCatching { val a = JSONArray(s); (0 until a.length()).map { if (a.isNull(it)) null else a.getLong(it) } }.getOrNull() },
+    )
     private val M3U8_RE = Regex("\\.m3u8(\\?|$)", RegexOption.IGNORE_CASE)
 
     fun key(sourceKey: String, vodId: String, ep: Int): String = "$sourceKey|$vodId|$ep"
 
-    fun cached(key: String): List<Long?>? = cache[key]
+    /** 读缓存：内存优先，未中回灌 6h 内磁盘结果（web speedProbe 前 LINE_SPEED 命中语义 + paint 复用 pe.sp） */
+    fun cached(key: String): List<Long?>? {
+        cache[key]?.let { return it }
+        val v = disk.get(key, DISK_TTL) ?: return null
+        cache[key] = v
+        return v
+    }
 
-    fun put(key: String, speeds: List<Long?>) { cache[key] = speeds }
+    fun put(key: String, speeds: List<Long?>) {
+        cache[key] = speeds
+        if (speeds.any { it != null }) disk.set(key, speeds)
+    }
 
-    fun clearAll() { cache.clear() }
+    fun delete(key: String) { cache.remove(key); disk.remove(key) }
+
+    fun clearAll() { cache.clear(); disk.clear() }
 
     /**
      * 并发（4）测本作品本集前 ≤10 线：完成一线即回调 onLine（全表快照，UI 原位刷新）；
@@ -47,7 +68,7 @@ object LineSpeed {
         playingHealthy: () -> Boolean,
         onLine: (List<Long?>) -> Unit,
     ): List<Long?> = coroutineScope {
-        cache[key]?.let { return@coroutineScope it }
+        cached(key)?.let { return@coroutineScope it }
         val n = minOf(lines.size, MAX_LINES)
         val sp = arrayOfNulls<Long>(n)
         cache[key] = sp.toList()
@@ -70,7 +91,9 @@ object LineSpeed {
             }
         }
         jobs.forEach { it.join() }
-        sp.toList()
+        val finalSp = sp.toList()
+        if (finalSp.any { it != null }) disk.set(key, finalSp) // 终表落盘 6h（web speedProbe.then 持久化等价）
+        finalSp
     }
 
     /** 线路地址→采样目标：m3u8 取清单首个分片（无分片视为失败，对齐 web「清单无分片」抛错），其余直接采样 */

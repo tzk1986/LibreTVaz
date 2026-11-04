@@ -42,6 +42,7 @@ data class VideoDetail(
     val area: String? = null,
     val actor: String? = null,
     val director: String? = null,
+    val remarks: String? = null,
     val sourceName: String,
     val lines: List<PlayLine>,
 )
@@ -51,7 +52,19 @@ data class VodType(
     val name: String,
     /** 父分类 id（type_pid）；空或 "0"=顶层。聚合墙取子类、地区定向靠它 */
     val pid: String = "",
+    /** type_extend 扩展字段（web parseExtend）：area/year/lang 逗号串=二级筛选数据源 */
+    val extend: Map<String, String> = emptyMap(),
 )
+
+/** 二级筛选数据源（web buildFilters 产物）：分类树子类 + type_extend 的地区/年份/语言可选值 */
+data class VodFilters(
+    val subs: List<VodType> = emptyList(),
+    val area: List<String> = emptyList(),
+    val year: List<String> = emptyList(),
+    val lang: List<String> = emptyList(),
+) {
+    fun isEmpty() = subs.isEmpty() && area.isEmpty() && year.isEmpty() && lang.isEmpty()
+}
 
 data class LiveChannel(
     val id: String,

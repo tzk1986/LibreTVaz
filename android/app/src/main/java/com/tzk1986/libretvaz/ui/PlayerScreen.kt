@@ -1,41 +1,47 @@
 package com.tzk1986.libretvaz.ui
 
-import android.view.View
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
-import com.tzk1986.libretvaz.data.*
-import com.tzk1986.libretvaz.data.perf.LineSpeed
-import com.tzk1986.libretvaz.data.perf.PerfCore
+import com.tzk1986.libretvaz.data.Epg
+import com.tzk1986.libretvaz.data.Http
+import com.tzk1986.libretvaz.data.LiveCtx
+import com.tzk1986.libretvaz.data.LiveRepository
+import com.tzk1986.libretvaz.data.LiveSource
+import com.tzk1986.libretvaz.data.LiveStore
+import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.VideoCache
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-/** 进程内续播表（对齐 web fongmi_resume 的内存级进度）：key=源|vodId → 线路/集/毫秒 */
-private val RESUME_MAP = java.util.concurrent.ConcurrentHashMap<String, Triple<Int, Int, Long>>()
-private fun resumeKey(it: VodSummary) = "${it.sourceKey}|${it.vodId}"
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** 测速标签配色（对齐 web sp-ok/sp-mid/sp-bad/sp-dim 语义色） */
 internal fun speedTagColor(cls: String): Color = when (cls) {
@@ -46,370 +52,74 @@ internal fun speedTagColor(cls: String): Color = when (cls) {
 }
 
 @OptIn(androidx.media3.common.util.UnstableApi::class)
-private fun buildPlayer(context: android.content.Context): ExoPlayer {
-    // 代理经 Http.applyGlobalProxy() 的 JVM 全局 ProxySelector 生效（media3 无 setProxy API）
-    val dsf = DefaultHttpDataSource.Factory()
+internal fun buildPlayer(context: android.content.Context, live: Boolean = false): ExoPlayer {
+    // B17 OkHttp 播放数据源：HTTP/2 多路复用+大连接池（HLS 分片密集请求收益最大）。
+    // 代理经 Http.applyGlobalProxy() 的 JVM 全局 ProxySelector 生效（OkHttp 默认走 ProxySelector.getDefault）
+    // 重定向由 OkHttp 处理：followSslRedirects 默认 true（等价原跨协议放行）
+    val dsf = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(PlayerHttp.client)
         .setUserAgent(Http.CHROME_UA)
-        .setAllowCrossProtocolRedirects(true)
+    // B17 缓冲画像：点播=默认深度（50/100s 防装载振荡）仅调低起播阈值 2.5→1.5s；直播=小缓冲低延迟
+    val load = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            if (live) 15_000 else 50_000,
+            if (live) 30_000 else 100_000,
+            if (live) 2_000 else 1_500,
+            if (live) 3_000 else 5_000,
+        )
+        .build()
     // B11：前置 200MB LRU 盘缓存（HLS 分片/MP4 Range），回看/重播不白耗流量，也杜绝无限吃盘
     return ExoPlayer.Builder(context)
+        .setLoadControl(load)
         .setMediaSourceFactory(DefaultMediaSourceFactory(VideoCache.factory(context, dsf)))
         .build()
         .apply { playWhenReady = true }
 }
 
-/**
- * 点播播放页（对应 web 全屏播控浮层方案）：多线路/选集/上下集边界置灰/自动连播/失败自动换线/
- * ±15s 快进退（DPAD 左右，DefaultTimeBar keyProgressIncrement=15）/搜本作跨源续播。
- * TV 上播放界面即全屏；顶栏随 PlayerView 控制器同步显隐（5s 无操作收起，任意键唤回）。
- */
-@OptIn(androidx.media3.common.util.UnstableApi::class)
-@Composable
-fun PlayerScreen(
-    item: VodSummary,
-    source: VodSource,
-    detail: VideoDetail,
-    startLine: Int,
-    startEp: Int,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val settings = remember { SettingsStore(context) }
-    val store = remember { SourceStore(context) }
-    val repo = remember { CmsRepository() }
-    BackHandler { onBack() }
-
-    var detailS by remember { mutableStateOf(detail) }
-    var itemS by remember { mutableStateOf(item) }
-    var line by remember { mutableStateOf(startLine.coerceIn(0, (detail.lines.size - 1).coerceAtLeast(0))) }
-    var ep by remember { mutableStateOf(
-        startEp.coerceIn(0, (detail.lines.getOrNull(startLine)?.list?.size ?: 1) - 1)
-    ) }
-    var tried by remember { mutableStateOf(setOf(line)) }
-    var buffering by remember { mutableStateOf(true) }
-    var errorHint by remember { mutableStateOf<String?>(null) }
-    var controlsVisible by remember { mutableStateOf(true) }
-    var dlg by remember { mutableStateOf("") } // "" / line / ep / find
-    // B4 线路测速：当前「作品|集」的速度表（null 元素=未测；-1=采样失败但播放正常）
-    var speeds by remember { mutableStateOf<List<Long?>?>(null) }
-    var userPickedLine by remember { mutableStateOf(false) }
-    var probeSeq by remember { mutableIntStateOf(0) }
-    var autoSrcTried by remember { mutableStateOf(false) } // autoSrc 自动换源一次性闸门
-    var pv by remember { mutableStateOf<PlayerView?>(null) } // epFull 点集后收起控制器用
-
-    val player = remember { buildPlayer(context) }
-
-    fun toast(s: String) = Toast.makeText(context, s, Toast.LENGTH_SHORT).show()
-    fun linkOf(l: Int, e: Int): String? = detailS.lines.getOrNull(l)?.list?.getOrNull(e)?.link
-    fun playAt(l: Int, e: Int, startPosMs: Long = 0) {
-        val u = linkOf(l, e) ?: return
-        errorHint = null
-        buffering = true
-        player.setMediaItem(MediaItem.fromUri(u), startPosMs)
-        player.prepare()
+/** 全应用共享的播放 OkHttp 客户端（连接池/协议栈复用；媒体请求并发高，池给足） */
+private object PlayerHttp {
+    val client by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .connectionPool(okhttp3.ConnectionPool(32, 5, java.util.concurrent.TimeUnit.MINUTES))
+            .protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
+            .build()
     }
-    // ===== B4 线路测速（对齐 web speedProbe/flagBtnHtml）=====
-    fun playingHealthy() = player.playbackState == Player.STATE_READY && player.currentPosition > 0
-    /** 假阴性防护：判慢但播放器实际流畅 → 黄标「播放中」，不判死（web flagBtnHtml） */
-    fun tagFor(i: Int): PerfCore.SpeedTag? {
-        val k = speeds?.getOrNull(i) ?: return null
-        var t = PerfCore.lineSpeedTag(k) ?: return null
-        if (t.cls == "sp-bad" && i == line && playingHealthy()) {
-            t = PerfCore.SpeedTag(if (k > 0) PerfCore.fmtSpeed(k) + " · 播放中" else "播放中（测速失败）", "sp-mid")
-        }
-        return t
-    }
-    fun probeSpeeds(epIdx: Int) {
-        if (!settings.lineSpeed || detailS.lines.isEmpty()) return
-        val seq = probeSeq + 1; probeSeq = seq
-        val key = LineSpeed.key(itemS.sourceKey, itemS.vodId, epIdx)
-        val lines = detailS.lines
-        if (LineSpeed.cached(key) == null) speeds = List(minOf(lines.size, LineSpeed.MAX_LINES)) { null }
-        scope.launch {
-            val sp = LineSpeed.measure(key, lines, epIdx, line, { playingHealthy() }) {
-                if (seq == probeSeq) speeds = it
-            }
-            if (seq != probeSeq) return@launch
-            speeds = sp
-            // 起播偏晚补判：全测完当前线仍 0 但播放已流畅 → -1（web speedProbe.then 内同逻辑）
-            val curK = sp.getOrNull(line)
-            var finalSp = sp
-            if (curK == 0L && playingHealthy()) {
-                finalSp = sp.toMutableList().also { it[line] = -1L }
-                LineSpeed.put(key, finalSp)
-                speeds = finalSp
-            }
-            if (userPickedLine || !settings.autoBestLine || ep != epIdx) return@launch
-            val best = PerfCore.pickBestLine(lines, finalSp, epIdx)
-            if (best < 0 || best == line || best >= lines.size) return@launch
-            val eIdx = epIdx.coerceAtMost(lines[best].list.size - 1)
-            val sec = player.currentPosition
-            line = best; ep = eIdx; tried = setOf(best)
-            toast("已切换到最快线路「${lines[best].flag}」")
-            playAt(best, eIdx, sec)
-        }
-    }
-
-    fun goEp(step: Int) {
-        val g = detailS.lines.getOrNull(line) ?: return
-        val ni = ep + step
-        if (ni < 0) { toast("已是第一集"); return }
-        if (ni >= g.list.size) { toast("已是最后一集"); return }
-        ep = ni
-        tried = setOf(line) // 手动换集重置换线记录（对齐 web goEp）
-        playAt(line, ni)
-        probeSpeeds(ni) // 换集重测本集各线（对齐 web speedProbe(curEp)）
-    }
-    // 手动点选集（对齐 web epRow.onclick：curEp=选中; tried 重置为新集起点）
-    fun goEpTo(i: Int) {
-        ep = i
-        tried = setOf(line)
-        playAt(line, i)
-        probeSpeeds(i)
-        if (settings.epFull) pv?.hideController() // epFull：点集后收起控制器专注全屏看
-    }
-
-    /** autoSrc：全线失败且本作品剧集极少（≤2，多半是错源）时自动搜关联换源续播，仅试一次（web fongmi_autosrc） */
-    fun tryAutoSrc() {
-        autoSrcTried = true
-        val pool = store.vodPool().filter { PerfCore.norm(it.url) != PerfCore.norm(itemS.sourceUrl) }
-        if (pool.isEmpty()) return
-        errorHint = "全线失败，正在自动搜关联换源…"
-        scope.launch {
-            val title = detailS.title.ifBlank { itemS.name }
-            val alt = runCatching { repo.search(title, pool).list.firstOrNull() }.getOrNull()
-            if (alt == null) {
-                errorHint = "已尝试全部线路均无法播放，自动换源也未找到可播来源，可「搜关联」手动换源"
-                return@launch
-            }
-            val src = VodSource(alt.sourceName, alt.sourceUrl, isAdult = alt.isAdult)
-            val d2 = repo.detail(src, alt.vodId)
-            if (d2 == null || d2.lines.isEmpty()) {
-                errorHint = "已尝试全部线路均无法播放，自动换源未返回播放地址，可「搜关联」手动换源"
-                return@launch
-            }
-            val li = Playback.pickDefaultLine(d2.lines).coerceAtLeast(0)
-            val ei = minOf(ep, (d2.lines[li].list.size - 1).coerceAtLeast(0))
-            detailS = d2
-            itemS = alt
-            line = li; ep = ei; tried = setOf(li)
-            userPickedLine = false
-            playAt(li, ei, player.currentPosition)
-            probeSpeeds(ei)
-            toast("已自动切换到「${alt.sourceName}」续播")
-        }
-    }
-
-    // 监听只注册一次；回调内引用的都是 delegate state，读到最新值
-    val listener = remember(player) {
-        object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) = when (state) {
-                Player.STATE_BUFFERING -> { buffering = true }
-                Player.STATE_READY -> { buffering = false }
-                Player.STATE_ENDED -> {
-                    buffering = false
-                    val g = detailS.lines.getOrNull(line)
-                    if (g != null && ep + 1 < g.list.size && settings.autoNext) {
-                        toast("本集结束，自动播放下一集")
-                        goEp(1)
-                    } else {
-                        toast("已播完全部剧集")
-                    }
-                }
-                else -> {}
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                buffering = false
-                if (!settings.autoLine) {
-                    errorHint = "播放失败（${error.errorCodeName}），可手动换线路"
-                    return
-                }
-                val cand = Playback.pickNextLine(detailS.lines, line, ep, tried, speeds)
-                if (cand.isEmpty()) {
-                    errorHint = "已尝试全部 ${detailS.lines.size} 条线路均无法播放，请「搜关联」换源"
-                    if (settings.autoSrc && !autoSrcTried && detailS.lines.size <= 2) tryAutoSrc()
-                    return
-                }
-                val ni = cand[0].index
-                tried = tried + ni
-                speeds = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, ep))
-                line = ni
-                toast("该线路无法播放，3 秒后自动切换「${detailS.lines[ni].flag}」")
-                scope.launch {
-                    delay(3000)
-                    if (line == ni) playAt(ni, ep) // 期间用户手动换线/换集则放弃
-                }
-            }
-        }
-    }
-    DisposableEffect(player) {
-        player.addListener(listener)
-        onDispose {
-            RESUME_MAP[resumeKey(itemS)] = Triple(line, ep, player.currentPosition)
-            player.removeListener(listener); player.release()
-        }
-    }
-    LaunchedEffect(Unit) {
-        var l = line; var e = ep; var pos = 0L
-        // 仅默认起播（第 1 集）时应用续播；手动点选具体集视为显式意图
-        if (settings.resumePlay && e == 0) {
-            RESUME_MAP[resumeKey(itemS)]?.let { (sl, se, sp) ->
-                val size = detailS.lines.getOrNull(sl)?.list?.size ?: 0
-                if (size > 0) {
-                    l = sl; e = se.coerceIn(0, size - 1); pos = sp
-                    line = l; ep = e; tried = setOf(l)
-                }
-            }
-        }
-        if (pos > 0) toast("已从上次播放位置续播")
-        playAt(l, e, pos)
-        probeSpeeds(e)
-    }
-
-    val g = detailS.lines.getOrNull(line)
-    val total = g?.list?.size ?: 0
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = true
-                    controllerShowTimeoutMs = 5000
-                    setControllerVisibilityListener(
-                        PlayerView.ControllerVisibilityListener { v -> controlsVisible = v == View.VISIBLE },
-                    )
-                    findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.setKeyTimeIncrement(15_000L)
-                    pv = this
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 顶栏操作行：随控制器显隐；上/下集边界置灰不隐藏（对齐 web 用户定稿）
-        AnimatedVisibility(
-            visible = controlsVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(onClick = onBack) { Text("← 返回") }
-                OutlinedButton(onClick = { dlg = "line" }) {
-                    val tag = tagFor(line)
-                    Text(
-                        "线路：${g?.flag ?: "-"}（${detailS.lines.size}条）" + (tag?.let { " ${it.label}" } ?: ""),
-                        color = tag?.let { speedTagColor(it.cls) } ?: Color.Unspecified,
-                    )
-                }
-                OutlinedButton(onClick = { dlg = "ep" }) { Text("第${ep + 1}/${total}集") }
-                Button(onClick = { goEp(-1) }, enabled = ep > 0) { Text("⏮ 上一集") }
-                Button(onClick = { goEp(1) }, enabled = total > 0 && ep < total - 1) { Text("下一集 ⏭") }
-                OutlinedButton(onClick = { dlg = "find" }) { Text("🔎 搜关联") }
-            }
-        }
-        Column(
-            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            val epName = g?.list?.getOrNull(ep)?.name
-            Text(
-                listOfNotNull(itemS.name, epName?.let { "· $it" }, "来源：${itemS.sourceName}").joinToString(" "),
-                color = Color.White,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodyMedium)
-            errorHint?.let { Text(it, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodyMedium) }
-        }
-    }
-
-    if (dlg == "line") AlertDialog(onDismissRequest = { dlg = "" }, confirmButton = {}, dismissButton = {
-        TextButton(onClick = { dlg = "" }) { Text("关闭") }
-    }, text = {
-        LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-            itemsIndexed(detailS.lines) { i, lg ->
-                val tag = tagFor(i)
-                TextButton(
-                    onClick = {
-                        dlg = ""
-                        line = i; ep = 0; tried = setOf(i)
-                        userPickedLine = true // 手动换线后测速不再抢跳最快线（对齐 web userPickedLine）
-                        playAt(i, 0)
-                        probeSpeeds(0)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        "${lg.flag}（${lg.list.size}集）${if (i == line) " ◀ 当前" else ""}",
-                        modifier = Modifier.weight(1f),
-                    )
-                    tag?.let {
-                        Text(it.label, color = speedTagColor(it.cls), style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-        }
-    })
-
-    if (dlg == "ep" && g != null) AlertDialog(onDismissRequest = { dlg = "" }, confirmButton = {}, dismissButton = {
-        TextButton(onClick = { dlg = "" }) { Text("关闭") }
-    }, text = {
-        LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-            itemsIndexed(g.list) { i, e ->
-                TextButton(onClick = {
-                    dlg = ""
-                    goEpTo(i)
-                }, modifier = Modifier.fillMaxWidth()) { Text(e.name, modifier = Modifier.fillMaxWidth()) }
-            }
-        }
-    })
-
-    if (dlg == "find") FindSourceDialog(
-        store = store,
-        title = detailS.title.ifBlank { itemS.name },
-        onDismiss = { dlg = "" },
-        onPick = { sum ->
-            dlg = ""
-            val keepSec = player.currentPosition
-            val keepEp = ep
-            scope.launch {
-                val src = VodSource(sum.sourceName, sum.sourceUrl, isAdult = sum.isAdult)
-                val d2 = repo.detail(src, sum.vodId)
-                if (d2 == null || d2.lines.isEmpty()) {
-                    toast("该源未返回播放地址")
-                    return@launch
-                }
-                val li = Playback.pickDefaultLine(d2.lines).coerceAtLeast(0)
-                val ei = minOf(keepEp, (d2.lines[li].list.size - 1).coerceAtLeast(0))
-                detailS = d2
-                itemS = sum
-                line = li; ep = ei; tried = setOf(li)
-                userPickedLine = false // 换源视同重新进入播放页（对齐 web openDetail 重跑）
-                playAt(li, ei, keepSec)
-                probeSpeeds(ei)
-                toast("已切换到「${sum.sourceName}」续播")
-            }
-        },
-    )
 }
 
-/** 直播等单地址轻量播放页 */
+/**
+ * 直播等单地址轻量播放页（点播逻辑已全部并入 DetailScreen＝web 单视图架构）。
+ * live=true 复刻 web livewrap：顶栏(源名/EPG现在/时钟)+底栏(三位频道号/台名/正在播放/线路)+
+ * 数字键遮罩选台（1400ms 判满，web inputDigit）+↑↓ 组内环绕换台（web chanStep）。
+ */
 @OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun PlayerScreen(
     url: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    live: Boolean = false,
 ) {
     val context = LocalContext.current
+    val store = remember { LiveStore(context) }
     BackHandler { onBack() }
+    // chans 不设 remember：播放页内换源会替换 LiveCtx.chans，需随重组读到新列表
+    val chans = if (live) LiveCtx.chans else emptyList()
+    var chanIdx by remember { mutableIntStateOf(if (live) LiveCtx.cur else -1) }
+    var num by remember { mutableStateOf("") } // web LiveKey.num 数字缓存
+    var tick by remember { mutableIntStateOf(0) } // 秒针：驱动时钟与顶栏「现在·节目」
+    // ⚠️8 播放页换源（web livewrap 换源钮等价）：选源→拉订阅→优先续同名台，无则 0 台
+    val liveSrcs = remember { SourceStore(context).liveSources() }
+    val lrepo = remember { LiveRepository(context) }
+    val scope = rememberCoroutineScope()
+    var showSrcPicker by remember { mutableStateOf(false) }
+    var switching by remember { mutableStateOf(false) }
+    var srcGen by remember { mutableIntStateOf(0) } // 换源代数：同名 chanIdx 也强制喂新流
+    val focus = remember { FocusRequester() }
+    val composeView = androidx.compose.ui.platform.LocalView.current
+
     val player = remember(url) {
-        buildPlayer(context).apply {
+        buildPlayer(context, live).apply {
             setMediaItem(MediaItem.fromUri(url))
             prepare()
         }
@@ -417,19 +127,244 @@ fun PlayerScreen(
     DisposableEffect(player) {
         onDispose { player.release() }
     }
+
+    /** web playChan：换台写 last 并切流（读 LiveCtx.chans：换源后闭包里的旧列表不可用） */
+    fun playChan(i: Int) {
+        val c = LiveCtx.chans.getOrNull(i) ?: return
+        chanIdx = i
+        LiveCtx.cur = i
+        store.setLast(LiveCtx.srcIdx, c.url)
+    }
+
+    fun switchSrc(i: Int, s: LiveSource) {
+        showSrcPicker = false
+        if (i == LiveCtx.srcIdx || switching) return
+        scope.launch {
+            switching = true
+            val oldName = chans.getOrNull(chanIdx)?.name
+            val r = runCatching { lrepo.load(s) }
+            val pl = r.getOrNull()
+            if (pl != null && pl.channels.isNotEmpty()) {
+                val epg = runCatching { Epg.load(s.epg) }.getOrNull()
+                val idx = pl.channels.indexOfFirst { it.name == oldName }.let { if (it >= 0) it else 0 }
+                LiveCtx.srcIdx = i; LiveCtx.srcName = s.name; LiveCtx.chans = pl.channels
+                LiveCtx.cat = null; LiveCtx.group = null; LiveCtx.favOnly = false
+                LiveCtx.favUrls = store.favUrls(i); LiveCtx.epgIdx = epg
+                store.setSrcIdx(i)
+                srcGen++
+                playChan(idx)
+                Toast.makeText(context, "已切换到「${s.name}」", Toast.LENGTH_SHORT).show()
+                // 弹框窗灭后按键焦点不回自绘 Column，手动夺回；须等弹框窗销毁动画结束（过早取焦会被清，实测首键丢）
+                delay(400)
+                repeat(4) { runCatching { focus.requestFocus() }; composeView.requestFocus(); delay(180) }
+            } else {
+                val e = r.exceptionOrNull()
+                if (e != null && !com.tzk1986.libretvaz.data.ErrLog.isExpectedNet(e)) {
+                    com.tzk1986.libretvaz.data.ErrLog.add("live", "${s.name} ${s.url} → ${e.javaClass.simpleName}: ${e.message}")
+                }
+                Toast.makeText(context, "「${s.name}」加载失败，未切换", Toast.LENGTH_LONG).show()
+            }
+            switching = false
+        }
+    }
+
+    // 起播/换台后把新地址喂给复用的 player（避免重建页面）
+    var playedUrl by remember { mutableStateOf(url) }
+    LaunchedEffect(chanIdx, srcGen) {
+        if (!live) return@LaunchedEffect
+        val u = chans.getOrNull(chanIdx)?.url ?: return@LaunchedEffect
+        if (u != playedUrl) {
+            playedUrl = u
+            player.setMediaItem(MediaItem.fromUri(u))
+            player.prepare()
+        }
+    }
+
+    // B16 换线：播放错误=当前台下一条同名线路（列表序=速度降序，只前进不回绕防死循环）。
+    // 偏离注：web 线路号为静态占位，无换线逻辑；此为用户批准的端上增强
+    DisposableEffect(player, chanIdx) {
+        if (!live) return@DisposableEffect onDispose { }
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                val ch = LiveCtx.chans.getOrNull(chanIdx)
+                // 线路 IO/超时=死源可预期不记；解码等未知错误才进日志（用户 2026-11-03）
+                if (!error.errorCodeName.startsWith("ERROR_CODE_IO") && !error.errorCodeName.contains("TIMEOUT")) {
+                    com.tzk1986.libretvaz.data.ErrLog.add(
+                        "play", "直播 ${ch?.name ?: "?"} ${error.errorCodeName}: ${error.message} url=${ch?.url}"
+                    )
+                }
+                val ls = LiveCtx.linesOf(chanIdx)
+                val at = ls.indexOf(chanIdx)
+                when {
+                    at >= 0 && at < ls.lastIndex -> {
+                        playChan(ls[at + 1])
+                        Toast.makeText(context, "线路失败，已切线路 ${at + 2}/${ls.size}", Toast.LENGTH_SHORT).show()
+                    }
+                    ls.size > 1 -> Toast.makeText(context, "本台 ${ls.size} 条线路均失败，请↑↓换台", Toast.LENGTH_LONG).show()
+                    else -> Toast.makeText(context, "该频道播放失败，请↑↓换台", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // 进页写 last + 操作提示（web loadLiveList 尾部 toast，键位文案按 APK 适配）
+    LaunchedEffect(Unit) {
+        if (!live) return@LaunchedEffect
+        chans.getOrNull(chanIdx)?.let { store.setLast(LiveCtx.srcIdx, it.url) }
+        Toast.makeText(context, "↑↓ 换台 · 数字键输入频道号 · 返回回频道列表", Toast.LENGTH_SHORT).show()
+    }
+
+    // web inputDigit 的 1400ms 定时器：停手即判定，越界报无效频道号
+    LaunchedEffect(num) {
+        if (num.isEmpty()) return@LaunchedEffect
+        delay(1400)
+        val n = num.toIntOrNull() ?: 0
+        num = ""
+        if (n in 1..chans.size) playChan(n - 1)
+        else if (n > 0 && chans.isNotEmpty()) Toast.makeText(context, "无效频道号 $n（本流仅 ${chans.size} 个频道）", Toast.LENGTH_SHORT).show()
+    }
+
+    LaunchedEffect(live) {
+        if (!live) return@LaunchedEffect
+        while (true) { delay(1000); tick++ }
+    }
+
+    LaunchedEffect(live) {
+        if (!live) return@LaunchedEffect
+        // PlayerView 让出按键后由本页处理换台/选台；延后重试取焦防首帧竞态（实测首键被吞）。
+        // ⚠️API36 实测：仅 FocusRequester 内部取焦不落平台焦点（调用无异常但 findFocus=null），
+        // 必须同时让宿主 AndroidComposeView 拿平台焦点，按键才会进本层 onPreviewKeyEvent
+        repeat(5) {
+            delay(120)
+            runCatching { focus.requestFocus() }
+            composeView.requestFocus()
+        }
+    }
+
+    fun digitOf(k: Key): String? = when (k) {
+        Key.Zero, Key.NumPad0 -> "0"
+        Key.One, Key.NumPad1 -> "1"
+        Key.Two, Key.NumPad2 -> "2"
+        Key.Three, Key.NumPad3 -> "3"
+        Key.Four, Key.NumPad4 -> "4"
+        Key.Five, Key.NumPad5 -> "5"
+        Key.Six, Key.NumPad6 -> "6"
+        Key.Seven, Key.NumPad7 -> "7"
+        Key.Eight, Key.NumPad8 -> "8"
+        Key.Nine, Key.NumPad9 -> "9"
+        else -> null
+    }
+
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     this.player = player
-                    useController = true
+                    // 直播=web livewrap 无播控条；关控制器防 Media3 show() 内部 requestFocus 抢走自绘层焦点（实测首键丢）
+                    useController = !live
+                    if (live) {
+                        isFocusable = false
+                        isFocusableInTouchMode = false
+                        descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize(),
         )
-        Button(
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
-        ) { Text("返回") }
+        if (live) {
+            tick // 每秒重读 EPG「现在」与刷新时钟（web updateEpgTop + ltClock）
+            val chan = chans.getOrNull(chanIdx)
+            val lineIds = LiveCtx.linesOf(chanIdx)
+            val lineNo = lineIds.indexOf(chanIdx) + 1
+            val epgNow = Epg.now(LiveCtx.epgIdx, chan?.name)
+            val clock = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            Column(modifier = Modifier.fillMaxSize().focusable().focusRequester(focus)
+                .onPreviewKeyEvent { ev ->
+                    if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when {
+                        ev.key == Key.DirectionUp -> { LiveCtx.step(-1)?.let { playChan(it) }; true }
+                        ev.key == Key.DirectionDown -> { LiveCtx.step(1)?.let { playChan(it) }; true }
+                        else -> digitOf(ev.key)?.let { d -> num += d; true } ?: false
+                    }
+                }) {
+                // 顶栏 ltop：返回+源名 · EPG 现在 · 时钟
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(Color(0xB3000000)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Button(onClick = onBack) { Text("返回") }
+                    Button(onClick = { if (!switching) showSrcPicker = true }) {
+                        Text(if (switching) "切换中…" else "📡 换源")
+                    }
+                    Text(LiveCtx.srcName.ifEmpty { "直播" }, color = Color.White, maxLines = 1)
+                    if (epgNow != null) {
+                        val end = if (epgNow.s > 0) Epg.hm(epgNow.s) else "··"
+                        Text(
+                            "现在 · ${epgNow.title} (${Epg.hm(epgNow.t)}–$end)",
+                            color = Color(0xFFBBBBBB),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(clock, color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.weight(1f))
+                // 底栏 lbBar：三位频道号 台名 正在播放 线路（线路号=web 静态占位「线路 1」）
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(Color(0xB3000000)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("%03d".format(chanIdx + 1), color = Color.White)
+                    Text(chan?.name ?: "—", color = Color.White, maxLines = 1)
+                    Text("正在播放：${chan?.name ?: "—"}", color = Color(0xFFDDDDDD), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                    Text(if (lineIds.size > 1) "线路 $lineNo/${lineIds.size}" else "线路 1", color = Color(0xFF999999), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            // 数字遮罩 digital：输入中居中大字
+            if (num.isNotEmpty()) {
+                Text(
+                    num,
+                    color = Color.White,
+                    fontSize = 64.sp,
+                    modifier = Modifier.align(Alignment.Center).background(Color(0x99000000)).padding(horizontal = 28.dp, vertical = 10.dp),
+                )
+            }
+        } else {
+            Button(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
+            ) { Text("返回") }
+        }
+    }
+
+    if (showSrcPicker) {
+        AlertDialog(
+            onDismissRequest = { showSrcPicker = false },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showSrcPicker = false }) { Text("取消") } },
+            title = { Text("切换直播源") },
+            text = {
+                if (liveSrcs.size < 2) Text("只有 1 个直播源：到「源管理」添加或导入订阅后可换源")
+                else LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(liveSrcs.mapIndexed { i, s -> i to s }) { (i, s) ->
+                        TextButton(
+                            onClick = { switchSrc(i, s) },
+                            enabled = !switching,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                s.name + if (i == LiveCtx.srcIdx) "（当前）" else "",
+                                color = if (i == LiveCtx.srcIdx) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                            )
+                        }
+                    }
+                }
+            },
+        )
     }
 }

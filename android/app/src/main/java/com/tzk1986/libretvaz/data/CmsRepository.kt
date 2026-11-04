@@ -1,5 +1,7 @@
 package com.tzk1986.libretvaz.data
 
+import com.tzk1986.libretvaz.data.perf.MemCache
+import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -91,20 +93,37 @@ class CmsRepository {
     }
 
     /** 按分类翻列表页，ac=videolist&t={typeId}&pg= */
-    suspend fun listByType(source: VodSource, typeId: String, page: Int): List<VodSummary> = withContext(Dispatchers.IO) {
+    suspend fun listByType(source: VodSource, typeId: String, page: Int): List<VodSummary> =
+        listFiltered(source, typeId, "", "", "", page).first
+
+    /**
+     * 二级筛选翻页（web loadVod L1645-1652 等价）：t=子类覆盖主分类，
+     * area/year/lang 仅在有分类时拼接；响应 JSON 一并回传供 parseFilterMeta 取扩展值。
+     */
+    suspend fun listFiltered(
+        source: VodSource, typeId: String, area: String, year: String, lang: String, page: Int,
+    ): Pair<List<VodSummary>, JSONObject?> = withContext(Dispatchers.IO) {
+        val sb = StringBuilder("ac=videolist&t=").append(URLEncoder.encode(typeId, "UTF-8"))
+        if (area.isNotEmpty()) sb.append("&area=").append(URLEncoder.encode(area, "UTF-8"))
+        if (year.isNotEmpty()) sb.append("&year=").append(URLEncoder.encode(year, "UTF-8"))
+        if (lang.isNotEmpty()) sb.append("&lang=").append(URLEncoder.encode(lang, "UTF-8"))
+        sb.append("&pg=").append(page)
         runCatching {
-            CmsParser.parseSearchList(
-                fetchJson(apiUrl(source, "ac=videolist&t=${URLEncoder.encode(typeId, "UTF-8")}&pg=$page")),
-                source,
-            )
-        }.getOrDefault(emptyList())
+            val json = fetchJson(apiUrl(source, sb.toString()))
+            CmsParser.parseSearchList(json, source) to json
+        }.getOrDefault(emptyList<VodSummary>() to null)
     }
 
+    /** 拉详情并写 SWR 分片（web cacheSet(dk, d) 等价）；失败返回 null，旧缓存由调用方自行回读 */
     suspend fun detail(source: VodSource, id: String): VideoDetail? = withContext(Dispatchers.IO) {
         runCatching {
             CmsParser.parseDetail(fetchJson(apiUrl(source, "ac=videolist&ids=${URLEncoder.encode(id, "UTF-8")}")), source)
+                ?.also { DetailCache.store(source, id, it) }
         }.getOrNull()
     }
+
+    /** 详情缓存回读（不限新鲜度，web cacheGet 语义：旧数据也先上屏秒显） */
+    fun detailCached(source: VodSource, id: String): VideoDetail? = DetailCache.peek(source, id)
 
     /** 部分订阅的 api 自带查询串（如 …vod?ac=list），拼接需按是否已含 '?' 选分隔符，否则产生坏 URL */
     private fun apiUrl(source: VodSource, query: String): String {
@@ -112,10 +131,34 @@ class CmsRepository {
         return base + (if (base.contains('?')) "&" else "?") + query
     }
 
-    private fun fetchJson(url: String): JSONObject = JSONObject(Http.get(url))
+    /** 在途 GET 合并（web createDedupe 等价，⚠️6）：同 URL 并发只发一次请求，结果/异常广播给全部等待者 */
+    private suspend fun fetchJson(url: String): JSONObject = jsonDedupe.run(url) { loadJson(url) }
+
+    private fun loadJson(url: String): JSONObject = try {
+        JSONObject(Http.get(url))
+    } catch (e: Exception) {
+        // 只记未知错误；超时/重置/HTTP 状态码等非 2xx/坏 JSON（源挂）属可预期，不进日志（用户 2026-11-03）
+        val expected = ErrLog.isExpectedNet(e) ||
+            (e is IllegalStateException && (e.message?.startsWith("HTTP ") == true || e.message == "too many redirects")) ||
+            e is org.json.JSONException
+        if (!expected) ErrLog.add("cms", "$url → ${e.javaClass.simpleName}: ${e.message}")
+        throw e
+    }
 
     companion object {
         private const val MAX_PAGES = 5
         private const val SOURCE_TIMEOUT_MS = 10_000L
+        // 静态共享：各屏各自 new CmsRepository，去重槽必须跨实例才合并在途请求
+        private val jsonDedupe = com.tzk1986.libretvaz.data.perf.KeyDedupe<JSONObject>()
     }
+}
+
+/** 详情 SWR 双层缓存（web `detail:<normUrl>|<id>` 分片等价）：旧数据无 TTL 先上屏，拉新成功覆盖 */
+object DetailCache {
+    private val c = DiskBacked(MemCache<VideoDetail>(64), "detail:", CmsCodecs::encDetail, CmsCodecs::decDetail)
+    private fun key(source: VodSource, id: String) = "detail:" + PerfCore.norm(source.url) + "|$id"
+
+    fun peek(source: VodSource, id: String): VideoDetail? = c.getRaw(key(source, id))?.v
+    fun store(source: VodSource, id: String, d: VideoDetail) = c.set(key(source, id), d)
+    fun clearAll() = c.clear()
 }
