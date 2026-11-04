@@ -701,25 +701,7 @@ function closeSiteDialog() { $('#siteModal').classList.remove('open'); }
 /* 2026-11-02 按《可用点播源清单》重建：一节「直接可播」17 站（裸 m3u8）。
    移除：量子/火狐(/play/加密页仅搜索)、索尼(ac=detail返HTML失效)、天天主域(换东泰m3u8备域裸流)、茅台(实测搜索0命中)。
    爱坤/瑞源当日笔记可播、本机当前直连即被 RST（疑似临时封锁），保留由自动维护兜底剔除 */
-const BUILTIN_SOURCES = [
-  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod' },
-  { name: '最大资源', url: 'https://api.zuidapi.com/api.php/provide/vod' },
-  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod' },
-  { name: '无尽资源', url: 'https://api.wujinapi.com/api.php/provide/vod' },
-  { name: '瑞源资源', url: 'http://cj.rycjapi.com/api.php/provide/vod' },
-  { name: '速播资源', url: 'https://www.subocaiji.com/api.php/provide/vod' },
-  { name: '红牛资源', url: 'https://www.hongniuzy3.com/api.php/provide/vod' },
-  { name: '非凡资源', url: 'https://cj.ffzyapi.com/api.php/provide/vod' },
-  { name: '360资源', url: 'https://360zy.com/api.php/provide/vod' },
-  { name: '东泰m3u8', url: 'http://dyttzy5.tv/api.php/provide/vod/from/dyttm3u8/at/m3u8' },
-  { name: '金鹰资源', url: 'http://jinyingzy.com/provide/vod' },
-  { name: 'p2100', url: 'https://p2100.net/api.php/provide/vod' },
-  { name: '魔都资源', url: 'https://caiji.moduapi.cc/api.php/provide/vod' },
-  { name: '爱奇艺备', url: 'https://iqiyizyapi.com/api.php/provide/vod' },
-  { name: '百度资源', url: 'https://api.apibdzy.com/api.php/provide/vod' },
-  { name: '猫眼资源', url: 'https://api.maoyanapi.top/api.php/provide/vod' },
-  { name: '虎牙资源', url: 'https://huyazy.net/api.php/provide/vod' },
-];
+const BUILTIN_SOURCES = (window.__VOD_SEED || []).map(([name, url]) => ({ name, url })); // 2026-11-04 站单搬入本地私有 sources.local.js（不入版本库），缺失=空表（无源版）
 /* 资源口预置源清单：站单数据在 debug-web/sources.local.js（本地文件，不入版本库），缺失时为空表；
    首次/升版本进资源口自动种入源列表，仅供资源口聚合/搜索/播放（isAdult 隔离常规视图）；扩充清单时改 ZONE_SEED_VER 触发补种 */
 const ZONE_SEED_VER = 'v4';
@@ -1324,7 +1306,7 @@ async function loadTypes() {
       const b = e.target.closest('[data-tid]'); if (!b) return;
       const id = b.dataset.tid;
       if ((Vod.tab && 'cat:' + Vod.tab.id === id) || (!Vod.tab && id === '')) { // R8(agg)：再点当前分类=展开/收起地区筛选行（数据在客户端，只重绘不重拉）
-        if (!id || !PerfCore.VOD_FILTERS[Vod.tab.name]) return;
+        if (!id || !Region.PRESETS[Vod.tab.name]) return;
         Vod.showFilters = !Vod.showFilters;
         drawSubRow();
         Focus.set(Vod.showFilters ? ($('#subRow')?.querySelector('[data-focus]') || b) : b);
@@ -1424,7 +1406,7 @@ function hasRegionKid(types, cat) {
   if (!cat || !cat.rlabs) return false;
   const p = types.find(t => isTopType(t) && cat.kw.some(k => (t.name || '').includes(k)));
   if (!p) return false;
-  return types.some(c => c.pid === p.id && c.id !== p.id && PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
+  return types.some(c => c.pid === p.id && c.id !== p.id && Region.labels(c.name).some(l => cat.rlabs.includes(l)));
 }
 async function fetchAggSource(s, cat, pg = 1) {
   if (!cat) return httpGet(listUrl(s.url, `ac=videolist&pg=${pg}`), 8000).then(raw => parseList(raw, s)).catch(() => []);
@@ -1434,7 +1416,7 @@ async function fetchAggSource(s, cat, pg = 1) {
   const kids = types.filter(c => c.pid === p.id && c.id !== p.id);
   let qs;
   if (cat.rlabs) {
-    const reg = kids.filter(c => PerfCore.regionLabels(c.name).some(l => cat.rlabs.includes(l)));
+    const reg = kids.filter(c => Region.labels(c.name).some(l => cat.rlabs.includes(l)));
     qs = reg.length ? reg.slice(0, 4) : [p];
   } else qs = kids.length ? kids.slice(0, 3) : [p];
   const sub = await pMap(qs, c =>
@@ -1550,9 +1532,9 @@ async function aggPrefetch(rid, token, skip) {
 }
 const resetFilterVals = () => { Vod.sub = ''; Vod.area = ''; Vod.year = ''; Vod.lang = ''; Vod.preset = ''; Vod.pSrv = null; Vod.presetInfo = ''; };
 /* ===== R8 地区预设筛选（docs/2026-10-30-遥控可用性复盘与优化方案.md）=====
-   预设族识别：聚合墙 tab.name 即分类键直配 VOD_FILTERS；单源沿 pid 上溯根，根名+本名匹配预设族 */
+   预设族识别：聚合墙 tab.name 即分类键直配 Region.PRESETS；单源沿 pid 上溯根，根名+本名匹配预设族 */
 function presetKeyForTab() {
-  if (Vod.agg) return Vod.tab && PerfCore.VOD_FILTERS[Vod.tab.name] ? Vod.tab.name : null;
+  if (Vod.agg) return Vod.tab && Region.PRESETS[Vod.tab.name] ? Vod.tab.name : null;
   if (!Vod.tab) return null;
   let cur = Vod.tab, root = null, hop = 0;
   while (cur && hop++ <= 5) { root = cur; const p = cur.pid; cur = p && p !== '0' && p !== '' && p !== 'null' ? Vod.types.find(t => t.id === p) : null; }
@@ -1570,10 +1552,10 @@ const isDescendantOfTab = t => {
 };
 // 分类树中属于当前 tab 子树且名字带地区信号的子分类；无命中返回 null → 走客户端过滤
 const presetIds = labels => {
-  const hit = Vod.types.filter(c => (!Vod.tab || c.id !== Vod.tab.id) && isDescendantOfTab(c) && PerfCore.regionLabels(c.name).some(l => labels.includes(l)));
+  const hit = Vod.types.filter(c => (!Vod.tab || c.id !== Vod.tab.id) && isDescendantOfTab(c) && Region.labels(c.name).some(l => labels.includes(l)));
   return hit.length ? hit : null;
 };
-const rgOf = it => it._rg || (it._rg = PerfCore.classifyVod(it));
+const rgOf = it => it._rg || (it._rg = Region.classify(it));
 /* 二级筛选数据源：①分类树子类（type_pid 指向当前分类，影视仓式）②type_extend 的地区/年份/语言 */
 function buildFilters(t, raw) {
   const subs = Vod.types.filter(c => c.pid === t.id && c.id !== t.id);
@@ -1673,10 +1655,10 @@ function drawVodGrid() {
   const grid = $('#vodGrid'); if (!grid) return;
   const sc = $('#scroller'); const st = sc ? sc.scrollTop : 0; // 增量重绘不重置滚动（配合队列化，屏上内容纹丝不动）
   let shown = Vod.items; // 队列化：排序已在取数时做一次，渲染不再全墙重排
-  /* R8 三级 (b)：预设生效但分类树无地区分类→客户端 classifyVod 过滤；UNKNOWN 保守剔除并计数 */
+  /* R8 三级 (b)：预设生效但分类树无地区分类→客户端 Region.classify 过滤；UNKNOWN 保守剔除并计数 */
   let unknown = 0;
   if (Vod.preset && !Vod.pSrv) {
-    const entry = (PerfCore.VOD_FILTERS[presetKeyForTab()] || []).find(p => p[0] === Vod.preset);
+    const entry = (Region.PRESETS[presetKeyForTab()] || []).find(p => p[0] === Vod.preset);
     const labs = entry && entry[1].length ? entry[1] : null;
     if (labs) shown = shown.filter(it => { const r = rgOf(it); if (r === 'UNKNOWN') { unknown++; return false; } return labs.includes(r); });
   }
@@ -1723,7 +1705,7 @@ function drawSubRow() {
   const f = Vod.filters;
   if (!Vod.tab || !Vod.showFilters) { el.innerHTML = ''; return; }
   const key = presetKeyForTab();
-  const presets = key ? PerfCore.VOD_FILTERS[key] : null;
+  const presets = key ? Region.PRESETS[key] : null;
   const hasGrps = !!(f && (f.subs.length || f.area.length || f.year.length || f.lang.length));
   if ((!presets || !presets.length) && !hasGrps) {
     el.innerHTML = '<span class="muted" style="font-size:12px;padding:6px 28px">该分类不支持二级筛选（源未提供子分类或扩展字段）</span>'; return;
@@ -1764,12 +1746,13 @@ function drawSubRow() {
     } else if (k === 'sub') { Vod.sub = v; }
     else { if (Vod[k] === v) Vod[k] = ''; else Vod[k] = v; } // 同项再按=取消（TVBox 交互）
     drawSubRow(); // R8 改版：不再收起，焦点归位可连续调整
-    if (Vod.agg) { // R8(agg)：地区预设按各源区域子类定向抓取（默认墙只拉前3子类，日剧/欧美等排在后面拉不到）
+    if (Vod.agg) { // R8(agg)：地区预设=纯客户端过滤（2026-11-04 改，同 APK）：不改道取数，复用全部墙数据逐条 Region.classify
       const base = AGG_CATS.find(c => c.key === (Vod.tab && Vod.tab.name));
       if (!base) drawVodGrid();
       else {
         const e2 = Vod.preset ? (presets || []).find(p => p[0] === Vod.preset) : null;
-        loadAggCat(e2 && e2[1].length ? { ...base, rlabs: e2[1] } : base);
+        // 聚合地区预设＝纯客户端过滤：不随预设改道取数，复用全部墙数据由 Region.classify 裁决（同 APK 2026-11-04）
+        loadAggCat(base);
       }
     } else loadVod(1);
   };
