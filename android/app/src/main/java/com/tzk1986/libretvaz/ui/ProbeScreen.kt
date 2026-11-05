@@ -72,10 +72,10 @@ fun ProbeScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
+            TmBtn(onClick = onBack) { Text("← 返回") }
             Text("连接 · 点播源测速", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.weight(1f))
-            Button(onClick = { startProbe() }, enabled = !running) { Text(if (running) "检测中…" else "重新检测") }
+            TmBtn(onClick = { startProbe() }, enabled = !running) { Text(if (running) "检测中…" else "重新检测") }
         }
         Text("逐源请求 ac=list + 首分类列表；连续失败 3 次标失效，死满 7 天自动清理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
         if (sources.isEmpty()) {

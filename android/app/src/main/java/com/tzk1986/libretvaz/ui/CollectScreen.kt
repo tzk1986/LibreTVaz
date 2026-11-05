@@ -223,8 +223,8 @@ fun CollectScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            // 返回钮缩小为文字级（用户 2026-11-04：与左源栏切换按钮同量级，Button 实心块太大）
-            TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
+            // 统一 TmBtn 紧凑小号（用户 2026-11-05）
+            TmBtn(onClick = onBack) { Text("← 返回") }
             Text("“$kw” 的搜索结果", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.weight(1f))
             Text(
@@ -270,7 +270,7 @@ fun CollectScreen(
                     if (suggChips.isNotEmpty()) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(suggChips) { w ->
-                                AssistChip(onClick = { searchNow(w) }, label = { Text("试试搜「$w」?") })
+                                TmChip(selected = false, onClick = { searchNow(w) }, label = "试试搜「$w」?")
                             }
                         }
                     }

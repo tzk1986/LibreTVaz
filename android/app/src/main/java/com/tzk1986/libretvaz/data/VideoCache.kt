@@ -34,11 +34,18 @@ object VideoCache {
             .setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
+    /**
+     * 清理视频盘缓存。用户 2026-11-05：release 失败（播放器仍持有缓存/目录被占用）时保留单例并返回
+     * false——此时若置 null，下次 obtain 会在同目录新建第二个 SimpleCache，撞 media3 的
+     * 「SimpleCache is already in use」直接崩掉播放，故宁可不清也不能置空。
+     */
     @Synchronized
-    fun clear(context: Context) {
-        runCatching { cache?.release() }
+    fun clear(context: Context): Boolean {
+        val c = cache
+        if (c != null && runCatching { c.release() }.isFailure) return false
         cache = null
         runCatching { File(context.cacheDir, "video").deleteRecursively() }
+        return true
     }
 
     fun sizeBytes(context: Context): Long =

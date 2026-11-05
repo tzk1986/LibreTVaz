@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -49,19 +50,17 @@ private val KB_ROWS = KB_KEYS.toList().chunked(6)
 /** 词 chip：热门/关联/历史共用（用户 2026-11-04 终稿：全称直显——允许两行、禁省略号；点击=直接搜索） */
 @Composable
 private fun WordChip(label: String, onClick: () -> Unit) {
-    AssistChip(
-        onClick = onClick,
-        label = { Text(label, maxLines = 2, style = MaterialTheme.typography.bodyMedium) },
-    )
+    TmChip(selected = false, onClick = onClick, label = label)
 }
 
-/** 首页 FuncCard 同款小钮（用户 2026-11-04：搜索页样式统一首页——surfaceVariant 圆角10+labelMedium，不再用大 Button） */
+/** 首页 FuncCard 同款小钮（用户 2026-11-04：搜索页样式统一首页——圆角10+labelMedium，不再用大 Button；
+ *  用户 2026-11-05 终改：随 FuncCard 同步白 20% 半透） */
 @Composable
 private fun HomeBtn(label: String, modifier: Modifier = Modifier, tight: Boolean = false, fill: Boolean = true, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = Color(0x33FFFFFF),
         modifier = modifier,
     ) {
         Box(
@@ -228,37 +227,38 @@ fun SearchScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // 首页 StatCard 同款（labelMedium+surfaceVariant0.5）：不再比 tab 高（用户 2026-11-04 对齐首页）
+                    // 首页 StatCard 同款（labelMedium+白20%半透底，用户 2026-11-05 随顶栏统一）：不再比 tab 高（用户 2026-11-04 对齐首页）
                     Box(
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .background(Color(0x33FFFFFF))
                             .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("全局搜索 · ${if (zone) "资源口" else "点播"}", style = MaterialTheme.typography.labelMedium) }
-                    // 参考图无返回钮，按用户要求保留供手机端点按
-                    TextButton(onClick = onBack) { Text("← 返回", style = MaterialTheme.typography.bodyMedium) }
+                    // 参考图无返回钮，按用户要求保留供手机端点按（统一 TmBtn 小号 2026-11-05）
+                    TmBtn(onClick = onBack) { Text("← 返回") }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // 输入框缩高（用户 2026-11-04：默认 OutlinedTextField 56dp 太大，与热门/历史 chip 同级）：
-                    // m3 不支持改内容内边距→自绘描边容器+BasicTextField，字号与 IME 行为原样保留
+                    // 输入框（用户 2026-11-04 缩高→2026-11-05 再调）：本页同行按钮=HomeBtn（10dp 圆角、
+                    // vertical 5dp 内边距≈30dp 高），原按全局 TmFieldHeight=48dp+8dp 圆角画比邻居高一截不和谐；
+                    // 改同圆角同内边距自然等高，字号随按钮走 labelMedium。m3 不支持改内容内边距→仍自绘描边容器
                     val tfSrc = remember { MutableInteractionSource() }
                     val tfFocused by tfSrc.collectIsFocusedAsState()
                     Box(
-                        modifier = Modifier.weight(1f).height(40.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
                             .border(
                                 1.dp,
                                 if (tfFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                                RoundedCornerShape(8.dp),
+                                RoundedCornerShape(10.dp),
                             )
-                            .padding(horizontal = 12.dp),
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
                         contentAlignment = Alignment.CenterStart,
                     ) {
                         if (query.isEmpty()) {
                             Text(
                                 "请输入要搜索的内容",
                                 maxLines = 1,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -266,7 +266,7 @@ fun SearchScreen(
                             value = query,
                             onValueChange = { query = it },
                             singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                            textStyle = MaterialTheme.typography.labelMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             interactionSource = tfSrc,
                             // 手机横屏软键盘 Enter=搜索（用户 2026-11-04 适配：IME 占半屏时左列按钮被遮，✓ 键直发；web 无软键盘不涉及）
@@ -328,7 +328,7 @@ fun SearchScreen(
             Column(modifier = Modifier.width(rightW), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("搜索历史", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { vocab.clearKw(zone); kws = emptyList() }) { Text("🗑 清空", style = MaterialTheme.typography.bodySmall) }
+                    TmBtn(onClick = { vocab.clearKw(zone); kws = emptyList() }) { Text("🗑 清空") }
                 }
                 if (kws.isEmpty()) Text("暂无本池搜索历史", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f, fill = false)) {
@@ -343,8 +343,10 @@ fun SearchScreen(
     if (showSrcPick) {
         val all = store.vodSources().mapIndexed { si, s -> si to s }.filter { it.second.isAdult == zone }
         AlertDialog(
+        modifier = Modifier.width(tmDialogW()),
+        properties = tmDialogProps,
             onDismissRequest = { showSrcPick = false },
-            confirmButton = { TextButton(onClick = { showSrcPick = false }) { Text("关闭") } },
+            confirmButton = { TmBtn(onClick = { showSrcPick = false }) { Text("关闭") } },
             title = { Text("指定搜索源（${if (zone) "资源口" else "点播"}）") },
             text = {
                 LazyColumn {

@@ -77,7 +77,7 @@ object PerfCore {
     private val REL_PUNCT = Regex("[：:．·、,，_\\-—/|｜《》()（）\\[\\]【】]+")
     private val REL_SEASON = Regex("第[0-9零一二三四五六七八九十百两]+[季部篇期]|[Ss]eason\\s*\\d+|[Pp]art\\s*\\d+")
 
-    /** 搜关联候选词（对齐 web relCandidates）：核心词→分段前缀短语（连续拉丁词并为一段）→核心+季部→原名；归一去重≤max */
+    /** 快搜关联词候选（对齐 web relCandidates）：核心词→分段前缀短语（连续拉丁词并为一段）→核心+季部→原名；归一去重≤max */
     fun relCandidates(name: String?, max: Int = 6): List<String> {
         val orig = (name ?: "").trim()
         if (orig.isEmpty()) return emptyList()

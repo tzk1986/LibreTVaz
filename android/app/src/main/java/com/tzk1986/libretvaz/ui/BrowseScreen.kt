@@ -2,6 +2,12 @@ package com.tzk1986.libretvaz.ui
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -110,9 +116,10 @@ fun BrowseScreen(
     var canLoadMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // 地区筛选墙（web Region.PRESETS）：分类命中预设时按 Region.of 客户端过滤，null=全部
-    var preset by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
+    // 用户 2026-11-05 底部筛选面板：预设选择进程级（重开面板显上次选中，刷新/选全部才重置）
+    var preset by WallMem.typePreset
     // web Vod.pSrv：预设命中分类树地区子分类→服务端按这些 id 合并拉取（三级 (a)）；null=客户端 (b)
-    var pSrv by remember { mutableStateOf<List<VodType>?>(null) }
+    var pSrv by WallMem.typePresetSrv
     // 服务端二级筛选（web Vod.sub/area/year/lang + buildFilters）：子类覆盖 t，扩展值拼 &area=&year=&lang=
     var subId by remember { mutableStateOf<String?>(null) }
     var areaSel by remember { mutableStateOf<String?>(null) }
@@ -121,9 +128,12 @@ fun BrowseScreen(
     var filters by remember { mutableStateOf<VodFilters?>(null) } // web Vod.filters：pg=1 响应后重建
     // ===== B10 聚合墙（web Home.aggMode/runAggWall/aggLoadMore 等价）：首启默认聚合，源弹窗可随时切回单源 =====
     var aggMode by remember { mutableStateOf(settings.aggMode) }
-    var aggCat by remember { mutableIntStateOf(-1) } // -1=最新；0..3=固定四大类
-    var aggPreset by remember { mutableStateOf<Pair<String, List<String>>?>(null) } // 地区预设（标签, 地区集）
+    // 用户 2026-11-04 修复返回路径：页签态提升到进程级（进详情/播放返回不再复位「最新」，回原分类如电视剧）
+    var aggCat by WallMem.browseCat // -1=最新；0..3=固定四大类
+    var aggPreset by WallMem.aggPreset // 地区预设（标签, 地区集）——进程级，同 preset 理由
     var showFilters by remember { mutableStateOf(false) } // web Vod.showFilters：再点当前分类=展开/收起筛选行
+    // 用户 2026-11-05：面板打开即把按键焦点移入，遥控器方向键可直接选筛选项；BACK 收面板
+    val panelFocus = remember { FocusRequester() }
     var aggPage by remember { mutableIntStateOf(1) }
     var aggMore by remember { mutableStateOf(false) }
     var aggLoadingMore by remember { mutableStateOf(false) }
@@ -146,9 +156,25 @@ fun BrowseScreen(
     // 模式切换先清墙与页码，避免两模式残留数据互踩
     LaunchedEffect(aggMode) { items = emptyList(); targetPage = 1; showFilters = false }
 
+    // 用户 2026-11-05：筛选面板打开后焦点入首个筛选项。AnimatedVisibility+LazyRow 进场组合有先后、
+    // 触屏点开后触摸模式也会拒焦——有限重试；遥控器任意按键退出触摸模式后下一跳即落焦
+    LaunchedEffect(showFilters) {
+        if (showFilters) {
+            for (i in 0 until 15) {
+                delay(150)
+                val ok = runCatching { panelFocus.requestFocus() }.getOrDefault(false)
+                if (ok) break
+            }
+        }
+    }
+
     // web resetFilterVals：子类/扩展值/地区预设一并清
     fun resetFilterVals() {
         subId = null; areaSel = null; yearSel = null; langSel = null; preset = null; pSrv = null; filters = null
+    }
+    // 用户 2026-11-05 底部筛选面板「切换 tab 不清筛选」：跨分类只清依赖分类树的值，地区预设(preset/pSrv)保留
+    fun resetTypeFilterVals() {
+        subId = null; areaSel = null; yearSel = null; langSel = null; filters = null
     }
 
     // web buildFilters：子类=pid 指向当前分类；扩展值=分类 extend 与 videolist meta 合并（meta 优先）
@@ -402,6 +428,10 @@ fun BrowseScreen(
 
     /** 🔄 刷新钮（web vodRefresh 等价）：只清点播相关分片（历史/收藏/测速不动），清后重拉本页 */
     fun refreshPage() {
+        // 用户 2026-11-05 底部筛选面板：刷新=唯一整体重置口（筛选项回「全部」并收起面板）
+        showFilters = false
+        aggPreset = null
+        resetFilterVals()
         if (aggMode) Agg.purgeWallShards() else source?.let { Agg.purgeTypesOf(it.url); Agg.purgeMrgOf(it.url) }
         Toast.makeText(context, "已清本页缓存，重新拉取中…", Toast.LENGTH_SHORT).show()
         nonce++
@@ -412,6 +442,8 @@ fun BrowseScreen(
     BackHandler {
         when {
             showSourcePicker -> showSourcePicker = false
+            // 用户 2026-11-05：底部筛选面板打开时返回键只收面板（不清筛选值，重开显上次选中）
+            showFilters -> showFilters = false
             !atTop -> scope.launch { gridState.animateScrollToItem(0) }
             else -> {
                 val now = System.currentTimeMillis()
@@ -481,8 +513,117 @@ fun BrowseScreen(
             }
     }
 
+    // 底部筛选面板（用户 2026-11-05 照 TVBox 截图2）：再点当前 tab 弹出（首点只切类），弹出即抢焦点便于遥控器；选中墙即时过滤且面板不收起；
+    // 收起只走返回键/再点当前 tab；重开显上次选中；切分类不清地区预设；仅刷新或选「全部」重置
+    // 样式（用户 2026-11-05 追加）：面板无实底、海报墙直接透出；chip=半透明药丸
+    val filterPanel: @Composable () -> Unit = {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp, bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+        CompactChips {
+            if (aggMode) {
+                val aggPresets = Agg.AGG_CATS.getOrNull(aggCat)?.let { Region.PRESETS[it.key] }
+                if (!aggPresets.isNullOrEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PanelLabel("地区")
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(aggPresets) { idx, (pLabel, regions) ->
+                                PanelChip(
+                                    selected = (aggPreset?.first ?: "全部") == pLabel,
+                                    onClick = { aggPreset = if (regions.isEmpty()) null else pLabel to regions },
+                                    label = pLabel,
+                                    fr = if (idx == 0) panelFocus else null, // 面板打开首项即焦点，遥控器方向键可用
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                val curType = type
+                if (curType != null) {
+                    val f = filters
+                    // web presetKeyForTab：沿 pid 上溯根名+本名匹配预设族（「电影片」「电视剧(年)」等别名也能命中）
+                    val presets = Agg.presetKeyOf(curType, types)?.let { Region.PRESETS[it] }
+                    val hasGrps = f != null && !f.isEmpty()
+                    if ((presets == null || presets.isEmpty()) && !hasGrps) {
+                        PanelLabel("该分类不支持二级筛选（源未提供子分类或扩展字段）", small = false)
+                    } else {
+                        val yr = java.time.LocalDate.now().year.toString()
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val label: @Composable (String) -> Unit = { s -> PanelLabel(s) }
+                            // ① 地区预设：树里有地区子分类→服务端合并 (a)，否则客户端 Region.of 兜底 (b)；
+                            //   置灰=无命中且已载条目无匹配亦无 UNKNOWN（web L1743）；选中面板不收起（用户 2026-11-05）
+                            if (!presets.isNullOrEmpty()) {
+                                item { label("地区") }
+                                itemsIndexed(presets) { idx, (pLabel, regions) ->
+                                    val pOff = regions.isNotEmpty() &&
+                                        Agg.presetIdsOf(regions, curType, types) == null &&
+                                        items.isNotEmpty() &&
+                                        !items.any { val r = Region.of(it); r == "UNKNOWN" || regions.contains(r) }
+                                    PanelChip(
+                                        selected = (preset?.first ?: "全部") == pLabel,
+                                        onClick = {
+                                            if (pOff) {
+                                                Toast.makeText(context, "该源分类未收录此地区内容", Toast.LENGTH_SHORT).show()
+                                                return@PanelChip
+                                            }
+                                            preset = if (regions.isEmpty()) null else pLabel to regions
+                                            pSrv = (preset)?.let { Agg.presetIdsOf(it.second, curType, types) }
+                                            targetPage = 1
+                                        },
+                                        label = pLabel,
+                                        dim = pOff,
+                                        fr = if (idx == 0) panelFocus else null,
+                                    )
+                                }
+                            }
+                            // ② 子类组：pid 命中当前分类的子类，点选=服务端 t 覆盖（web Vod.sub）
+                            if (f != null && f.subs.isNotEmpty()) {
+                                item { label("子类") }
+                                item {
+                                    PanelChip(selected = subId == null, onClick = { subId = null; targetPage = 1 }, label = "全部")
+                                }
+                                items(f.subs.take(30)) { sub ->
+                                    PanelChip(
+                                        selected = subId == sub.id,
+                                        onClick = { subId = sub.id; targetPage = 1 },
+                                        label = sub.name,
+                                    )
+                                }
+                            }
+                            // ③④⑤ 扩展组（web grp()）：全部+选项≤30，同项再按=取消；年份插本年去重；选中面板不收起（用户 2026-11-05）
+                            fun grpItems(name: String, opts: List<String>, sel: String?, clear: () -> Unit, pick: (String) -> Unit) {
+                                item { label(name) }
+                                item { PanelChip(selected = sel == null, onClick = { clear(); targetPage = 1 }, label = "全部") }
+                                items(opts.take(30)) { v ->
+                                    PanelChip(
+                                        selected = sel == v,
+                                        onClick = { if (sel == v) clear() else pick(v); targetPage = 1 },
+                                        label = if (v == yr) "本年($yr)" else v,
+                                    )
+                                }
+                            }
+                            if (f != null) {
+                                if (f.area.isNotEmpty()) grpItems("地区(源扩展)", f.area, areaSel, { areaSel = null }, { areaSel = it })
+                                val years = listOf(yr) + f.year.filter { it != yr }
+                                if (f.year.isNotEmpty()) grpItems("年份", years, yearSel, { yearSel = null }, { yearSel = it })
+                                if (f.lang.isNotEmpty()) grpItems("语言", f.lang, langSel, { langSel = null }, { langSel = it })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
     // 紧凑化（用户 2026-11-03 TV/投影要求）：列间距 8→4dp，chip 行最小触控 48→26dp，标题降字号——纵向全让海报墙
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 点播即首页（web P8）：无源时保留顶栏骨架，内容区仅提示（对齐 web typeRow 文案）
         if (sources.isEmpty()) {
@@ -493,7 +634,7 @@ fun BrowseScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("无点播源：在「源管理」导入订阅或添加内置源", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                Button(onClick = onSources) { Text("源管理") }
+                TmBtn(onClick = onSources) { Text("源管理") }
             }
             return@Column
         }
@@ -507,12 +648,12 @@ fun BrowseScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (atHomeNow) item(span = { GridItemSpan(maxLineSpan) }) { browseTopBar() }
-            // 分类 tab 改 stickyHeader 吸顶常驻（用户 2026-11-04 复刻资源口方案）：半透明浮层，
-            // 海报从底下穿过做整体背景；error 提示并入吸顶列常驻可见
+            // 分类 tab 改 stickyHeader 吸顶常驻（用户 2026-11-04 复刻资源口方案；参考图定稿：吸顶行不留底带，
+            // chip 自身镂空透明、选中实心，其余全透海报墙）；error 提示并入吸顶列常驻可见
             stickyHeader {
                 CompactChips {
                     Column(
-                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f)),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
         if (aggMode) {
@@ -520,43 +661,27 @@ fun BrowseScreen(
             val aggIdx = aggCat
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
-                    // web：再点当前「最新」=no-op（!id return），切过去才清预设并收起筛选行
-                    FilterChip(selected = aggCat == -1, onClick = {
-                        if (aggCat != -1) { aggCat = -1; aggPreset = null; showFilters = false }
-                    }, label = { Text("最新") })
+                    // 切「最新」只收起面板；预设值保留（再点分类 tab 显上次选中，用户 2026-11-05）
+                    WallChip(selected = aggCat == -1, onClick = {
+                        if (aggCat != -1) { aggCat = -1; showFilters = false }
+                    }, label = "最新")
                 }
                 items(Agg.AGG_CATS) { c ->
                     val i = Agg.AGG_CATS.indexOf(c)
-                    FilterChip(
+                    WallChip(
                         selected = aggIdx == i,
                         onClick = {
-                            if (aggIdx == i) {
-                                // web R8(agg)：再点当前分类=展开/收起地区行；无预设的分类不可展开
-                                if (Region.PRESETS[c.key]?.isNotEmpty() == true) showFilters = !showFilters
-                            } else { aggCat = i; aggPreset = null; showFilters = false }
+                            // 用户 2026-11-05 底部面板：首点=只切类不开面板；再点当前 tab=弹面板+焦点入面板，BACK 收起；切类不清筛选值
+                            if (Region.PRESETS[c.key]?.isNotEmpty() == true) {
+                                if (aggIdx == i) showFilters = !showFilters
+                                else { aggCat = i; showFilters = false }
+                            } else if (aggIdx != i) { aggCat = i; showFilters = false }
                         },
-                        label = { Text(c.key) },
+                        label = c.key,
                     )
                 }
             }
-            // 地区预设（web R8(agg) drawSubRow）：门控 tab+showFilters，同项再点=取消
-            val aggPresets = Agg.AGG_CATS.getOrNull(aggCat)?.let { Region.PRESETS[it.key] }
-            if (aggPresets != null && showFilters) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(aggPresets) { (label, regions) ->
-                        FilterChip(
-                            selected = (aggPreset?.first ?: "全部") == label,
-                            onClick = {
-                                // 选中即收起筛选行让位海报墙（用户 2026-11-03 TV 大屏要求）；取消/全部保持展开
-                                val cancel = regions.isEmpty() || aggPreset?.first == label
-                                aggPreset = if (cancel) null else label to regions
-                                if (!cancel) showFilters = false
-                            },
-                            label = { Text(label) },
-                        )
-                    }
-                }
-            }
+            // 地区预设行已挪底部面板（用户 2026-11-05 照 TVBox 截图2；见 filterPanel）
         } else {
             if (types.isNotEmpty()) {
                 val typeList = types
@@ -564,113 +689,30 @@ fun BrowseScreen(
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item {
                         // web：id=='' 分支恒重拉最新（非 toggle），并收起筛选行
-                        FilterChip(
+                        WallChip(
                             selected = currentType == null,
                             onClick = { type = null; resetFilterVals(); showFilters = false; targetPage = 1 },
-                            label = { Text("更新推荐") },
+                            label = "更新推荐",
                         )
                     }
                     items(typeList) { t ->
-                        FilterChip(
+                        WallChip(
                             selected = t.id == currentType?.id,
                             onClick = {
+                                // 用户 2026-11-05 底部面板：首点=只切类（保留地区预设，不开面板）；再点当前=弹面板+焦点入面板，BACK 收起
                                 if (t.id == currentType?.id) {
-                                    showFilters = !showFilters // web：再点当前分类=展开/收起二级筛选
+                                    showFilters = !showFilters
                                 } else {
-                                    type = t; resetFilterVals(); showFilters = false; targetPage = 1
+                                    type = t; resetTypeFilterVals(); showFilters = false; targetPage = 1
                                 }
                             },
-                            label = { Text(t.name) },
+                            label = t.name,
                         )
                     }
                 }
             }
 
-            // 二级筛选行（web drawSubRow）：地区预设 + 子类/地区(源扩展)/年份/语言组，门控 tab+showFilters
-            val curType = type
-            if (curType != null && showFilters) {
-                val f = filters
-                // web presetKeyForTab：沿 pid 上溯根名+本名匹配预设族（「电影片」「电视剧(年)」等别名也能命中）
-                val presets = Agg.presetKeyOf(curType, types)?.let { Region.PRESETS[it] }
-                val hasGrps = f != null && !f.isEmpty()
-                if ((presets == null || presets.isEmpty()) && !hasGrps) {
-                    Text(
-                        "该分类不支持二级筛选（源未提供子分类或扩展字段）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
-                } else {
-                    val yr = java.time.LocalDate.now().year.toString()
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        val label = @Composable { s: String ->
-                            Text(s, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                        }
-                        // ① 地区预设：树里有地区子分类→服务端合并 (a)，否则客户端 Region.of 兜底 (b)；
-                        //   置灰=无命中且已载条目无匹配亦无 UNKNOWN（web L1743）；选中即收起筛选行（用户 2026-11-03 TV 大屏要求）
-                        if (!presets.isNullOrEmpty()) {
-                            item { label("地区") }
-                            items(presets) { (pLabel, regions) ->
-                                val pOff = regions.isNotEmpty() &&
-                                    Agg.presetIdsOf(regions, curType, types) == null &&
-                                    items.isNotEmpty() &&
-                                    !items.any { val r = Region.of(it); r == "UNKNOWN" || regions.contains(r) }
-                                FilterChip(
-                                    selected = (preset?.first ?: "全部") == pLabel,
-                                    onClick = {
-                                        if (pOff) {
-                                            Toast.makeText(context, "该源分类未收录此地区内容", Toast.LENGTH_SHORT).show()
-                                            return@FilterChip
-                                        }
-                                        val cancel = regions.isEmpty() || preset?.first == pLabel
-                                        preset = if (cancel) null else pLabel to regions
-                                        pSrv = (preset)?.let { Agg.presetIdsOf(it.second, curType, types) }
-                                        if (!cancel) showFilters = false
-                                        targetPage = 1
-                                    },
-                                    label = {
-                                        Text(
-                                            pLabel,
-                                            color = if (pOff) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f) else Color.Unspecified,
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                        // ② 子类组：pid 命中当前分类的子类，点选=服务端 t 覆盖（web Vod.sub）
-                        if (f != null && f.subs.isNotEmpty()) {
-                            item { label("子类") }
-                            item {
-                                FilterChip(selected = subId == null, onClick = { subId = null; targetPage = 1 }, label = { Text("全部") })
-                            }
-                            items(f.subs.take(30)) { sub ->
-                                FilterChip(
-                                    selected = subId == sub.id,
-                                    onClick = { subId = sub.id; showFilters = false; targetPage = 1 },
-                                    label = { Text(sub.name) },
-                                )
-                            }
-                        }
-                        // ③④⑤ 扩展组（web grp()）：全部+选项≤30，同项再按=取消；年份插本年去重；选中即收起（用户 2026-11-03）
-                        fun grpItems(name: String, opts: List<String>, sel: String?, clear: () -> Unit, pick: (String) -> Unit) {
-                            item { label(name) }
-                            item { FilterChip(selected = sel == null, onClick = { clear(); targetPage = 1 }, label = { Text("全部") }) }
-                            items(opts.take(30)) { v ->
-                                FilterChip(
-                                    selected = sel == v,
-                                    onClick = { if (sel == v) clear() else { pick(v); showFilters = false }; targetPage = 1 },
-                                    label = { Text(if (v == yr) "本年($yr)" else v) },
-                                )
-                            }
-                        }
-                        if (f != null) {
-                            if (f.area.isNotEmpty()) grpItems("地区(源扩展)", f.area, areaSel, { areaSel = null }, { areaSel = it })
-                            val years = listOf(yr) + f.year.filter { it != yr }
-                            if (f.year.isNotEmpty()) grpItems("年份", years, yearSel, { yearSel = null }, { yearSel = it })
-                            if (f.lang.isNotEmpty()) grpItems("语言", f.lang, langSel, { langSel = null }, { langSel = it })
-                        }
-                    }
-                }
-            }
+            // 二级筛选行已挪底部面板（用户 2026-11-05 照 TVBox 截图2；见 filterPanel）
         }
                         // 功能行已并入首页顶栏（用户 2026-11-03：源旁同款小方块，空间全让海报墙）；
                         // 分类/预设提示文字已全撤（用户 2026-11-03 定稿）；加载态由墙尾哨兵呈现，error 由吸顶列兜底常驻可见
@@ -712,12 +754,23 @@ fun BrowseScreen(
         }
     }
 
+    // 底部筛选面板浮层（用户 2026-11-05 截图2 样式）：吸底覆盖，不占墙布局空间
+    AnimatedVisibility(
+        visible = showFilters,
+        enter = slideInVertically { it } + fadeIn(),
+        exit = slideOutVertically { it } + fadeOut(),
+        modifier = Modifier.align(Alignment.BottomCenter),
+    ) { filterPanel() }
+    }
+
     if (showSourcePicker) {
         val pickerSources = sources
         AlertDialog(
+        modifier = Modifier.width(tmDialogW()),
+        properties = tmDialogProps,
             onDismissRequest = { showSourcePicker = false },
             confirmButton = {
-                TextButton(onClick = { showSourcePicker = false }) { Text("关闭") }
+                TmBtn(onClick = { showSourcePicker = false }) { Text("关闭") }
             },
             title = { Text("切换点播源") },
             text = {
@@ -768,7 +821,7 @@ internal fun WallSentinel(
 ) {
     when {
         loading -> Text("加载中…", modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        canMore -> Button(
+        canMore -> TmBtn(
             onClick = onMore,
             modifier = Modifier
                 .fillMaxWidth()
@@ -864,13 +917,63 @@ internal fun CompactChips(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 26.dp) { content() }
 }
 
+/** 镂空透明海报墙 chip（用户 2026-11-04 参考图：吸顶行不留任何底带，海报墙全透；
+ * 未选中=透明+描边镂空，选中=primaryContainer 实心；去默认 leading 勾位贴参考图） */
+@Composable
+internal fun WallChip(selected: Boolean, onClick: () -> Unit, label: String, labelColor: Color = Color.Unspecified) {
+    // 未选中字加淡投影（用户 2026-11-04：镂空后文字压在亮海报上易失读，阴影兜底）
+    val base = LocalTextStyle.current
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        leadingIcon = {},
+        label = {
+            Text(
+                label,
+                color = labelColor,
+                style = if (selected) base else base.copy(
+                    shadow = androidx.compose.ui.graphics.Shadow(
+                        color = Color.Black.copy(alpha = 0.55f), offset = androidx.compose.ui.geometry.Offset(0f, 2f), blurRadius = 6f,
+                    ),
+                ),
+            )
+        },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = Color.Transparent,
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            disabledContainerColor = Color.Transparent,
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
+        ),
+    )
+}
+
+/** 底部筛选面板组名标签（用户 2026-11-05 截图：面板透出海报墙，白字+投影保读） */
+@Composable
+internal fun PanelLabel(s: String, small: Boolean = true) {
+    Text(
+        s,
+        style = (if (small) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall)
+            .copy(shadow = androidx.compose.ui.graphics.Shadow(
+                color = Color.Black.copy(alpha = 0.7f), offset = androidx.compose.ui.geometry.Offset(0f, 2f), blurRadius = 8f,
+            )),
+        color = Color.White,
+    )
+}
+
+// PanelChip 已并入 TmChip.kt（全 app 统一黑底 chip）
+
 // 顶栏小钮（用户 2026-11-03：去图标改单行文字更省位；源钮保留图标与文字横排；internal 供资源口顶栏复用同款）
+// 用户 2026-11-05 终改：底色黑半透在纯黑背景上完全隐形——改白 20% 半透，与全 app 统一按钮（PillButton/TmBtn）同款
 @Composable
 internal fun FuncCard(icon: String?, name: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = Color(0x33FFFFFF),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -894,7 +997,7 @@ internal fun FuncCard(icon: String?, name: String, onClick: () -> Unit) {
 internal fun StatCard(name: String) {
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        color = Color(0x33FFFFFF), // 用户 2026-11-05：与 FuncCard 同步改白 20%（纯黑底上黑半透不可见）
     ) {
         Text(
             name,

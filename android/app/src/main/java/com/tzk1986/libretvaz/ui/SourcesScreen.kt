@@ -120,18 +120,18 @@ fun SourcesScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onBack) { Text("返回") }
+            TmBtn(onClick = onBack) { Text("返回") }
             Text("源管理", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
         }
 
         // 四按钮组（web smAdd/smSubNow/smAuto/smClear 等价）
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
+            TmBtn(onClick = {
                 val n = BuiltinSources.addMissing(context, store)
                 refresh()
                 message = if (n > 0) "已添加 $n 个已测源" else if (BuiltinSources.loadPreset(context).isEmpty()) "本包未携带私有站单（无源版），请用下方「导入备份文件」恢复" else "内置源已全部添加"
             }) { Text("＋ 添加内置已测源") }
-            OutlinedButton(enabled = !busy, onClick = {
+            TmBtn(enabled = !busy, onClick = {
                 settings.subsTs = 0L // 强制过期 → SourceGuard 内 refreshSubsIfStale 立即重拉合并
                 busy = true
                 scope.launch {
@@ -142,11 +142,11 @@ fun SourcesScreen(
                     refresh(); busy = false
                 }
             }) { Text(if (busy) "维护中…" else "立即更新订阅") }
-            OutlinedButton(onClick = {
+            TmBtn(onClick = {
                 autoMaintain = !autoMaintain; settings.autoMaintain = autoMaintain
                 Toast.makeText(context, if (autoMaintain) "源自动维护已开启" else "自动维护已关闭：不再测活/更新订阅/自动切换", Toast.LENGTH_SHORT).show()
-            }) { Text("自动维护：${if (autoMaintain) "开" else "关"}") }
-            OutlinedButton(onClick = { confirmClear = true }) { Text("清除所有点播源") }
+            }, selected = autoMaintain) { Text("自动维护：${if (autoMaintain) "开" else "关"}") }
+            TmBtn(onClick = { confirmClear = true }) { Text("清除所有点播源") }
         }
         Text(
             "订阅 ${store.subs().size} 条（每 24h 自动重拉合并新源）· 死源连续失败 ${HealthStore.DEAD_FAILS} 次标失效，满 7 天自动移除 · 当前源失效自动切换最快健康源（跳过专区）",
@@ -162,25 +162,25 @@ fun SourcesScreen(
                 onValueChange = { importUrl = it },
                 label = { Text("配置链接") },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).height(TmFieldHeight), // 用户 2026-11-05：输入框与按钮同高
             )
-            Button(enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
-            OutlinedButton(onClick = { showQr = true }) { Text("📱 扫码导入") }
+            TmBtn(enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
+            TmBtn(onClick = { showQr = true }) { Text("📱 扫码导入") }
         }
         // 订阅仓库预设（复用 SourceGuard.PRESETS 单一事实源）：点击即填入并导入，免手输长 URL
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SourceGuard.PRESETS.forEach { (pname, purl) ->
-                OutlinedButton(
+                TmBtn(
                     enabled = !busy,
                     onClick = { importUrl = purl; doImport(purl) },
-                ) { Text(pname, style = MaterialTheme.typography.labelMedium) }
+                ) { Text(pname) }
             }
         }
         // 站单备份文件导入（无源版救急）：格式同 assets=[[名称,地址],…]，点播/专区二选一按钮分流
         Text("备份文件恢复（无源版导入私有站单）", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { importVodPicker.launch("*/*") }) { Text("📥 导入点播清单") }
-            OutlinedButton(onClick = { importZonePicker.launch("*/*") }) { Text("📥 导入专区站单") }
+            TmBtn(onClick = { importVodPicker.launch("*/*") }) { Text("📥 导入点播清单") }
+            TmBtn(onClick = { importZonePicker.launch("*/*") }) { Text("📥 导入专区站单") }
         }
         message?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
@@ -189,15 +189,15 @@ fun SourcesScreen(
         // 手动添加单个源
         Text("手动添加", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }, singleLine = true, modifier = Modifier.weight(0.3f))
-            OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("接口/播放列表地址") }, singleLine = true, modifier = Modifier.weight(0.7f))
+            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }, singleLine = true, modifier = Modifier.weight(0.3f).height(TmFieldHeight))
+            OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("接口/播放列表地址") }, singleLine = true, modifier = Modifier.weight(0.7f).height(TmFieldHeight))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = {
+            TmBtn(onClick = {
                 if (store.addVod(VodSource(name, url))) { name = ""; url = ""; refresh(); message = "已添加点播源" }
                 else message = "未添加：地址无效或已存在"
             }) { Text("＋ 点播源") }
-            TextButton(onClick = {
+            TmBtn(onClick = {
                 if (store.addLive(LiveSource(name, url))) { name = ""; url = ""; refresh(); message = "已添加直播源" }
                 else message = "未添加：地址无效或已存在"
             }) { Text("＋ 直播源") }
@@ -237,9 +237,11 @@ fun SourcesScreen(
     // 清除所有点播源（web smClear askYes 等价）：确认弹窗明示「同时关自动维护防订阅回填」
     if (confirmClear) {
         AlertDialog(
+        modifier = Modifier.width(tmDialogW()),
+        properties = tmDialogProps,
             onDismissRequest = { confirmClear = false },
             confirmButton = {
-                Button(onClick = {
+                TmBtn(onClick = {
                     confirmClear = false
                     settings.autoMaintain = false; autoMaintain = false
                     store.replaceVod(emptyList())
@@ -248,7 +250,7 @@ fun SourcesScreen(
                     message = "已清除所有点播源（自动维护同步关闭，方便手动测试导入；可在「自动维护」钮再打开）"
                 }) { Text("清除") }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } },
+            dismissButton = { TmBtn(onClick = { confirmClear = false }) { Text("取消") } },
             title = { Text("确认清除所有点播源？") },
             text = { Text("将清空常规与专区全部点播源（含订阅合并结果），并自动关闭「自动维护」避免订阅回填——方便手动测试导入；之后可用「自动维护」按钮重新打开。") },
         )
@@ -258,14 +260,16 @@ fun SourcesScreen(
 
     confirmSub?.let { u ->
         AlertDialog(
+        modifier = Modifier.width(tmDialogW()),
+        properties = tmDialogProps,
             onDismissRequest = { confirmSub = null },
             title = { Text("收到远程订阅链接，确认导入？") },
             text = { Text(u.take(200), style = MaterialTheme.typography.bodySmall, maxLines = 6) },
             confirmButton = {
-                Button(onClick = { confirmSub = null; doImport(u) }) { Text("导入") }
+                TmBtn(onClick = { confirmSub = null; doImport(u) }) { Text("导入") }
             },
             dismissButton = {
-                TextButton(onClick = { confirmSub = null; message = "已忽略远程订阅导入" }) { Text("忽略") }
+                TmBtn(onClick = { confirmSub = null; message = "已忽略远程订阅导入" }) { Text("忽略") }
             },
         )
     }
@@ -287,7 +291,7 @@ private fun SourceRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 AdultTag(adult)
-                Text(name, style = MaterialTheme.typography.bodyLarge)
+                Text(name, style = MaterialTheme.typography.bodyMedium)
                 badge?.let { (text, dead) ->
                     Text(
                         text,
@@ -298,6 +302,6 @@ private fun SourceRow(
             }
             Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 1)
         }
-        TextButton(onClick = onDelete) { Text("删除") }
+        TmBtn(onClick = onDelete) { Text("删除") }
     }
 }

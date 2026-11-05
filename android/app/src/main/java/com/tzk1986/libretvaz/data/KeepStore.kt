@@ -94,6 +94,12 @@ class KeepStore(context: Context) {
         ProgStore(ctx).pruneOrphans(ctx)
     }
 
+    /** 清空本池收藏（用户 2026-11-05：收藏墙照历史墙同款，含「清空」） */
+    fun clear(zone: Boolean) {
+        persist(all().filterNot { it.vod.isAdult == zone })
+        ProgStore(ctx).pruneOrphans(ctx)
+    }
+
     fun updatedCount(zone: Boolean): Int = list(zone).count { it.updated }
 
     /** checkKeeps 回写（web keepchk 等价）：键=sourceUrl|vodId；基线随检更新，徽标只增不减（进详情才清） */

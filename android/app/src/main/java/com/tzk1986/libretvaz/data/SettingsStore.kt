@@ -61,7 +61,7 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_FUZZY, true)
         set(value) = prefs.edit().putBoolean(KEY_FUZZY, value).apply()
 
-    /** 对齐 web fongmi_autosrc：全线失败自动搜关联换源续播（默认关） */
+    /** 对齐 web fongmi_autosrc：全线失败自动快搜换源续播（默认关） */
     var autoSrc: Boolean
         get() = prefs.getBoolean(KEY_AUTO_SRC, false)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_SRC, value).apply()

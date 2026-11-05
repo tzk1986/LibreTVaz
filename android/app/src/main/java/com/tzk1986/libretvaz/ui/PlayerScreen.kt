@@ -295,8 +295,8 @@ fun PlayerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Button(onClick = onBack) { Text("返回") }
-                    Button(onClick = { if (!switching) showSrcPicker = true }) {
+                    TmBtn(onClick = onBack) { Text("返回") }
+                    TmBtn(onClick = { if (!switching) showSrcPicker = true }) {
                         Text(if (switching) "切换中…" else "📡 换源")
                     }
                     Text(LiveCtx.srcName.ifEmpty { "直播" }, color = Color.White, maxLines = 1)
@@ -335,7 +335,7 @@ fun PlayerScreen(
                 )
             }
         } else {
-            Button(
+            TmBtn(
                 onClick = onBack,
                 modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
             ) { Text("返回") }
@@ -344,9 +344,10 @@ fun PlayerScreen(
 
     if (showSrcPicker) {
         AlertDialog(
+        properties = tmDialogProps,
             onDismissRequest = { showSrcPicker = false },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { showSrcPicker = false }) { Text("取消") } },
+            dismissButton = { TmBtn(onClick = { showSrcPicker = false }) { Text("取消") } },
             title = { Text("切换直播源") },
             text = {
                 if (liveSrcs.size < 2) Text("只有 1 个直播源：到「源管理」添加或导入订阅后可换源")

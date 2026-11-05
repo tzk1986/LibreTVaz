@@ -47,9 +47,11 @@ fun RemoteQrDialog(mode: String, onDismiss: () -> Unit) {
     }
     val bmp = remember(url) { if (url.isEmpty()) null else qrBitmap(url, 640) }
     AlertDialog(
+    modifier = Modifier.width(tmDialogW()),
+    properties = tmDialogProps,
         onDismissRequest = onDismiss,
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        dismissButton = { TmBtn(onClick = onDismiss) { Text("关闭") } },
         title = { Text(if (mode == "sub") "扫码导入订阅" else "扫码远程输入") },
         text = {
             Column(

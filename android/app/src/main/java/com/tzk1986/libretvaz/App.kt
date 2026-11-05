@@ -26,6 +26,34 @@ class App : Application() {
             def?.uncaughtException(t, e)
         }
         DiskCache.init(this)
+        // 用户 2026-11-04：海报墙图统一走单例 ImageLoader——磁盘缓存 200MB LRU，
+        // 同 URL 冷启动/翻页直接复用不再重拉；超 3 天条目由 ImageGc 清除（冷启动+周期任务）
+        coil.Coil.setImageLoader(
+            coil.ImageLoader.Builder(this)
+                .diskCache(
+                    coil.disk.DiskCache.Builder()
+                        .directory(cacheDir.resolve("image_cache"))
+                        .maxSizeBytes(200L * 1024 * 1024)
+                        .build(),
+                )
+                // 用户 2026-11-04：磁盘命中即续期（3 天 TTL 按最后使用时间计，常用海报不被清）
+                .eventListener(object : coil.EventListener {
+                    override fun fetchEnd(
+                        request: coil.request.ImageRequest,
+                        fetcher: coil.fetch.Fetcher,
+                        options: coil.request.Options,
+                        result: coil.fetch.FetchResult?,
+                    ) {
+                        if ((result as? coil.fetch.SourceResult)?.dataSource == coil.decode.DataSource.DISK)
+                            com.tzk1986.libretvaz.data.ImageGc.touch(this@App, options.diskCacheKey)
+                    }
+                })
+                .build(),
+        )
+        // 用户 2026-11-04：延后 60s 再清——先让首屏海报经磁盘命中续期（touch），真正 3 天没用到的才进垃圾堆
+        Thread {
+            runCatching { Thread.sleep(60_000); com.tzk1986.libretvaz.data.ImageGc.purge(this) }
+        }.start()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "cmsCacheGc", ExistingPeriodicWorkPolicy.UPDATE,
             // 首轮延 1 分钟：开机即入队会撞包扫描/冷启动风暴致 onStartJob 超时 ANR（模拟器实测），此后按 30min 周期
@@ -40,6 +68,8 @@ class CacheGcWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         runCatching {
             DiskCache.purgeExpired()
             DiskCache.trimTo(DiskCache.MAX_BYTES)
+            // 用户 2026-11-04：海报图缓存 3 天 TTL 随周期 GC 一并清理
+            com.tzk1986.libretvaz.data.ImageGc.purge(applicationContext)
         }
         Result.success()
     }

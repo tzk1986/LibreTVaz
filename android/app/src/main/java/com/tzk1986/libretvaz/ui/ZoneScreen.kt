@@ -79,8 +79,9 @@ fun ZoneScreen(
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
     val settings = remember { SettingsStore(context) }
-    var cat by remember { mutableStateOf(-1) } // -1=最新；0..2=Zone.ZONE_CATS（客户端过滤，不重拉）
-    var flt by remember { mutableStateOf(-1) } // -1=全部；0..n=Zone.ZONE_FILTERS（与一级分类取交集）
+    // 用户 2026-11-04 修复返回路径：分类/筛选选择提升到进程级（进详情返回不再复位「最新」）
+    var cat by WallMem.zoneCat  // -1=最新；0..2=Zone.ZONE_CATS（客户端过滤，不重拉）
+    var flt by WallMem.zoneFlt  // -1=全部；0..n=Zone.ZONE_FILTERS（与一级分类取交集）
     var showSub by remember { mutableStateOf(false) } // 二级筛选行折叠（对齐首页 showFilters：再点当前一级=展开/收起，选中筛选即收起）
     var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
     var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
@@ -361,7 +362,7 @@ fun ZoneScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("暂无预置源：恢复预置或导入订阅后在此聚合海报墙", style = MaterialTheme.typography.bodyLarge)
-                Button(onClick = {
+                TmBtn(onClick = {
                     settings.zoneSeedVer = "" // 清标记重种（web zoneReseed）
                     reloadPool()
                 }) { Text("↻ 恢复预置源") }
@@ -380,38 +381,38 @@ fun ZoneScreen(
             // 再点当前一级=展开/收起，选中具体筛选即收起让位海报墙；取消/全部保持展开），全部客户端过滤零重拉
             stickyHeader {
                 CompactChips {
-                    // 半透明浮层（用户 2026-11-04：上滑后 tab 透明悬浮、海报从底下穿过做整体背景；
-                    // 未滚动时其后就是墙内容，透出感仅在滚动中出现）
+                    // 镂空透明（用户 2026-11-04 参考图定稿）：吸顶行不留底带、全透海报墙；
+                    // chip 未选中=透明描边镂空，选中=实心（WallChip 与首页共用同款）
                     Column(
-                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f)),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             item {
-                                FilterChip(
+                                WallChip(
                                     selected = cat == -1,
                                     onClick = { if (cat == -1) showSub = !showSub else { cat = -1; showSub = false } },
-                                    label = { Text("最新") },
+                                    label = "最新",
                                 )
                             }
                             itemsIndexed(Zone.ZONE_CATS) { i, c ->
-                                FilterChip(
+                                WallChip(
                                     selected = cat == i,
                                     onClick = { if (cat == i) showSub = !showSub else { cat = i; showSub = false } },
-                                    label = { Text(c.key) },
+                                    label = c.key,
                                 )
                             }
                         }
                         if (showSub) {
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 item {
-                                    FilterChip(selected = flt == -1, onClick = { flt = -1 }, label = { Text("全部") })
+                                    WallChip(selected = flt == -1, onClick = { flt = -1 }, label = "全部")
                                 }
                                 itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
-                                    FilterChip(
+                                    WallChip(
                                         selected = flt == i,
                                         onClick = { if (flt == i) flt = -1 else { flt = i; showSub = false } },
-                                        label = { Text(f.key) },
+                                        label = f.key,
                                     )
                                 }
                             }
@@ -456,6 +457,7 @@ fun ZoneScreen(
     // 源选择弹窗（用户 2026-11-04）：默认聚合源，可切单个专区源；切源仅重跑取数池，分类/筛选状态保留
     if (showSrc) {
         AlertDialog(
+        properties = tmDialogProps,
             onDismissRequest = { showSrc = false },
             confirmButton = {},
             title = { Text("选择资源口源") },

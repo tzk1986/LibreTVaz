@@ -122,7 +122,7 @@ fun LiveScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onBack) { Text("返回") }
+            TmBtn(onClick = onBack) { Text("返回") }
             Text("看电视", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
             epgNote?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
@@ -136,14 +136,14 @@ fun LiveScreen(
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(sources.mapIndexed { i, s -> i to s }) { (i, s) ->
-                FilterChip(
+                TmChip(
                     selected = i == selectedIndex,
                     onClick = {
                         selectedIndex = i
                         LiveCtx.wantAuto = true // web 切源 renderLive→自动起播
                         LiveCtx.cur = -1; cur = -1
                     },
-                    label = { Text(s.name) },
+                    label = s.name,
                 )
             }
         }
@@ -158,18 +158,18 @@ fun LiveScreen(
                 val cats = LiveGeo.partition(pl.channels).map { it.first }
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (hasFav) item {
-                        FilterChip(
+                        TmChip(
                             selected = cat == LiveStore.LIVE_FAV_GROUP,
                             onClick = { cat = LiveStore.LIVE_FAV_GROUP; group = null },
-                            label = { Text(LiveStore.LIVE_FAV_GROUP) },
+                            label = LiveStore.LIVE_FAV_GROUP,
                         )
                     }
                     if (cats.size > 1) {
                         item {
-                            FilterChip(selected = cat == null, onClick = { cat = null; group = null }, label = { Text("全部") })
+                            TmChip(selected = cat == null, onClick = { cat = null; group = null }, label = "全部")
                         }
                         items(cats) { c ->
-                            FilterChip(selected = c == cat, onClick = { cat = c; group = null }, label = { Text(c) })
+                            TmChip(selected = c == cat, onClick = { cat = c; group = null }, label = c)
                         }
                     }
                 }
@@ -186,10 +186,10 @@ fun LiveScreen(
                 if (catGroups.size > 1) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item {
-                            FilterChip(selected = group == null, onClick = { group = null }, label = { Text("全部") })
+                            TmChip(selected = group == null, onClick = { group = null }, label = "全部")
                         }
                         items(catGroups) { g ->
-                            FilterChip(selected = g == group, onClick = { group = g }, label = { Text(g) })
+                            TmChip(selected = g == group, onClick = { group = g }, label = g)
                         }
                     }
                 }
@@ -229,9 +229,10 @@ fun LiveScreen(
         val now = Epg.now(epgIdx, ch.name)
         val next = list.firstOrNull { it.t > PerfCore.nowNum() }
         AlertDialog(
+        properties = tmDialogProps,
             onDismissRequest = { epgChan = null },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { epgChan = null }) { Text("关闭") } },
+            dismissButton = { TmBtn(onClick = { epgChan = null }) { Text("关闭") } },
             title = { Text("${ch.name} · 今日节目单") },
             text = {
                 if (list.isEmpty()) Text("本频道今日无节目数据（台名未匹配或节目单无当日内容）")
@@ -306,7 +307,7 @@ private fun ChannelRow(
             modifier = Modifier.clickable(onClick = onFav),
         )
         onEpg?.let {
-            TextButton(onClick = it) { Text("节目单", style = MaterialTheme.typography.labelMedium) }
+            TmBtn(onClick = it) { Text("节目单") }
         }
     }
 }
