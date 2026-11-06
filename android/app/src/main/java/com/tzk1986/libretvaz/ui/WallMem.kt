@@ -32,6 +32,13 @@ object WallMem {
     internal val collectSrcScroll = mutableStateMapOf<String, Int>()             // 左源栏 key(kw|zone|src)→index
 }
 
+/** 方案A（用户 2026-11-06）：主动发起搜索时清搜索墙跨页记忆——返回=还原，再搜=干净首屏 */
+internal fun dropCollectMem() {
+    WallMem.collectKeep.value = null
+    WallMem.collectScroll.clear()
+    WallMem.collectSrcScroll.clear()
+}
+
 /** 搜索结果墙跨页快照（CollectScreen 重建后按 key 还原，免重搜复位） */
 internal data class CollectSnap(
     val seq: List<Int>,

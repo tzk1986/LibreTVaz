@@ -266,6 +266,14 @@ fun CollectScreen(
             TmBtn(onClick = onBack) { Text("← 返回") }
             Text("“$kw” 的搜索结果", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.weight(1f))
+            // 方案B（用户 2026-11-06）：重搜钮=同词整页重跑+回顶（返回还原之外，明确刷新入口）
+            TmBtn(onClick = {
+                scope.launch {
+                    gridState.scrollToItem(0)
+                    srcState.scrollToItem(0)
+                }
+                searchNow(kw)
+            }) { Text("重搜") }
             YearSortBtn(order = yearSort) {
                 yearSort = YearOrder.entries[(yearSort.ordinal + 1) % YearOrder.entries.size]
             }

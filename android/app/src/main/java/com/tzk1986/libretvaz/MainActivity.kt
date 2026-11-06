@@ -31,6 +31,7 @@ import com.tzk1986.libretvaz.ui.SearchScreen
 import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
 import com.tzk1986.libretvaz.ui.ZoneScreen
+import com.tzk1986.libretvaz.ui.dropCollectMem
 import com.tzk1986.libretvaz.ui.theme.LibreTVazTheme
 
 sealed class Screen {
@@ -159,7 +160,12 @@ class MainActivity : ComponentActivity() {
                             remoteKw = remoteKw,
                             onRemoteConsumed = { remoteKw = null },
                             onBack = { screen = if (current.zone) Screen.Zone else Screen.Browse },
-                            onCollect = { kw, sel -> screen = Screen.Collect(kw, current.zone, sel) },
+                            // 用户 2026-11-06 方案A：主动发起搜索=重搜语义，清跨页快照/滚动记忆（同词也重拉）；
+                            // 「详情/播放→返回」不经过此口，保留快照原位原序
+                            onCollect = { kw, sel ->
+                                dropCollectMem()
+                                screen = Screen.Collect(kw, current.zone, sel)
+                            },
                         )
                         is Screen.Collect -> CollectScreen(
                             kw0 = current.kw,
@@ -191,7 +197,10 @@ class MainActivity : ComponentActivity() {
                             onProbe = { screen = Screen.Probe },
                             onPick = { screen = Screen.Detail(it, Screen.Browse) },
                             // 用户 2026-11-03 修复：墙卡带名搜直达聚合结果页（不再中转搜索页，返回链=详情→结果→点播）
-                            onAggSearch = { kw -> screen = Screen.Collect(kw, false, null, fromWall = true) },
+                            onAggSearch = { kw ->
+                                dropCollectMem() // 方案A：墙卡带名搜也属主动搜索
+                                screen = Screen.Collect(kw, false, null, fromWall = true)
+                            },
                         )
                         Screen.Zone -> ZoneScreen(
                             store = sourceStore,
