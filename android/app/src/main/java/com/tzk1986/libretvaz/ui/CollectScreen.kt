@@ -8,8 +8,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -36,7 +38,11 @@ import java.util.concurrent.atomic.AtomicInteger
 data class SpecSrc(val si: Int, val name: String)
 
 /** 搜索排序三态（用户 2026-11-06）：点钮循环 DESC→ASC→NONE；枚举序即循环序，默认 DESC */
-private enum class YearOrder { DESC, ASC, NONE }
+internal enum class YearOrder { DESC, ASC, NONE }
+
+/** 搜索墙跨页记忆 key：kw+zone+指定源（用户 2026-11-06 返回保滚动不重搜；对齐 browseKeep 语义） */
+internal fun collectKey(kw: String, zone: Boolean, srcSel: SpecSrc?): String =
+    "$kw|${if (zone) "z" else "v"}|${srcSel?.si ?: "-"}"
 
 // 用户 2026-11-06 走查 #2/#3：搜索分片双层缓存迁 data/SearchShards（LRU 封顶 30 词 + 500ms 防抖后台落盘）。
 // 本文件保留同名薄委托（web searchShardSet/localStorage 语义不变，FindSourceDialog/Settings 调用点零改动）
@@ -69,18 +75,22 @@ fun CollectScreen(
     val settings = remember { SettingsStore(context) }
     val vocab = remember { VocabPools.get(context) }
 
+    // 用户 2026-11-06：搜索墙跨页记忆——同 key（kw|zone|src）命中直接还原快照上屏、跳过重搜；
+    // 返回不再复位顶部/重排源栏（对齐聚合墙 browseKeep 走查 #11 模式；点播/资源口两侧共用本组件同受益）
+    val ck0 = collectKey(kw0, zone, srcSel)
+    val keepSnap = remember { WallMem.collectKeep.value?.takeIf { it.first == ck0 && it.second.seq.isNotEmpty() }?.second }
     var kw by remember { mutableStateOf(kw0) }
     var runSeq by remember { mutableIntStateOf(0) }
-    var total by remember { mutableIntStateOf(0) }
-    var done by remember { mutableIntStateOf(0) }
-    var fails by remember { mutableIntStateOf(0) }
-    var tabIdx by remember { mutableStateOf<Int?>(null) } // null=全部
+    var total by remember { mutableIntStateOf(keepSnap?.total ?: 0) }
+    var done by remember { mutableIntStateOf(keepSnap?.done ?: 0) }
+    var fails by remember { mutableIntStateOf(keepSnap?.fails ?: 0) }
+    var tabIdx by remember { mutableStateOf(keepSnap?.tabIdx) } // null=全部
     // 用户 2026-11-06 指示（偏离 web 新增）→同日三态终改：搜索排序钮循环「年份↓(默认)→年份↑→默认顺序」。
     // 调研依据：aria-sort 三态范式 + 时间类数据默认倒序（jOOq Sensible Default Ordering）；钮示当前已应用态
-    var yearSort by remember { mutableStateOf(YearOrder.DESC) }
-    val bySite = remember { mutableStateMapOf<Int, List<VodSummary>>() }
-    var seq by remember { mutableStateOf<List<Int>>(emptyList()) } // 到达序
-    var noSources by remember { mutableStateOf(false) }
+    var yearSort by remember { mutableStateOf(keepSnap?.yearSort ?: YearOrder.DESC) }
+    val bySite = remember { mutableStateMapOf<Int, List<VodSummary>>().also { m -> keepSnap?.let { m.putAll(it.bySite) } } }
+    var seq by remember { mutableStateOf(keepSnap?.seq ?: emptyList()) } // 到达序
+    var noSources by remember { mutableStateOf(keepSnap?.noSources ?: false) }
 
     BackHandler { onBack() }
 
@@ -189,7 +199,38 @@ fun CollectScreen(
         start(ep, t)
     }
 
-    LaunchedEffect(Unit) { searchNow(kw0) }
+    LaunchedEffect(Unit) { if (keepSnap == null) searchNow(kw0) } // 走查记忆：命中快照=还原上屏，不重搜
+
+    // 结果墙快照回存：seq/条目/计数/Tab/排序任一变化即写 keep（空 seq 不写，避免重搜清屏瞬间覆盖旧墙）
+    val ckNow = collectKey(kw, zone, srcSel)
+    val sitesSig = bySite.values.sumOf { it.size }
+    LaunchedEffect(ckNow, seq, sitesSig, tabIdx, yearSort, done, total, fails, noSources) {
+        if (seq.isNotEmpty()) WallMem.collectKeep.value =
+            ckNow to CollectSnap(seq, bySite.toMap(), tabIdx, yearSort, done, total, fails, noSources)
+    }
+    // 滚动记忆：右墙按 key#tab 分槽、左源栏按 key；首发瞬态跳过（同 browseScroll minor#6），250ms 节流
+    val scr0 = remember { WallMem.collectScroll[ck0 + "#$tabIdx"] ?: (0 to 0) }
+    val gridState = rememberLazyGridState(scr0.first, scr0.second)
+    LaunchedEffect(ckNow) {
+        var first = true
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .collect {
+                if (first) { first = false; return@collect }
+                WallMem.collectScroll[collectKey(kw, zone, srcSel) + "#$tabIdx"] = it
+                delay(250)
+            }
+    }
+    val srcScr0 = remember { WallMem.collectSrcScroll[ck0] ?: 0 }
+    val srcState = rememberLazyListState(srcScr0)
+    LaunchedEffect(ckNow) {
+        var first = true
+        snapshotFlow { srcState.firstVisibleItemIndex }
+            .collect {
+                if (first) { first = false; return@collect }
+                WallMem.collectSrcScroll[collectKey(kw, zone, srcSel)] = it
+                delay(250)
+            }
+    }
 
     val allItems = if (tabIdx != null) bySite[tabIdx] ?: emptyList()
     else seq.flatMap { bySite[it] ?: emptyList() }
@@ -240,6 +281,7 @@ fun CollectScreen(
             if (seq.isNotEmpty()) {
                 val allCount = seq.sumOf { bySite[it]?.size ?: 0 }
                 LazyColumn(
+                    state = srcState,
                     modifier = Modifier.width(200.dp).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -278,6 +320,7 @@ fun CollectScreen(
                 }
             } else {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Adaptive(minSize = 120.dp),
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
