@@ -36,8 +36,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -91,9 +94,21 @@ private fun PillButton(
     FilterChip(
         selected = selected,
         onClick = onClick,
-        modifier = modifier,
+        // 用户 2026-11-06：requiredHeight(32) 撤 M3 48dp 最小触控盒——像素实测它比 32dp 视觉 pill
+        // 上下各多 21px 空隙，致行距(54px)远大于列距(16px)；钉死后上下/左右间距同参数即视觉一致
+        modifier = modifier.requiredHeight(32.dp),
         leadingIcon = {},
-        label = { ProvideTextStyle(MaterialTheme.typography.labelMedium) { content() } },
+        // 用户 2026-11-06：选中态（线路/分页tab/集数三类）在文字下方加红色下划线醒目提醒，
+        // 长度=文字的 8 成（比文字略短）；drawBehind 零布局增高，不破行内等高规范
+        label = {
+            Column(
+                // 用户 2026-11-06：红线不占布局（文字保持按钮内垂直居中），定位置=距文字底缘 5px
+                modifier = if (selected) Modifier.drawBehind {
+                    val y = size.height + 3.2.dp.toPx()
+                    drawLine(Color(0xFFE53935), Offset(size.width * 0.1f, y), Offset(size.width * 0.9f, y), 3.dp.toPx(), cap = StrokeCap.Round)
+                } else Modifier,
+            ) { ProvideTextStyle(MaterialTheme.typography.labelMedium) { content() } }
+        },
         colors = FilterChipDefaults.filterChipColors(
             // 用户 2026-11-05：选中红框已撤——在播集改「略亮白底」区分（普通白20%，选中白40%，均无框）
             containerColor = if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF),
@@ -211,7 +226,6 @@ fun DetailScreen(
     fun lines(): List<PlayLine> = detail?.lines ?: emptyList()
     fun toast(s: String) = Toast.makeText(context, s, Toast.LENGTH_SHORT).show()
     fun linkOf(l: Int, e: Int): String? = lines().getOrNull(l)?.list?.getOrNull(e)?.link
-    fun epName(): String? = lines().getOrNull(line)?.list?.getOrNull(curEp)?.name
     fun playAt(l: Int, e: Int, startPosMs: Long = 0) {
         val u = linkOf(l, e) ?: return
         errorHint = null
@@ -624,8 +638,10 @@ fun DetailScreen(
             val viewW = maxWidth - 32.dp
             // 用户 2026-11-05 终调：播放器缩至 35%（46%→40%→35 逐步要求再小），文字列 65%——
             // 视频窗高度随 16:9 变矮，下半选集区（weight(1f) 剩余高度）多出更多行显示集数按钮
-            val vidW = if (wide) (viewW - 16.dp) * 0.35f else viewW
-            val vidH = vidW * 9f / 16f
+            // 用户 2026-11-06 改口放大：横屏改高度锚定=屏高 55%，宽度按 16:9 反推（原宽锚 35%）；
+            // vidH 变高同时给右侧详情列更多余量，进一步压低按钮行溢出风险
+            val vidH = if (wide) maxHeight * 0.55f else ((viewW - 16.dp) * 0.35f) * 9f / 16f
+            val vidW = if (wide) vidH * 16f / 9f else viewW
             // 集数钮列数不写死：随集名长度自适应（下方选集区按 epSub 计算，用户 2026-11-05）
             // 用户 2026-11-05 照截图：页内装不下的在选集区内部上下滚，上半部分（视频/详情/线路/tab 行）位置不动
             // 用户 2026-11-05 紧凑化：每页 20→40，配合播放器/文字缩号后一屏可见更多集数
@@ -646,7 +662,7 @@ fun DetailScreen(
                                 findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.setKeyTimeIncrement(15_000L)
                             }
                         },
-                        modifier = (if (wide) Modifier.weight(35f) else Modifier.fillMaxWidth())
+                        modifier = (if (wide) Modifier.width(vidW) else Modifier.fillMaxWidth())
                             .aspectRatio(16f / 9f)
                             .background(Color.Black)
                             .focusable()
@@ -660,7 +676,7 @@ fun DetailScreen(
                     Column(
                         // 用户 2026-11-04 反馈：列内滚动会把按钮行滚到窗口底裁切、被线路行遮挡
                         // → 取消滚动，文本逐行限宽加省略号，按钮永远完整可见；全文走「📖 简介」弹窗
-                        modifier = if (wide) Modifier.weight(65f).height(vidH)
+                        modifier = if (wide) Modifier.weight(1f).height(vidH)
                         else Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -685,14 +701,13 @@ fun DetailScreen(
                                 )
                             }
                         } ?: run { if (wide) Spacer(modifier = Modifier.weight(1f)) }
-                        Text(
-                            listOfNotNull("正在播放：${itemS.name}", epName()?.let { "· $it" }, if (buffering) "缓冲中…" else null).joinToString(" "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (buffering) Color.Yellow else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                        errText?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        errorHint?.let { Text(it, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        // 用户 2026-11-06：片名/集数页面自明（标题在顶、当前集选集行高亮），「正在播放」属冗余；
+                        // 冗余行叠加错误双行使横屏定高列(vidH)溢出压掉按钮行 → 撤该行，仅缓冲时留提示
+                        if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        // 用户 2026-11-06：详情错误与播放失败合并为一行，保证失败态下按钮行完整可见
+                        listOfNotNull(errText, errorHint).joinToString("｜").takeIf { it.isNotEmpty() }?.let {
+                            Text(it, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                         // 按钮行（用户 2026-11-05 定稿：放回详情列内末尾+横向可滑；列内简介 weight 吸收高度收缩，
                         // 按钮行永远完整可见——视频窗再小也不丢按钮）
                         Row(
@@ -719,13 +734,12 @@ fun DetailScreen(
                 // 行内换源结果组已撤（用户 2026-11-03：换源改弹框，同名命中+测速在框内逐源增量呈现）
                 val ls = lines()
                 if (ls.isNotEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("线路(共 ${ls.size} 条)", style = MaterialTheme.typography.labelMedium)
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                    // 用户 2026-11-06：撤「线路(共 N 条)」前缀文字（条数集数 chip 名内已含），线路 chip 直接靠左
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                             ls.forEachIndexed { i, lg ->
                                 // 用户 2026-11-05 终改：线路药丸统一走详情按钮同款 chip（PillButton）——
                                 // 白20%/选中白40%、无框无红条；行内=源名+分辨率(绿)+·+测速状态词
@@ -762,7 +776,6 @@ fun DetailScreen(
                                 PillButton(onClick = { chDlg = true }) { Text("⚡ 该源仅此1条线 · 换源", maxLines = 1, style = MaterialTheme.typography.labelMedium) } // 改开换源弹框（同名+测速直达）
                             }
                         }
-                    }
                     // 用户 2026-11-05：线路与选集间加横线分隔
                     HorizontalDivider(thickness = 1.dp, color = Color(0x33FFFFFF))
                     // 选集行（web epRow：当前集 on + 续播位 prog 红点）
@@ -777,7 +790,7 @@ fun DetailScreen(
                     // chip 按集名全文撑宽、FlowRow 自动换行，任何集名都完整显示不截字
                     // 用户 2026-11-05 照截图：选集区全宽（撤「选集」侧标签），
                     // 占满视口剩余高度、内部上下滚，tab 行以上不动
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (showTabs) {
                             val tabRange = { pg: Int -> "${pg * epPageSize + 1}-${minOf((pg + 1) * epPageSize, eps.size)}" }
                             // 用户 2026-11-05：tab 统一走详情按钮同款 chip（白20%/当前页白40%、无框）
@@ -790,7 +803,9 @@ fun DetailScreen(
                             }
                         }
                         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // 用户 2026-11-06：集数 chip 上下/左右统一 4dp（PillButton 已钉 32dp 高，
+                            // 无触控盒余量，同参数即视觉一致）
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 epSub.forEachIndexed { j, e ->
                                     val i = epStart + j
                                     // 用户 2026-11-05：去掉 web epRow 续播位红点徽标（明示不需要，有意偏离蓝本）

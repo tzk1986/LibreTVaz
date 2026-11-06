@@ -1139,34 +1139,37 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            item.remarks?.let { r ->
-                Text(
-                    text = r,
-                    color = MaterialTheme.colorScheme.onSecondary,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
+            // 用户 2026-11-06 截图版式：年份放海报左上（黑透明白字圆角徽章），番号徽章（2026-11-04 搜索增强）排其右
+            Row(
+                modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                item.year?.takeIf { it.isNotBlank() && it != "0" }?.let { y ->
+                    Text(
+                        text = y,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+                if (codeBadge) CmsParser.codeRaw(item.name)?.let { c ->
+                    Text(
+                        text = c.uppercase(),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    )
+                }
             }
-            // 番号徽章（用户 2026-11-04 搜索增强）：搜索墙左上角显示标题提取的编号原文，便于快速核对
-            if (codeBadge) CmsParser.codeRaw(item.name)?.let { c ->
-                Text(
-                    text = c.uppercase(),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                )
-            }
+            // 用户 2026-11-06：来源名徽章移至右上角（底部让位给信息带）
             siteLabel?.let { t ->
                 Text(
                     text = t,
@@ -1175,28 +1178,51 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
+                        .align(Alignment.TopEnd)
                         .padding(4.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.Black.copy(alpha = 0.55f))
                         .padding(horizontal = 5.dp, vertical = 2.dp),
                 )
             }
+            // 用户 2026-11-06 海报墙改版（指定截图效果=有意偏离 web「名在图下」版式）：
+            // 名称黑透带贴满海报底边整幅宽；remarks 徽章独立在带上方靠左，与带、年份同 55% 黑透
+            Column(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+                item.remarks?.takeIf { it.isNotBlank() }?.let { r ->
+                    Text(
+                        text = r,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // 用户 2026-11-06：左右各 6dp 外边距——徽章最宽=海报宽−12dp，超长提前省略，不再顶出右边
+                        modifier = Modifier
+                            .padding(start = 6.dp, end = 6.dp, bottom = 3.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+                // 用户 2026-11-06 追加：名称居中（weight fill=false 保持组内居中且超长省略）
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                ) {
+                    AdultTag(adultOf(item))
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AdultTag(adultOf(item))
-            Text(
-                text = item.name,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Text(
-            text = listOfNotNull(item.year, item.area).joinToString(" · "),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            maxLines = 1,
-        )
     }
 }
