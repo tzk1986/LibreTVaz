@@ -12,8 +12,24 @@ class SourceStore(context: Context) {
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences("libretvaz_sources", Context.MODE_PRIVATE)
 
-    fun vodSources(): List<VodSource> = decodeVod(prefs.getString(KEY_VOD, "[]") ?: "[]")
-    fun liveSources(): List<LiveSource> = decodeLive(prefs.getString(KEY_LIVE, "[]") ?: "[]")
+    // 用户 2026-11-06 走查 #9：每次读全量 JSONArray 解码 → 按原始 JSON 串 memoize（串变即自然失效，写路径零改动）
+    fun vodSources(): List<VodSource> {
+        val raw = prefs.getString(KEY_VOD, "[]") ?: "[]"
+        val cached = lastListVod
+        if (raw == lastRawVod && cached != null) return cached
+        val list = decodeVod(raw)
+        lastRawVod = raw; lastListVod = list
+        return list
+    }
+
+    fun liveSources(): List<LiveSource> {
+        val raw = prefs.getString(KEY_LIVE, "[]") ?: "[]"
+        val cached = lastListLive
+        if (raw == lastRawLive && cached != null) return cached
+        val list = decodeLive(raw)
+        lastRawLive = raw; lastListLive = list
+        return list
+    }
 
     /** 归池收编（web syncSrc→alignZonePool：每次读源前对齐，只升不降） */
     fun alignZone(): Boolean = Zone.align(app, this)
@@ -191,6 +207,10 @@ class SourceStore(context: Context) {
         url.substringAfter("://").substringBefore('/').substringBefore(':')
 
     companion object {
+        @Volatile private var lastRawVod: String? = null
+        @Volatile private var lastListVod: List<VodSource>? = null
+        @Volatile private var lastRawLive: String? = null
+        @Volatile private var lastListLive: List<LiveSource>? = null
         private const val KEY_VOD = "vod_sources"
         private const val KEY_LIVE = "live_sources"
         private const val KEY_SUBS = "subs"

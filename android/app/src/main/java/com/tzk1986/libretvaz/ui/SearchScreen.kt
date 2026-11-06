@@ -341,7 +341,8 @@ fun SearchScreen(
     if (showQr) RemoteQrDialog(mode = "search", onDismiss = { showQr = false })
 
     if (showSrcPick) {
-        val all = store.vodSources().mapIndexed { si, s -> si to s }.filter { it.second.isAdult == zone }
+        // 用户 2026-11-06 走查 #9：弹窗打开期间每次重组重复取源建表 → remember
+        val all = remember(showSrcPick) { store.vodSources().mapIndexed { si, s -> si to s }.filter { it.second.isAdult == zone } }
         AlertDialog(
         modifier = Modifier.width(tmDialogW()),
         properties = tmDialogProps,

@@ -59,12 +59,13 @@ internal fun buildPlayer(context: android.content.Context, live: Boolean = false
     val dsf = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(PlayerHttp.client)
         .setUserAgent(Http.CHROME_UA)
     // B17 缓冲画像：点播=默认深度（50/100s 防装载振荡）仅调低起播阈值 2.5→1.5s；直播=小缓冲低延迟
+    // 防卡续（用户 2026-11-06 批准）：点播 rebuffer 恢复水位 5→10s——慢线卡顿后攒更足再复播，防「卡-播-卡」振荡
     val load = androidx.media3.exoplayer.DefaultLoadControl.Builder()
         .setBufferDurationsMs(
             if (live) 15_000 else 50_000,
             if (live) 30_000 else 100_000,
             if (live) 2_000 else 1_500,
-            if (live) 3_000 else 5_000,
+            if (live) 3_000 else 10_000,
         )
         .build()
     // B11：前置 200MB LRU 盘缓存（HLS 分片/MP4 Range），回看/重播不白耗流量，也杜绝无限吃盘
@@ -75,15 +76,81 @@ internal fun buildPlayer(context: android.content.Context, live: Boolean = false
         .apply { playWhenReady = true }
 }
 
-/** 全应用共享的播放 OkHttp 客户端（连接池/协议栈复用；媒体请求并发高，池给足） */
+/** 全应用共享的播放 OkHttp 客户端（连接池/协议栈复用；媒体请求并发高，池给足）。
+ *  防卡续（用户 2026-11-06 批准）：readTimeout 15→30s 防大分片慢 CDN 掐断；
+ *  媒体 GET 幂等，连接层 IOException（半开连接/CDN 抖动）自动重试 2 次再抛给播放器换线 */
 private object PlayerHttp {
+    private val retry = okhttp3.Interceptor { chain ->
+        val req = chain.request()
+        var last: java.io.IOException = java.io.IOException("retry exhausted")
+        for (attempt in 0..2) {
+            try {
+                return@Interceptor chain.proceed(req)
+            } catch (e: java.io.IOException) {
+                last = e
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(300L * (attempt + 1))
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    }
+                }
+            }
+        }
+        throw last
+    }
+
     val client by lazy {
         okhttp3.OkHttpClient.Builder()
             .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .connectionPool(okhttp3.ConnectionPool(32, 5, java.util.concurrent.TimeUnit.MINUTES))
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .addInterceptor(retry)
+            // 用户 2026-11-06 走查 #1：与 Http 普通 GET 共享连接池（同 CDN 起播/元数据互享 keep-alive 连接）
+            .connectionPool(Http.sharedPool)
             .protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
             .build()
+    }
+}
+
+/** 下一集预取（用户 2026-11-06 批准）：起播后把「当前线下一集」清单+首段缓冲预拉进
+ *  buildPlayer 同一 200MB 盘缓存（VideoCache 数据源栈共享），切集直接命中防转圈。
+ *  media3 1.11 的 DefaultPreloadManager 懒建单例、表内常驻仅 1 项（预取新集先撤旧项）；
+ *  任何失败静默——预取只加速，绝不拖累播放 */
+@OptIn(androidx.media3.common.util.UnstableApi::class)
+internal object VodPreload {
+    private var mgr: androidx.media3.exoplayer.source.preload.DefaultPreloadManager? = null
+    private var last: MediaItem? = null
+
+    @Synchronized
+    fun preload(context: android.content.Context, link: String) {
+        if (link.isBlank()) return
+        runCatching {
+            val app = context.applicationContext
+            val m = mgr ?: androidx.media3.exoplayer.source.preload.DefaultPreloadManager.Builder(
+                app,
+                androidx.media3.exoplayer.source.preload.DefaultPreloadManager.SimpleRankingDataComparator(),
+            ) { androidx.media3.exoplayer.source.preload.DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED }
+                .setMediaSourceFactory(
+                    DefaultMediaSourceFactory(
+                        VideoCache.factory(
+                            app,
+                            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(PlayerHttp.client)
+                                .setUserAgent(Http.CHROME_UA),
+                        ),
+                    ),
+                )
+                .setLoadControl(
+                    androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                        .setBufferDurationsMs(20_000, 40_000, 2_000, 2_000)
+                        .build(),
+                )
+                .build().also { mgr = it }
+            last?.let { m.remove(it) }
+            val item = MediaItem.fromUri(link)
+            m.add(item, 1)
+            last = item
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package com.tzk1986.libretvaz.ui
 
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
 
 /**
@@ -17,4 +18,10 @@ object WallMem {
     val aggPreset = mutableStateOf<Pair<String, List<String>>?>(null) // 聚合墙地区预设
     val typePreset = mutableStateOf<Pair<String, List<String>>?>(null) // 单源地区预设（preset）
     val typePresetSrv = mutableStateOf<List<VodType>?>(null)           // 对应 pSrv（服务端合并 ids）
+    // 用户 2026-11-06 走查 #11：进详情/播放返回会重建 Browse，remember 态复位→墙清空重拉、滚动丢。
+    // 墙数据/滚动位置按「墙 key」进程级保留（key 含 nonce 以外全部重触发参数；
+    // 🔄nonce++ 与换源/切类/换预设自然换 key=干净首屏；聚合↔单源两 key 不串数据）
+    // （minor#5 走查：browseDrawn 槽只写无读已删，seed 由 browseKeep 现算）
+    val browseKeep = mutableStateOf<Pair<String, List<VodSummary>>?>(null)   // key→墙条目
+    val browseScroll = mutableStateOf<Triple<String, Int, Int>?>(null)       // key→(index, offset)
 }

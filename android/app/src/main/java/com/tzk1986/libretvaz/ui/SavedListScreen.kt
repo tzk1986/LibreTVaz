@@ -61,7 +61,7 @@ private fun SavedWall(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items, key = { "${it.vod.sourceUrl}|${it.vod.vodId}" }) { s ->
+            items(items, key = { "${it.vod.sourceUrl}|${it.vod.vodId}" }, contentType = { "poster" }) { s ->
                 Box {
                     PosterCard(item = s.vod, onClick = {
                         if (delMode) onRemove(s.vod) else onPick(s.vod)

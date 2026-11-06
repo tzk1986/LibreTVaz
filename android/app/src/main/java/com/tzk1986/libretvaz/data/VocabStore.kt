@@ -92,14 +92,24 @@ class VocabStore(context: Context) {
         handler.postDelayed(r, PERSIST_DEBOUNCE_MS)
     }
 
+    // 用户 2026-11-06 走查 #8：防抖回调原在主线程同步编码 8000 词 JSONArray/JSONObject=掉帧源
+    // → 主线程只取一致性快照（PinIndex 持锁瞬时），编码+写盘移后台单线程
+    private val persistExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "vocab-persist").apply { isDaemon = true }
+    }
+
     private fun persist(zone: Boolean) {
-        val pi = index(zone)
-        val w = JSONObject()
-        pi.weightsMap().forEach { (k, v) -> w.put(k, v) }
-        prefs.edit()
-            .putString(wordsKey(zone), JSONArray(pi.list()).toString())
-            .putString(weightsKey(zone), w.toString())
-            .apply()
+        val (ws, wfs) = index(zone).snapshot()
+        persistExec.execute {
+            runCatching {
+                val w = JSONObject()
+                wfs.forEach { (k, v) -> w.put(k, v) }
+                prefs.edit()
+                    .putString(wordsKey(zone), JSONArray(ws).toString())
+                    .putString(weightsKey(zone), w.toString())
+                    .apply()
+            }
+        }
     }
 
     private fun wordsOf(zone: Boolean): List<String> = runCatching {

@@ -13,7 +13,10 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 object PerfCore {
 
-    fun norm(u: String?): String = (u ?: "").trim().replace(Regex("/+$"), "")
+    // 用户 2026-11-06 走查 #6：热路径字面 Regex 提常量（norm 全 app 高频；模式串逐字不动）
+    private val TRAIL_SLASH = Regex("/+$")
+
+    fun norm(u: String?): String = (u ?: "").trim().replace(TRAIL_SLASH, "")
 
     /** 搜索源顺序：当前源 → health ms 升序 → 未测(ms=null)按原源序；稳定排序 */
     fun <T> orderSources(items: List<T>, currentSi: Int, siOf: (T) -> Int, msOf: (T) -> Long?): List<T> {
@@ -219,34 +222,43 @@ object PerfCore {
 
     private val XML_ENT = mapOf("amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'")
 
+    private val ENT_RE = Regex("&([a-zA-Z]+);")
+
     fun decodeXmlEnt(s: String?): String =
-        Regex("&([a-zA-Z]+);").replace(s ?: "") { m ->
+        ENT_RE.replace(s ?: "") { m ->
             XML_ENT[m.groupValues[1].lowercase(Locale.ROOT)] ?: m.value
         }
 
     private val CH_RE = Regex("<channel\\b[^>]*\\bid=\"([^\"]*)\"[^>]*>([\\s\\S]*?)</channel>")
     private val PG_RE = Regex("<programme\\b([^>]*?)(?:/>|>([\\s\\S]*?)</programme>)")
+    // 用户 2026-11-06 走查 #6：XMLTV 循环内字面 Regex 提常量（大文件逐 programme 现编消除；模式串逐字不动）
+    private val DN_RE = Regex("<display-name[^>]*>([^<]*)</display-name>")
+    private val ATTR_CHANNEL = Regex("channel=\"([^\"]*)\"")
+    private val ATTR_START = Regex("start=\"([^\"]*)\"")
+    private val ATTR_STOP = Regex("stop=\"([^\"]*)\"")
+    private val T_TITLE = Regex("<title[^>]*>([^<]*)</title>")
+    private val T_DESC = Regex("<desc[^>]*>([^<]*)</desc>")
 
     fun parseXmltv(text: String?): EpgIndex {
         val src = text ?: ""
         val channels = LinkedHashMap<String, String>()
         for (m in CH_RE.findAll(src)) {
-            val dn = Regex("<display-name[^>]*>([^<]*)</display-name>").find(m.groupValues[2])
+            val dn = DN_RE.find(m.groupValues[2])
             channels[m.groupValues[1]] = decodeXmlEnt((dn?.groupValues?.get(1) ?: m.groupValues[1]).trim())
         }
         val progs = LinkedHashMap<String, MutableList<EpgProgram>>()
         for (m in PG_RE.findAll(src)) {
             val attrs = m.groupValues[1]
             val inner = m.groupValues[2].ifEmpty { "" }
-            val ch = Regex("channel=\"([^\"]*)\"").find(attrs)?.groupValues?.get(1)
-            val t = tsNum(Regex("start=\"([^\"]*)\"").find(attrs)?.groupValues?.get(1))
-            val s = tsNum(Regex("stop=\"([^\"]*)\"").find(attrs)?.groupValues?.get(1))
+            val ch = ATTR_CHANNEL.find(attrs)?.groupValues?.get(1)
+            val t = tsNum(ATTR_START.find(attrs)?.groupValues?.get(1))
+            val s = tsNum(ATTR_STOP.find(attrs)?.groupValues?.get(1))
             if (ch.isNullOrEmpty() || t == 0L) continue
             progs.getOrPut(ch) { mutableListOf() }.add(
                 EpgProgram(
                     t, s,
-                    decodeXmlEnt(Regex("<title[^>]*>([^<]*)</title>").find(inner)?.groupValues?.get(1) ?: "").trim(),
-                    decodeXmlEnt(Regex("<desc[^>]*>([^<]*)</desc>").find(inner)?.groupValues?.get(1) ?: "").trim(),
+                    decodeXmlEnt(T_TITLE.find(inner)?.groupValues?.get(1) ?: "").trim(),
+                    decodeXmlEnt(T_DESC.find(inner)?.groupValues?.get(1) ?: "").trim(),
                 )
             )
         }
@@ -324,19 +336,44 @@ object PerfCore {
         return SpeedTag(fmtSpeed(kbps) + " 可能卡顿", "sp-mid")
     }
 
-    /** 最快线：已测≥FAIR 且流后缀取最大；无有效测速退回首个流后缀线，再退首条非空线 */
-    fun pickBestLine(lines: List<PlayLine>?, speeds: List<Long?>?, curEp: Int = 0): Int {
+    /** A4 余量比阈值：测速÷节目码率≥1.5 视为「播得起还有余量」（用户 2026-11-05 批准偏离 web 绝对速度排序） */
+    const val SPEED_MARGIN = 1.5
+
+    /** 标签版余量放宽（用户 2026-11-05 批准）：sp-bad 但节目码率已知且吞吐÷码率≥1.5 → 改显「可能卡顿」，
+     *  防低码率节目被绝对阈值 150KB/s 误判「慢/不可用」吓退用户；0 判死与码率未知不放宽 */
+    fun lineSpeedTagSoft(kbps: Long?, bps: Long?): SpeedTag? {
+        val t = lineSpeedTag(kbps) ?: return null
+        if (t.cls != "sp-bad" || kbps == null || kbps <= 0) return t
+        val b = bps?.takeIf { it > 0 } ?: return t
+        return if (kbps * 1024.0 / b >= SPEED_MARGIN) SpeedTag(fmtSpeed(kbps) + " 可能卡顿", "sp-mid") else t
+    }
+
+    /**
+     * 最快线：已测≥FAIR 且流后缀为候选。A4（用户 2026-11-05 批准）：有节目码率 bps（bytes/s）时
+     * 按余量比=吞吐÷码率选——先取余量≥1.5 者中最快，无一达标则取余量比最大者；码率未知退回绝对速度最大。
+     * 无有效测速退回首个流后缀线，再退首条非空线。
+     */
+    fun pickBestLine(lines: List<PlayLine>?, speeds: List<Long?>?, curEp: Int = 0, bps: List<Long?>? = null): Int {
         val eps = lines ?: emptyList()
-        var bi = -1
-        var best = 0L
+        data class Cand(val i: Int, val k: Long, val m: Double) // m=余量比，-1=码率未知
+        val cands = mutableListOf<Cand>()
         eps.forEachIndexed { i, g ->
             val k = speeds?.getOrNull(i)
             if (k == null || k < SPEED_FAIR) return@forEachIndexed
             val u = g.list.getOrNull(curEp) ?: g.list.firstOrNull()
             if (u == null || !isStreamLink(u.link)) return@forEachIndexed
-            if (k > best) { best = k; bi = i }
+            val b = bps?.getOrNull(i)?.takeIf { it > 0 }
+            cands.add(Cand(i, k, if (b != null) k * 1024.0 / b else -1.0))
         }
-        if (bi >= 0) return bi
+        if (cands.isNotEmpty()) {
+            val known = cands.filter { it.m > 0 }
+            if (known.isNotEmpty()) {
+                val enough = known.filter { it.m >= SPEED_MARGIN }
+                return if (enough.isNotEmpty()) enough.maxByOrNull { it.k }!!.i
+                else known.maxByOrNull { it.m }!!.i
+            }
+            return cands.maxByOrNull { it.k }!!.i
+        }
         val fi = eps.indexOfFirst { g -> g.list.isNotEmpty() && g.list.any { isStreamLink(it.link) } }
         if (fi >= 0) return fi
         val fi2 = eps.indexOfFirst { g -> g.list.isNotEmpty() }

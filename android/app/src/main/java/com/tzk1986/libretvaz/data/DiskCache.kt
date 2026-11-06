@@ -55,9 +55,10 @@ object DiskCache {
         val name = fileName(key)
         pool.execute {
             runCatching {
-                val o = JSONObject().put("t", t).put("d", payload)
+                // 走查 #15：手写头串保证 {"t":N 恒在文件首（JSONObject 键序不保证），purgeExpired 只读头 32 字节
+                val body = "{\"t\":$t,\"d\":${JSONObject.quote(payload)}}"
                 val tmp = File(d, "$name.tmp")
-                tmp.writeText(o.toString())
+                tmp.writeText(body)
                 val f = File(d, name)
                 if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
             }
@@ -83,10 +84,21 @@ object DiskCache {
      * 过期硬清（web pruneExpiredCache 等价）：按条目头写入时间 t 统一 7 天删除，
      * 读命中 touch 不续命（t 记写入时刻，与 web 语义一致；LRU 逐出才看 lastModified）。
      */
+    // 走查 #15：分片负载可达数 MB，周期硬清整读全文件是白烧的 IO → 只读头 32 字节取 t；
+    // 头不匹配（升级前 JSONObject 键序写出的历史文件/异常文件）回落整读旧逻辑
+    private val HEAD_T = Regex("^\\{\"t\":(\\d+)")
+
     fun purgeExpired(now: Long = System.currentTimeMillis()) {
         val cut = now - HARD_TTL_MS
         files().forEach { f ->
-            val t = runCatching { JSONObject(f.readText()).getLong("t") }.getOrDefault(0L)
+            val t = runCatching {
+                java.io.RandomAccessFile(f, "r").use { raf ->
+                    val buf = ByteArray(minOf(32L, raf.length()).toInt())
+                    raf.readFully(buf)
+                    HEAD_T.find(String(buf, Charsets.UTF_8))?.groupValues?.get(1)?.toLongOrNull()
+                }
+            }.getOrNull()
+                ?: runCatching { JSONObject(f.readText()).getLong("t") }.getOrDefault(0L)
             if (t < cut) runCatching { f.delete() }
         }
     }

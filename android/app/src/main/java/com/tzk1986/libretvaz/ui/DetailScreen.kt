@@ -1,6 +1,5 @@
 package com.tzk1986.libretvaz.ui
 
-import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -181,9 +180,6 @@ fun DetailScreen(
     var changing by remember { mutableStateOf(false) } // auto 换源链路进行中标记
     // 用户 2026-11-05：换源与搜关联合并为单弹窗单钮，定名「快搜」——chDlg 即入口，框内默认换源海报网格+关联词，点词转全源搜
     var chDlg by remember { mutableStateOf(false) }
-    var progHere by remember { mutableStateOf<Prog?>(null) }
-
-    var perfT0 by remember { mutableLongStateOf(0L) } // VodPerf 起播计时（实测比对用）
     var fs by remember { mutableStateOf(false) }
     var fsBar by remember { mutableStateOf(true) }
     var fsSeq by remember { mutableIntStateOf(0) }
@@ -220,10 +216,18 @@ fun DetailScreen(
         val u = linkOf(l, e) ?: return
         errorHint = null
         buffering = true
-        perfT0 = android.os.SystemClock.elapsedRealtime()
-        Log.i("VodPerf", "playAt line=$l ep=$e url=${u.take(100)}")
         player.setMediaItem(MediaItem.fromUri(u), startPosMs)
         player.prepare()
+        // 下一集预取+带宽余量闸（用户 2026-11-06 批准；实机复测发现慢线预取抢当前播放带宽反噬换集速度）：
+        // 仅当当前线实测吞吐 ≥ 2×节目码率（A4）才预取；未测/判死/码率未知一律跳过，绝不与播放抢流
+        linkOf(l, e + 1)?.let { next ->
+            val lk = LineSpeed.key(itemS.sourceKey, itemS.vodId, e)
+            val kbps = LineSpeed.cached(lk)?.getOrNull(l)
+            val bps = LineSpeed.cachedBps(lk)?.getOrNull(l)
+            if (kbps != null && kbps > 0 && bps != null && bps > 0 && kbps * 1024 >= 2 * bps) {
+                VodPreload.preload(context, next)
+            }
+        }
     }
     fun enterFs() {
         fs = true; fsBar = true; fsSeq++
@@ -234,15 +238,20 @@ fun DetailScreen(
     }
     fun exitFs() {
         fs = false
-        insetCtrl?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        // 修复（用户 2026-11-05：退全屏后状态栏永久压住顶部 tab）：全局策略状态栏常隐，
+        // 这里只恢复导航栏；systemBars() 会把 hide 标志一并清掉导致状态栏再也回不去
+        insetCtrl?.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
     }
     fun pokeFs() { fsBar = true; fsSeq++ }
+    // 用户 2026-11-06 走查 #13：快进/快退提示改 FS 底栏内覆盖层文本（1.5s 自隐；系统 Toast 会压浮层且遥控连按堆积）
+    var seekHint by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(seekHint) { if (seekHint != null) { delay(1500); seekHint = null } }
     fun seekBy(deltaSec: Long) {
         val dur = player.duration
         if (dur <= 0) { toast("快进/快退暂不可用（流未就绪）"); return }
         val pos = (player.currentPosition / 1000 + deltaSec).coerceIn(0, (dur / 1000) - 1)
         player.seekTo(pos * 1000)
-        toast((if (deltaSec < 0) "« 15s " else "15s » ") + fmtHms(pos) + " / " + fmtHms(dur / 1000))
+        seekHint = (if (deltaSec < 0) "« 15s " else "15s » ") + fmtHms(pos) + " / " + fmtHms(dur / 1000)
     }
 
     // ===== 进度持久化（web fongmi_prog：5s 节流/pause 即写/ended 清/孤儿随写清理） =====
@@ -251,7 +260,6 @@ fun DetailScreen(
         val g = lines().getOrNull(line) ?: return
         val p = Prog(line, g.flag, curEp, sec, durSec, System.currentTimeMillis())
         prog.save(itemS.vodId, itemS.sourceKey, p, ProgStore.aliveKeys(context))
-        progHere = p
     }
 
     // ===== TVBox 式动作行（定稿清单；解析/引擎/解码/轨道/弹幕/版本/章节/OP-ED 本场景不适用→隐藏） =====
@@ -316,7 +324,8 @@ fun DetailScreen(
     fun playingHealthy() = player.playbackState == Player.STATE_READY && player.currentPosition > 0
     fun tagFor(i: Int): PerfCore.SpeedTag? {
         val k = speeds?.getOrNull(i) ?: return null
-        var t = PerfCore.lineSpeedTag(k) ?: return null
+        // 用户 2026-11-05 批准偏离 web：节目码率已知且余量达标时「慢/不可用」放宽为「可能卡顿」
+        var t = PerfCore.lineSpeedTagSoft(k, LineSpeed.cachedBps(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))?.getOrNull(i)) ?: return null
         if (t.cls == "sp-bad" && i == line && playingHealthy()) {
             t = PerfCore.SpeedTag(if (k > 0) PerfCore.fmtSpeed(k) + " · 播放中" else "播放中（测速失败）", "sp-mid")
         }
@@ -354,7 +363,7 @@ fun DetailScreen(
                 LineSpeed.put(key, finalSp); speeds = finalSp
             }
             if (userPickedLine || !settings.autoBestLine || curEp != epIdx) { maybeAllBadAutoSrc(finalSp); return@launch }
-            val best = PerfCore.pickBestLine(lines(), finalSp, epIdx)
+            val best = PerfCore.pickBestLine(lines(), finalSp, epIdx, LineSpeed.cachedBps(key))
             if (best < 0 || best == line) { maybeAllBadAutoSrc(finalSp); return@launch }
             if (best >= lines().size) return@launch
             val eIdx = epIdx.coerceAtMost(lines()[best].list.size - 1)
@@ -402,12 +411,12 @@ fun DetailScreen(
         detail = d
         kept = keepSt.contains(itemS)
         val ph = prog.get(itemS.vodId, itemS.sourceKey)
-        progHere = ph
         var l = Playback.pickDefaultLine(d.lines).coerceAtLeast(0)
         if (settings.lineSpeed) {
-            val sp0 = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, 0))
+            val k0 = LineSpeed.key(itemS.sourceKey, itemS.vodId, 0)
+            val sp0 = LineSpeed.cached(k0)
             if (sp0 != null && sp0.any { it != null && it >= PerfCore.SPEED_FAIR }) {
-                val b = PerfCore.pickBestLine(d.lines, sp0, 0)
+                val b = PerfCore.pickBestLine(d.lines, sp0, 0, LineSpeed.cachedBps(k0))
                 if (b >= 0) l = b
             }
         }
@@ -440,12 +449,11 @@ fun DetailScreen(
         object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_BUFFERING -> { buffering = true; Log.i("VodPerf", "buffering pos=${player.currentPosition}") }
-                    Player.STATE_READY -> { buffering = false; Log.i("VodPerf", "ready startMs=${player.currentPosition} cost=${android.os.SystemClock.elapsedRealtime() - perfT0}ms") }
+                    Player.STATE_BUFFERING -> buffering = true
+                    Player.STATE_READY -> buffering = false
                     Player.STATE_ENDED -> {
                         buffering = false
                         prog.clear(itemS.vodId, itemS.sourceKey)
-                        progHere = null
                         if (repeatOne) { player.seekTo(0); player.playWhenReady = true; return } // 单集循环：重播本集不连播
                         val g = lines().getOrNull(line) ?: return
                         when {
@@ -467,7 +475,6 @@ fun DetailScreen(
 
             override fun onPlayerError(error: PlaybackException) {
                 buffering = false
-                Log.i("VodPerf", "error ${error.errorCodeName}")
                 if (!error.errorCodeName.startsWith("ERROR_CODE_IO") && !error.errorCodeName.contains("TIMEOUT")) {
                     com.tzk1986.libretvaz.data.ErrLog.add(
                         "play", "点播 ${error.errorCodeName}: ${error.message} src=${player.currentMediaItem?.localConfiguration?.uri}"
@@ -786,17 +793,12 @@ fun DetailScreen(
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 epSub.forEachIndexed { j, e ->
                                     val i = epStart + j
-                                    Box {
-                                        // 用户 2026-11-05：集数按钮与详情按钮同款（白20%胶囊，在播=亮底+红框）
-                                        PillButton(
-                                            // 用户 2026-11-04：点选后焦点回播放窗，再按遥控 OK 即进全屏
-                                            onClick = { goEpTo(i); scope.launch { withFrameNanos { }; runCatching { videoFsReq.requestFocus() } } },
-                                            selected = i == curEp,
-                                        ) { Text(e.name, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
-                                        if (progHere != null && progHere!!.ep == i && i != curEp) {
-                                            Box(Modifier.align(Alignment.TopEnd).padding(2.dp).size(8.dp).background(Color(0xFFE53935), CircleShape))
-                                        }
-                                    }
+                                    // 用户 2026-11-05：去掉 web epRow 续播位红点徽标（明示不需要，有意偏离蓝本）
+                                    PillButton(
+                                        // 用户 2026-11-04：点选后焦点回播放窗，再按遥控 OK 即进全屏
+                                        onClick = { goEpTo(i); scope.launch { withFrameNanos { }; runCatching { videoFsReq.requestFocus() } } },
+                                        selected = i == curEp,
+                                    ) { Text(e.name, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
                                 }
                             }
                         }
@@ -873,6 +875,8 @@ fun DetailScreen(
                             }
                         }
                         Text(if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
+                        // 走查 #13：±15s 提示与进度同行（1.5s 自隐）
+                        seekHint?.let { Text(it, color = Color(0xFFFFE082), style = MaterialTheme.typography.bodySmall, maxLines = 1) }
                     }
                     // 动作行（参考图图标行映射本 app 能力；「▤ 选集」=全屏任意选集，遥控十字键可逐钮聚焦）
                     Row(

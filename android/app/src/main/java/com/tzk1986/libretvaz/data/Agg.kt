@@ -45,8 +45,10 @@ object Agg {
     // 单源父类聚合子类结果缓存（web `mrg:` 分片等价）：localStorage 常驻+7 天硬清兜底，此处 TTL 同 7 天
     private val mrgC = DiskBacked(MemCache<List<VodSummary>>(64), "mrg:", CmsCodecs::encSummaries, CmsCodecs::decSummaries)
 
+    // 走查 #16：url 经 norm（去尾斜杠/空白）——「http://a/」与「http://a」双写法共一份分片；
+    // 升级前落的带尾斜杠旧分片成孤儿，由 7 天硬清（purgeExpired）自然回收。其余键格式仍对齐 web aggKey
     fun key(s: VodSource, cat: AggCat?): String =
-        "aggs:" + s.url + "|" + if (cat == null) "latest"
+        "aggs:" + PerfCore.norm(s.url) + "|" + if (cat == null) "latest"
         else cat.key + if (cat.rlabs.isNotEmpty()) "@" + cat.rlabs.joinToString(",") else ""
 
     /** 健康 ms 排序取池：死源不排除自然沉底，未测按中性 4000ms；默认 top12=两波（首波前 6） */
@@ -60,6 +62,9 @@ object Agg {
 
     fun fresh(s: VodSource, cat: AggCat?, ttl: Long, now: Long = System.currentTimeMillis()): Boolean =
         shards.getRaw(key(s, cat))?.let { it.v.isNotEmpty() && now - it.t < ttl } == true
+
+    fun freshZone(s: VodSource, tag: Zone.ZoneTag, ttl: Long, now: Long = System.currentTimeMillis()): Boolean =
+        shards.getRaw(zoneTagKey(s, tag.key))?.let { it.v.isNotEmpty() && now - it.t < ttl } == true
 
     /** 分类树：6h 新鲜缓存（B11 起双层：内存+磁盘回灌）+ 同源并发合并；拉新失败回退旧条目（web getSrcTypes 等价） */
     suspend fun typesOf(repo: CmsRepository, s: VodSource): List<VodType> {
@@ -86,14 +91,57 @@ object Agg {
         return types.any { it.pid == p.id && it.id != p.id && Region.labels(it.name).any { l -> cat.rlabs.contains(l) } }
     }
 
-    /** 该源在 cat 下要拉的子集：地区预设取命中子类前 4（无则回落父类混拉）；常规取前 3 子类（无子类用父类） */
+    /** 该源在 cat 下要拉的子集：地区预设取命中子类前 4（无则回落父类混拉）；常规取前 6 子类（无子类用父类）。
+     *  方案B（用户 2026-11-06 批准，有意偏离 web slice(0,3)）：实测多数源电视剧子类序为 国产/港/韩/欧美/台/日…，
+     *  前 3 永不含日剧等区子类——「全部」墙客户端过滤日剧时无米下锅，扩面到 6 使各区基本入池。 */
     fun subCatsFor(types: List<VodType>, cat: AggCat): List<VodType> {
         val p = topOf(types, cat) ?: return emptyList()
         val kids = types.filter { it.pid == p.id && it.id != p.id }
         return if (cat.rlabs.isNotEmpty()) {
             val reg = kids.filter { c -> Region.labels(c.name).any { l -> cat.rlabs.contains(l) } }
             if (reg.isNotEmpty()) reg.take(4) else listOf(p)
-        } else if (kids.isNotEmpty()) kids.take(3) else listOf(p)
+        } else if (kids.isNotEmpty()) kids.take(6) else listOf(p)
+    }
+
+    /** 方案A：chip 选择态的地区定向 cat（labs 空/null=原样，不改道）；@区 分片键由 key(s,cat) 天然区分 */
+    fun regionCatOf(base: AggCat?, labs: List<String>): AggCat? =
+        if (base == null || labs.isEmpty()) base else base.copy(rlabs = labs)
+
+    /** 收录该地区子类的源排前（web runAggWall L1460 hasRegionKid 排序等价），其余保持健康序 */
+    fun preferRegionFirst(pool: List<VodSource>, regionUrls: Set<String>): List<VodSource> =
+        pool.sortedByDescending { if (it.url in regionUrls) 1 else 0 }
+
+    /**
+     * 资源口定向增补原语（用户 2026-11-06：同方案A——chip 零阻塞、后台按标签命中顶层类拉页进独立分片）。
+     * 专区一级/二级筛选=ZoneTag 关键词匹配顶层类名（忽略大小写，前 4 类封顶）；分片键 zone:标签 与 latest 池隔离。
+     */
+    fun topMatches(types: List<VodType>, kw: List<String>): List<VodType> =
+        types.filter { t -> isTop(t) && kw.any { k -> t.name.contains(k, true) } }.take(4)
+
+    fun zoneTagKey(s: VodSource, tagKey: String): String =
+        "aggs:" + PerfCore.norm(s.url) + "|zone:" + tagKey
+
+    suspend fun fetchZoneTag(repo: CmsRepository, s: VodSource, tag: Zone.ZoneTag, pg: Int): List<VodSummary> {
+        val qs = topMatches(typesOf(repo, s), tag.kw)
+        if (qs.isEmpty()) return emptyList()
+        return coroutineScope { qs.map { c -> async(Dispatchers.IO) { repo.listByType(s, c.id, pg) } }.awaitAll().flatten() }
+    }
+
+    fun putZoneShard(s: VodSource, tag: Zone.ZoneTag, items: List<VodSummary>) {
+        if (items.isNotEmpty()) shards.set(zoneTagKey(s, tag.key), dedupById(items).take(DEPTH))
+    }
+
+    fun appendZoneShard(s: VodSource, tag: Zone.ZoneTag, more: List<VodSummary>) {
+        if (more.isEmpty()) return
+        val old = shards.getRaw(zoneTagKey(s, tag.key))?.v ?: emptyList()
+        shards.set(zoneTagKey(s, tag.key), dedupById(old + more).take(DEPTH))
+    }
+
+    fun mergeZoneShards(pool: List<VodSource>, tag: Zone.ZoneTag): List<VodSummary> {
+        val all = ArrayList<VodSummary>()
+        for (s in pool) shards.getRaw(zoneTagKey(s, tag.key))?.v?.let { all.addAll(it) }
+        val seen = HashSet<String>()
+        return all.filter { val k = CmsParser.normalizeTitle(it.name); k.isNotEmpty() && seen.add(k) }
     }
 
     /** 单源对墙的贡献：cat=null 取全量最新页，否则并行拉子分类列表页（repo 内部已 8s 快断吞错） */
@@ -134,6 +182,19 @@ object Agg {
         val seen = HashSet<String>()
         return items.filter { val k = nameKey(it); k.isNotEmpty() && seen.add(k) }
     }
+
+    /** 单源墙首屏组装：年降序+同 id 去重（终审 #1：墙 key=sourceUrl|vodId，CMS 同页重复回即闪退） */
+    fun firstWallOf(page: List<VodSummary>): List<VodSummary> = dedupById(yearDesc(page))
+
+    /**
+     * 聚合/专区墙续轮是否继续：全池 800 封顶或触 FUSE=到底（空轮仍继续，用户 2026-11-04）。
+     * 客户端过滤态（地区/分类 chip）10 轮封顶——单源 R8 十页护栏同构：过滤视图整轮无可见新增时，
+     * 短墙底栏恒可见会让 AutoLoadMore 自链成「一直加载中」（用户 2026-11-06 走查：聚合·电视剧·日剧）。
+     */
+    fun aggMoreContinue(page: Int, filtered: Boolean, poolUnderDepth: Boolean): Boolean =
+        poolUnderDepth && page < FUSE_ROUND && !(filtered && page >= REGION_GUARD)
+
+    private const val REGION_GUARD = 10
 
     // ===== 单源父类聚合子类（web applyTabMerged/loadMerged/presetKeyForTab/presetIds 等价） =====
 
@@ -208,6 +269,13 @@ object Agg {
     fun yearDesc(items: List<VodSummary>): List<VodSummary> =
         items.mapIndexed { i, it -> it to i }.sortedWith(
             compareByDescending<Pair<VodSummary, Int>> { it.first.year?.takeWhile { c -> c.isDigit() }?.toIntOrNull() ?: 0 }
+                .thenBy { it.second },
+        ).map { it.first }
+
+    /** 年升序（最早在前，用户 2026-11-06 三态排序）：同年保持到达序；无年份视作最大沉底（与 yearDesc 对称） */
+    fun yearAsc(items: List<VodSummary>): List<VodSummary> =
+        items.mapIndexed { i, it -> it to i }.sortedWith(
+            compareBy<Pair<VodSummary, Int>> { it.first.year?.takeWhile { c -> c.isDigit() }?.toIntOrNull() ?: Int.MAX_VALUE }
                 .thenBy { it.second },
         ).map { it.first }
 

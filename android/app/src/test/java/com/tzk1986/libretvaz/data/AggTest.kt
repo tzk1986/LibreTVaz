@@ -3,6 +3,7 @@ package com.tzk1986.libretvaz.data
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,6 +28,12 @@ class AggTest {
     }
 
     @Test
+    fun `shard key normalizes url so trailing slash variants share one shard`() {
+        // 走查 #16：站内「http://a/」与「http://a」双写法原各占一份分片（互不复用、双份拉取）
+        assertEquals(Agg.key(src("A", "http://a"), null), Agg.key(src("A", "http://a/"), null))
+    }
+
+    @Test
     fun `poolOf takes twelve by health ascending`() {
         // B15 扩池定稿：POOL_LIMIT=12（首波 top6+二波 7~12），慢源 13 出局
         val sources = (1..13).map { src("s$it", "http://s$it") }
@@ -46,13 +53,18 @@ class AggTest {
         VodType("21", "国产剧", "2"),
         VodType("22", "日韩剧", "2"),
         VodType("23", "美剧", "2"),
+        VodType("24", "台剧", "2"),
+        VodType("25", "港剧", "2"),
+        VodType("26", "泰剧", "2"),
+        VodType("27", "海外剧", "2"),
         VodType("3", "剧情片", "0"),
     )
 
     @Test
-    fun `subCatsFor regular cat takes three kids, region cat filters by rlabs`() {
+    fun `subCatsFor regular cat takes six kids, region cat filters by rlabs`() {
+        // 方案B（用户 2026-11-06 批准）：常规子类 3→6 扩面——实测多数源日剧排第 6，take(3) 永不含区子类
         val tv = Agg.AGG_CATS[1]
-        assertEquals(listOf("21", "22", "23"), Agg.subCatsFor(tree, tv).map { it.id })
+        assertEquals(listOf("21", "22", "23", "24", "25", "26"), Agg.subCatsFor(tree, tv).map { it.id })
         val jp = tv.copy(rlabs = listOf("JP")) // 日韩剧含「日韩」→ JP 码命中（引擎保留定向能力；聚合墙已改纯客户端过滤不再改道）
         assertEquals(listOf("22"), Agg.subCatsFor(tree, jp).map { it.id })
         // 地区无命中子类 → 回落父类混拉（靠条目 Region.of 客户端过滤）
@@ -69,10 +81,52 @@ class AggTest {
     }
 
     @Test
+    fun `regionCatOf no-ops without labs else carries them`() {
+        // 方案A：chip 选择态构造定向 cat；「全部」/单源墙 labs 空=原样返回不改道
+        val tv = Agg.AGG_CATS[1]
+        assertEquals(tv, Agg.regionCatOf(tv, emptyList()))
+        assertNull(Agg.regionCatOf(null, emptyList()))
+        val rc = Agg.regionCatOf(tv, listOf("JP"))
+        assertEquals(listOf("JP"), rc?.rlabs)
+        assertEquals("电视剧", rc?.key)
+        assertEquals(tv.kw, rc?.kw)
+    }
+
+    @Test
+    fun `preferRegionFirst puts sources with region kid ahead, keeps rest order`() {
+        val pool = listOf(src("a", "http://a"), src("b", "http://b"), src("c", "http://c"))
+        val out = Agg.preferRegionFirst(pool, setOf("http://c"))
+        assertEquals(listOf("c", "a", "b"), out.map { it.name })
+    }
+
+    @Test
+    fun `topMatches takes four case-insensitive top-level types by kw`() {
+        // 资源口定向增补选择器：顶层类名含关键词（忽略大小写），前 4 封顶，子类不参与
+        val z = listOf(
+            VodType("9", "日本无码", "0"),
+            VodType("10", "VR无码", "0"),
+            VodType("11", "jk制服", "0"),
+            VodType("12", "国漫", "0"),
+            VodType("13", "制服二级", "9"), // 非顶层不计
+        )
+        assertEquals(listOf("9", "10", "11"), Agg.topMatches(z, listOf("无码", "JK", "制服")).map { it.id })
+        assertEquals(emptyList<String>(), Agg.topMatches(z, listOf("不存在的词")).map { it.id })
+        // 前 4 封顶
+        val many = (1..6).map { VodType("$it", "无码$it", "0") }
+        assertEquals(4, Agg.topMatches(many, listOf("无码")).size)
+    }
+
+    @Test
+    fun `zoneTagKey keeps source and tag in shard key`() {
+        val s = src("S", "http://x/api")
+        assertEquals("aggs:http://x/api|zone:有码", Agg.zoneTagKey(s, "有码"))
+    }
+
+    @Test
     fun `hasRegionKid only true when kid matches rlabs`() {
         assertTrue(Agg.hasRegionKid(tree, Agg.AGG_CATS[1].copy(rlabs = listOf("JP"))))
         assertTrue(Agg.hasRegionKid(tree, Agg.AGG_CATS[1].copy(rlabs = listOf("EUUS"))))
-        assertFalse(Agg.hasRegionKid(tree, Agg.AGG_CATS[1].copy(rlabs = listOf("OTHER"))))
+        assertFalse(Agg.hasRegionKid(tree, Agg.AGG_CATS[0].copy(rlabs = listOf("OTHER")))) // 电影树无地区子类（电视剧子树的泰剧算 OTHER，勿用）
         assertFalse(Agg.hasRegionKid(tree, Agg.AGG_CATS[1])) // 无 rlabs 恒 false
     }
 
@@ -126,5 +180,38 @@ class AggTest {
     fun `yearDesc sorts by leading year keeping stable order within same year`() {
         val items = listOf(item("c", "c", year = "2023"), item("a", "a", year = "2025"), item("b", "b", year = "2025"), item("d", "d", year = null))
         assertEquals(listOf("a", "b", "c", "d"), Agg.yearDesc(items).map { it.vodId })
+    }
+
+    @Test
+    fun `yearAsc sorts oldest first with no-year sinking to tail`() {
+        val items = listOf(item("c", "c", year = "2023"), item("a", "a", year = "2025"), item("b", "b", year = "2025"), item("d", "d", year = null))
+        assertEquals(listOf("c", "a", "b", "d"), Agg.yearAsc(items).map { it.vodId })
+    }
+
+    // 终审 #1（Critical）：单源墙 tp1 直查无 dedup → LazyGrid key 重复即闪退
+    @Test
+    fun `firstWallOf drops same-id repeats so grid keys stay unique`() {
+        val page = listOf(item("甲", "1"), item("甲·重复回", "1"), item("乙", "2"))
+        val out = Agg.firstWallOf(page)
+        assertEquals(listOf("1", "2"), out.map { it.vodId })
+        assertEquals("甲", out.first().name) // 保留首见，不被重复项顶替
+    }
+
+    @Test
+    fun `firstWallOf keeps year-descending head`() {
+        val out = Agg.firstWallOf(listOf(item("旧", "1", year = "2020"), item("新", "2", year = "2026")))
+        assertEquals(listOf("新", "旧"), out.map { it.name })
+    }
+
+    @Test
+    fun `aggMoreContinue caps client filtered walls at ten rounds`() {
+        // 日剧类窄过滤下整轮多为非命中条目，AutoLoadMore 底栏恒可见自链=「一直加载中」；R8 同构封顶
+        assertTrue(Agg.aggMoreContinue(9, true, true))
+        assertFalse(Agg.aggMoreContinue(10, true, true))
+        assertTrue(Agg.aggMoreContinue(10, false, true)) // 无过滤维持 800 封顶/FUSE 原判底
+        assertTrue(Agg.aggMoreContinue(Agg.FUSE_ROUND - 1, false, true))
+        assertFalse(Agg.aggMoreContinue(Agg.FUSE_ROUND, true, true))
+        assertFalse(Agg.aggMoreContinue(1, true, false)) // 全池封顶=到底（与过滤无关）
+        assertFalse(Agg.aggMoreContinue(1, false, false))
     }
 }

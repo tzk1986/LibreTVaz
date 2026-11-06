@@ -72,16 +72,23 @@ object Zone {
 
     fun hostOf(u: String?): String? = try { URL(u).host.lowercase() } catch (e: Exception) { null }
 
-    /** 读本地私有站单；缺失/损坏=空表（公开克隆形态） */
-    fun loadPreset(context: Context): List<VodSource> = runCatching {
-        val text = context.assets.open("zone_sources.json").use { it.readBytes().toString(Charsets.UTF_8) }
-        val arr = JSONArray(text)
-        (0 until arr.length()).mapNotNull { i ->
-            val a = arr.optJSONArray(i) ?: return@mapNotNull null
-            val url = a.optString(1)
-            if (url.isBlank()) null else VodSource(a.optString(0).ifBlank { hostOf(url) ?: url }, url.trim(), isAdult = true)
-        }
-    }.getOrDefault(emptyList())
+    /** 读本地私有站单；缺失/损坏=空表（公开克隆形态）。用户 2026-11-06 走查 #9：align 热路径每次读 asset+全量解码 → 进程一次缓存 */
+    @Volatile private var presetCache: List<VodSource>? = null
+
+    fun loadPreset(context: Context): List<VodSource> {
+        presetCache?.let { return it }
+        val list = runCatching {
+            val text = context.assets.open("zone_sources.json").use { it.readBytes().toString(Charsets.UTF_8) }
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val a = arr.optJSONArray(i) ?: return@mapNotNull null
+                val url = a.optString(1)
+                if (url.isBlank()) null else VodSource(a.optString(0).ifBlank { hostOf(url) ?: url }, url.trim(), isAdult = true)
+            }
+        }.getOrDefault(emptyList())
+        presetCache = list
+        return list
+    }
 
     /** 首次/升版本进资源口补种预置站（版本号闸门；用户删过不再重复加回；「恢复预置」清标记重种） */
     fun seedIfAbsent(context: Context, store: SourceStore) {

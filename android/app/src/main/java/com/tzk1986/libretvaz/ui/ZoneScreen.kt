@@ -86,6 +86,8 @@ fun ZoneScreen(
     var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
     var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
     var wall by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
+    // 方案A 同构（用户 2026-11-06 资源口）：筛选态后台定向增补的条目池（zone:标签 分片并入，随墙重建清空）
+    var zextra by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var wallSeq by remember { mutableIntStateOf(0) }
     var nonce by remember { mutableIntStateOf(0) } // 🔄刷新钮轮次 token：清本池分片后重跑墙
@@ -188,7 +190,7 @@ fun ZoneScreen(
         tags.clear()
         val pool = zonePoolNow()
         val ttl = aggTtl()
-        wall = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
+        wall = emptyList(); zextra = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
         if (pool.isEmpty()) { loading = false; return@LaunchedEffect }
         loading = true
         val drawn = HashSet<String>()
@@ -202,8 +204,8 @@ fun ZoneScreen(
                 if (fresh.isNotEmpty()) wall = wall + fresh
             }
             merged.forEach { drawn.add(Agg.nameKey(it)) }
-            // 专区墙片名+提取番号入专区词库（用户 2026-11-04 番号搜索：编号也进简拼提示候选）
-            VocabPools.get(context).addWords(merged.map { it.name } + merged.mapNotNull { CmsParser.codeRaw(it.name) }, true)
+            // 专区墙片名+提取番号入专区词库（用户 2026-11-04 番号搜索：编号也进简拼提示候选）；终审 #4：mergeFrom 在 Main，派生移后台
+            scope.launch(Dispatchers.Default) { VocabPools.get(context).addWords(merged.map { it.name } + merged.mapNotNull { CmsParser.codeRaw(it.name) }, true) }
             aggMore = true
             return true
         }
@@ -263,6 +265,50 @@ fun ZoneScreen(
         }
     }
 
+    // 方案A 同构（用户 2026-11-06 资源口，铁律放宽为「切类/切筛选零阻塞、允许后台定向增补」）：
+    // 选中一级/二级筛选时后台拉各源「类名命中标签关键词」的顶层类页进 zone:标签 独立分片（与 latest 池隔离、
+    // 零改道零清空），逐源到达并入 zextra；首屏仍是 latest 池客户端过滤秒显；命中该类优先、并发 2 低优先
+    LaunchedEffect(cat, flt, nonce, selUrl, poolCache) {
+        val ztags = listOfNotNull(Zone.ZONE_CATS.getOrNull(cat), Zone.ZONE_FILTERS.getOrNull(flt))
+        if (ztags.isEmpty()) return@LaunchedEffect
+        val my = wallSeq
+        val pool = zonePoolNow()
+        if (pool.isEmpty()) return@LaunchedEffect
+        suspend fun mergeZ(tag: Zone.ZoneTag) {
+            val merged = withContext(Dispatchers.IO) { Agg.mergeZoneShards(pool, tag) }
+            if (merged.isEmpty()) return
+            val fresh = withContext(Dispatchers.Main) {
+                val seen = (wall + zextra).mapTo(HashSet()) { Agg.nameKey(it) }
+                val f = merged.filter { seen.add(Agg.nameKey(it)) }
+                if (f.isNotEmpty()) zextra = zextra + f
+                f
+            }
+            if (fresh.isNotEmpty()) launch(Dispatchers.Default) {
+                VocabPools.get(context).addWords(fresh.map { it.name } + fresh.mapNotNull { CmsParser.codeRaw(it.name) }, true)
+            }
+        }
+        for (tag in ztags) {
+            if (my != wallSeq) return@LaunchedEffect
+            mergeZ(tag) // 已有定向分片秒併（二次进同 chip 零等待）
+            val caps = pool.mapNotNull { s ->
+                runCatching { if (Agg.topMatches(Agg.typesOf(repo, s), tag.kw).isNotEmpty()) s.url else null }.getOrNull()
+            }.toSet()
+            coroutineScope {
+                val sem = Semaphore(2)
+                pool.sortedByDescending { if (it.url in caps) 1 else 0 }.filterNot { Agg.freshZone(it, tag, aggTtl()) }.forEach { s ->
+                    launch(Dispatchers.IO) {
+                        sem.withPermit {
+                            if (my != wallSeq) return@withPermit
+                            val got = runCatching { Agg.fetchZoneTag(repo, s, tag, 1) }.getOrDefault(emptyList())
+                            Agg.putZoneShard(s, tag, got)
+                            if (my == wallSeq) mergeZ(tag)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // S4 无限下拉：各源同分类 pg+1 追加进分片（dedupById+800 封顶）。逐源到达即增量上墙+单源 9s 封顶
     // （用户 2026-11-04：「显示加载中要等很久」——不再整轮等最慢源，快源 1~3s 先出图）
     fun aggLoadMore() {
@@ -272,32 +318,41 @@ fun ZoneScreen(
         val my = wallSeq
         val pg = aggPage + 1
         val pool = zonePoolNow()
+        val ztags = listOfNotNull(Zone.ZONE_CATS.getOrNull(cat), Zone.ZONE_FILTERS.getOrNull(flt))
         aggLoadingMore = true
         scope.launch {
             val done = java.util.concurrent.atomic.AtomicInteger(0)
             pool.forEach { s ->
                 launch(Dispatchers.IO) {
-                    val more = runCatching {
-                        kotlinx.coroutines.withTimeout(9_000) { Agg.fetchSource(repo, s, null, pg) }
+                    // 过滤态续轮同点播侧方案A：优先定向拉标签命中顶层类 pg 页；本源无命中类→回落 latest 续页
+                    val fz = if (ztags.isEmpty()) emptyList() else runCatching {
+                        kotlinx.coroutines.withTimeout(9_000) { ztags.map { t -> t to Agg.fetchZoneTag(repo, s, t, pg) } }
                     }.getOrDefault(emptyList())
-                    if (more.isNotEmpty()) Agg.appendShard(s, null, more)
+                    if (fz.any { it.second.isNotEmpty() }) fz.forEach { (t, got) -> if (got.isNotEmpty()) Agg.appendZoneShard(s, t, got) }
+                    else {
+                        val more = runCatching {
+                            kotlinx.coroutines.withTimeout(9_000) { Agg.fetchSource(repo, s, null, pg) }
+                        }.getOrDefault(emptyList())
+                        if (more.isNotEmpty()) Agg.appendShard(s, null, more)
+                    }
                     if (my != wallSeq) return@launch
-                    // 本源一回就重并上墙（主线程写状态）
+                    val all = Agg.mergeShards(pool, null) // 走查 #4 同构：读盘合并移出 Main
+                    val zm = if (ztags.isEmpty()) emptyList() else ztags.flatMap { Agg.mergeZoneShards(pool, it) }
                     withContext(Dispatchers.Main) {
-                        val all = Agg.mergeShards(pool, null)
-                        val onWall = wall.mapTo(HashSet()) { Agg.nameKey(it) }
-                        val added = all.filter { onWall.add(Agg.nameKey(it)) }
+                        val onWall = (wall + zextra).mapTo(HashSet()) { Agg.nameKey(it) }
+                        val added = (all + zm).filter { onWall.add(Agg.nameKey(it)) }
                         if (added.isNotEmpty()) {
                             wall = wall + added
-                            VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true)
+                            launch(Dispatchers.Default) { VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true) } // 终审 #4：词库派生移出 Main
                         }
                     }
                     if (done.incrementAndGet() == pool.size) {
                         aggLoadingMore = false
                         aggPage = pg
                         // 空轮不判到底（用户 2026-11-04：下拉要继续拉更多——CMS 尾页常整页重复、后页反有新数据；
-                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）
-                        aggMore = aggPage < Agg.FUSE_ROUND && pool.any { (Agg.shards.getRaw(Agg.key(it, null))?.v?.size ?: 0) < Agg.DEPTH }
+                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）；分类/筛选 chip 下同型自链，10 轮封顶（点播侧同日走查）
+                        aggMore = Agg.aggMoreContinue(aggPage, cat >= 0 || flt >= 0,
+                            pool.any { (Agg.shards.getRaw(Agg.key(it, null))?.v?.size ?: 0) < Agg.DEPTH })
                         speedTest()
                         if (refocus) {
                             delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
@@ -309,8 +364,8 @@ fun ZoneScreen(
         }
     }
 
-    // 客户端过滤（零重拉）：wall=latest 全池，shown=一级分类∩二级筛选；窗口渲染作用于过滤结果
-    val shown = remember { derivedStateOf { Zone.filterPool(wall, cat, flt) } }
+    // 客户端过滤（零重拉）：wall=latest 全池+zextra 定向增补（片名并集兜底去重），shown=一级分类∩二级筛选；窗口渲染作用于过滤结果
+    val shown = remember { derivedStateOf { Zone.filterPool(Agg.dedupByName(wall + zextra), cat, flt) } }
     LaunchedEffect(cat, flt) { aggWin = 240 }
     val expandable = shown.value.size > aggWin
     val view = if (expandable) shown.value.take(aggWin) else shown.value
@@ -420,7 +475,7 @@ fun ZoneScreen(
                     }
                 }
             }
-            items(view, key = { "${it.sourceUrl}|${it.vodId}" }) { it ->
+            items(view, key = { "${it.sourceUrl}|${it.vodId}" }, contentType = { "poster" }) { it ->
                 ZonePoster(
                     item = it,
                     tag = tags[zspKey(it)],
@@ -566,12 +621,15 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                // 走查 #14：来源标命中面过小——clickable 后先垫一层透明 padding 再 clip/background，
+                // 手势界=色块+12dp 留白而色块视觉尺寸不变（foundation 1.12.1 无 minimumInteractiveTouchArea）
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(4.dp)
+                    .clickable(onClick = onSrc)
+                    .padding(horizontal = 6.dp, vertical = 12.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color.Black.copy(alpha = 0.55f))
-                    .clickable(onClick = onSrc)
                     .padding(horizontal = 5.dp, vertical = 2.dp),
             )
         }

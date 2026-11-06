@@ -12,6 +12,7 @@ coil = "2.7.0"
 icu4j = "76.1"
 zxing = "3.5.3"
 work = "2.10.2"
+okhttp = "4.12.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -34,6 +35,7 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 json = { group = "org.json", name = "json", version.ref = "json" }
 icu4j = { group = "com.ibm.icu", name = "icu4j", version.ref = "icu4j" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -106,7 +106,9 @@ class PinIndex(
         }
     }
 
-    fun add(word: String?): Boolean {
+    // 用户 2026-11-06 走查 #8：persist 落盘移后台线程后与主线程 addWords 并发 →
+    // 全部公开读写面 @Synchronized（evict 私有由 add 持锁可重入），并暴露一致性拷贝 snapshot 供后台编码
+    @Synchronized fun add(word: String?): Boolean {
         val w = (word ?: "").trim()
         if (w.isEmpty() || py.containsKey(w)) return false
         words.add(w); seq[w] = ++order
@@ -116,40 +118,46 @@ class PinIndex(
         return true
     }
 
-    fun addMany(list: List<String>?) { for (w in list ?: emptyList()) add(w) }
+    @Synchronized fun addMany(list: List<String>?) { for (w in list ?: emptyList()) add(w) }
 
-    fun bump(word: String?, d: Long = 1) {
+    @Synchronized fun bump(word: String?, d: Long = 1) {
         val w = (word ?: "").trim()
         if (w.isNotEmpty()) wf[w] = (wf[w] ?: 0L) + d
     }
 
     private val rank: Comparator<String> = compareByDescending<String> { wf[it] ?: 0L }.thenByDescending { seq[it] ?: 0 }
 
+    // minor#8 走查：suggest 高频调用（联想逐键触发），字母校验模式提升为常量免逐调用现编
+    private val alphaRe = Regex("^[a-z]+$")
+
     /** 首字母前缀联想：≥2 字母只扫前缀桶；按权重降序、同权重新词优先，上限 limit */
-    fun suggest(q: String?, limit: Int = 30): List<String> {
+    @Synchronized fun suggest(q: String?, limit: Int = 30): List<String> {
         val ql = (q ?: "").trim().lowercase(Locale.ROOT)
-        if (ql.isEmpty() || !Regex("^[a-z]+$").matches(ql) || coll == null) return emptyList()
+        if (ql.isEmpty() || !alphaRe.matches(ql) || coll == null) return emptyList()
         val cand: List<String> = if (ql.length >= 2) (buckets[ql.substring(0, 2)] ?: emptySet()).toList() else words
         val hits = cand.filter { w -> py[w]?.any { it.startsWith(ql) } == true }
         return hits.sortedWith(rank).take(limit)
     }
 
     /** 模糊召回：首字母串包含查询的「相关词」（非前缀也算，如 ffczz 含 fcz） */
-    fun fuzzy(q: String?, limit: Int = 30): List<String> {
+    @Synchronized fun fuzzy(q: String?, limit: Int = 30): List<String> {
         val ql = (q ?: "").trim().lowercase(Locale.ROOT)
         if (ql.isEmpty() || coll == null) return emptyList()
         val hits = words.filter { w -> py[w]?.any { it.contains(ql) } == true }
         return hits.sortedWith(rank).take(limit)
     }
 
-    fun top(n: Int): List<String> = words.sortedWith(rank).take(n)
+    @Synchronized fun top(n: Int): List<String> = words.sortedWith(rank).take(n)
 
-    fun initials(word: String?): String =
+    @Synchronized fun initials(word: String?): String =
         buildString { for (c in (word ?: "")) initialOf(c).takeIf { it != 0.toChar() }?.let { append(it) } }
 
-    fun variants(word: String?): List<String> = py[(word ?: "").trim()] ?: emptyList()
+    @Synchronized fun variants(word: String?): List<String> = py[(word ?: "").trim()] ?: emptyList()
 
-    fun list(): List<String> = words.toList()
-    fun size(): Int = words.size
-    fun weightsMap(): Map<String, Long> = wf.toMap()
+    @Synchronized fun list(): List<String> = words.toList()
+    @Synchronized fun size(): Int = words.size
+    @Synchronized fun weightsMap(): Map<String, Long> = wf.toMap()
+
+    /** 后台落盘用一致性拷贝：词表+权重各自独立快照，返回后与实例变更互不影响 */
+    @Synchronized fun snapshot(): Pair<List<String>, Map<String, Long>> = words.toList() to HashMap(wf)
 }

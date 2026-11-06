@@ -29,7 +29,7 @@ data class ProbeRow(val name: String, val url: String, val ms: Long?, val state:
  * ac=list 往返探活记 ms/失败次数，连续失败 3 次标死，死满 7 天自动移除（专区源豁免——
  * 专区接口波动频繁，清掉后种子不会自动补回）；orderSources/聚合池按 ms 排序消费。
  */
-class HealthStore(context: Context) {
+class HealthStore private constructor(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("libretvaz_health", Context.MODE_PRIVATE)
     private val map = ConcurrentHashMap<String, HealthRec>()
 
@@ -50,7 +50,20 @@ class HealthStore(context: Context) {
         }
     }
 
+    // 用户 2026-11-06 走查 #7：recordOk/Fail 每条全表重编码+写盘（probeAll 批测=O(N²)）→ 500ms 防抖后台合并（同 SearchShards 模式）
+    private val persistExec = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "health-persist").apply { isDaemon = true }
+    }
+    private var pendingSave: java.util.concurrent.ScheduledFuture<*>? = null
+
     private fun save() {
+        synchronized(persistExec) {
+            pendingSave?.cancel(false)
+            pendingSave = persistExec.schedule({ runCatching { writeAll() } }, 500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun writeAll() {
         val root = JSONObject()
         map.forEach { (k, h) ->
             root.put(k, JSONObject().apply {
@@ -126,6 +139,14 @@ class HealthStore(context: Context) {
     }
 
     companion object {
+        // 用户 2026-11-06 走查 #7：10 处调用点各 new（每次全表 JSON 解析）→ 进程单例；
+        // 私有构造下外部 HealthStore(context) 语法自动落此处 invoke，调用点零改动
+        @Volatile private var inst: HealthStore? = null
+
+        operator fun invoke(context: Context): HealthStore = inst ?: synchronized(this) {
+            inst ?: HealthStore(context.applicationContext).also { inst = it }
+        }
+
         const val DEAD_FAILS = 3
         const val DEAD_REMOVE_MS = 7 * 24 * 3600_000L
         const val RECHECK_MS = 6 * 3600_000L

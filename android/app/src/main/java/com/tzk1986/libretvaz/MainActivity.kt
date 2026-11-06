@@ -55,23 +55,36 @@ sealed class Screen {
 
 class MainActivity : ComponentActivity() {
 
+    /** TV 大屏（用户 2026-11-03）：隐藏系统状态栏，首页顶栏自绘网络+时钟替代 */
+    private fun applyImmersive() {
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+            systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    // 修复（用户 2026-11-05：状态栏被带回后永久压住顶部 tab 无法切换）：
+    // 全屏退场/系统对话框等任何路径把状态栏 show 回来后，回前台即按全局策略重新隐藏
+    override fun onResume() {
+        super.onResume()
+        applyImmersive()
+    }
+
     /** B11 退出修剪：仅按低水位收缩磁盘占用；搜索分片/专区角标跨会话保留（web localStorage 语义，7 天硬清兜底） */
     override fun onStop() {
         super.onStop()
         // 报错日志改 7 天滚动保留（用户 2026-11-04）：退出不再清除
         Thread {
+            // 终审 #3：退后台前把搜索分片在排防抖兜底冲盘（编码在后台线程，不占 onStop 主线程）
+            runCatching { com.tzk1986.libretvaz.data.SearchShards.flushAll() }
             runCatching { DiskCache.trimTo(DiskCache.LOW_WATER_BYTES) }
         }.start()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // TV 大屏（用户 2026-11-03）：隐藏系统状态栏，首页顶栏自绘网络+时钟替代
-        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
-            hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-            systemBarsBehavior =
-                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        applyImmersive()
         val sourceStore = SourceStore(this)
         val settingsStore = SettingsStore(this)
         Http.proxyUrl = settingsStore.proxyUrl // 全局 HTTP/播放数据源共用可选代理

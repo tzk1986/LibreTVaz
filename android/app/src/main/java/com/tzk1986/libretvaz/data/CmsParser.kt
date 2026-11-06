@@ -52,13 +52,25 @@ object CmsParser {
      * 季数别名解析（与 Web 端一致）：查询侧允许「庆余年2」无空格写法；
      * 标题侧要求空格或明确「第N季」，避免把片名自带数字当成季数。
      */
+    // 用户 2026-11-06 走查 #6：季解析/番号解析/提取热路径字面 Regex 提 private val（模式串逐字不动）
+    private val PS_ANN = Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季.*$")
+    private val PS_STRICT = Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季$")
+    private val PS_BARE_SP = Regex("^(.*?)\\s+([1-9]\\d?)$")
+    private val PS_BARE_LOOSE = Regex("^(.*?)\\s*([1-9]\\d?)$")
+    private val PS_CN_TEN = Regex("^[一二三四五六七八九]?十[一二三四五六七八九]?$")
+    private val CC_SHAPE = Regex("^[a-z0-9][a-z0-9 \\-_·]*$")
+    private val CC_SEP = Regex("^(.+?)[ \\-_·]+(\\d{1,7})$")
+    private val CC_DATE_FLAT = Regex("^(\\d{6})(\\d{2,3})$")
+    private val CC_ALPHA_NUM = Regex("^([a-z]+)(\\d{1,7})$")
+    private val CC_ALNUM_NUM = Regex("^([a-z][a-z0-9]*?)(\\d{2,7})$")
+    private val LABEL_ALNUM = Regex("[a-z][a-z0-9]*")
+    private val LABEL_SIX = Regex("\\d{6}")
+    private val EC_DASH = Regex("[-_]")
+
     private fun parseSeasonSuffix(text: String, allowAnnotations: Boolean, bareNeedsSpace: Boolean): SeasonRef? {
         val t = text.trim()
-        val explicitPattern = if (allowAnnotations)
-            Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季.*$")
-        else
-            Regex("^(.*?)\\s*第\\s*([1-9]\\d?|[一二两三四五六七八九十]{1,3})\\s*季$")
-        val barePattern = if (bareNeedsSpace) Regex("^(.*?)\\s+([1-9]\\d?)$") else Regex("^(.*?)\\s*([1-9]\\d?)$")
+        val explicitPattern = if (allowAnnotations) PS_ANN else PS_STRICT
+        val barePattern = if (bareNeedsSpace) PS_BARE_SP else PS_BARE_LOOSE
         val explicit = explicitPattern.matchEntire(t)
         val match = explicit ?: barePattern.matchEntire(t) ?: return null
         val base = match.groupValues[1]
@@ -70,7 +82,7 @@ object CmsParser {
             val digits = "零一二三四五六七八九"
             season = when {
                 chinese.length == 1 && chinese in "一二三四五六七八九" -> digits.indexOf(chinese)
-                Regex("^[一二三四五六七八九]?十[一二三四五六七八九]?$").matches(chinese) -> {
+                PS_CN_TEN.matches(chinese) -> {
                     val parts = chinese.split("十")
                     val tens = parts[0]
                     val units = if (parts.size > 1) parts[1] else ""
@@ -157,25 +169,25 @@ object CmsParser {
     /** 查询 → 番号规范键；非编号形态返回 null（调用方回落常规匹配） */
     fun codeCanon(q: String): String? {
         val s = q.trim().lowercase()
-        if (s.isEmpty() || !Regex("^[a-z0-9][a-z0-9 \\-_·]*$").matches(s)) return null
+        if (s.isEmpty() || !CC_SHAPE.matches(s)) return null
         var label: String? = null
         var num: String? = null
-        val sep = Regex("^(.+?)[ \\-_·]+(\\d{1,7})$").matchEntire(s)
+        val sep = CC_SEP.matchEntire(s)
         if (sep != null) {
             label = sep.groupValues[1]; num = sep.groupValues[2]
         } else {
             val flat = s.replace(CODE_SEP, "")
-            Regex("^(\\d{6})(\\d{2,3})$").matchEntire(flat)?.let {
+            CC_DATE_FLAT.matchEntire(flat)?.let {
                 label = it.groupValues[1]; num = it.groupValues[2]
-            } ?: Regex("^([a-z]+)(\\d{1,7})$").matchEntire(flat)?.let {
+            } ?: CC_ALPHA_NUM.matchEntire(flat)?.let {
                 label = it.groupValues[1]; num = it.groupValues[2]
-            } ?: Regex("^([a-z][a-z0-9]*?)(\\d{2,7})$").matchEntire(flat)?.let {
+            } ?: CC_ALNUM_NUM.matchEntire(flat)?.let {
                 label = it.groupValues[1]; num = it.groupValues[2]
             }
         }
         val l = label?.replace(CODE_SEP, "") ?: return null
         if (num == null || l.length > 12) return null
-        val okLabel = l.matches(Regex("[a-z][a-z0-9]*")) || l.matches(Regex("\\d{6}"))
+        val okLabel = l.matches(LABEL_ALNUM) || l.matches(LABEL_SIX)
         if (!okLabel) return null
         var lab = if (l.startsWith("fc2")) l.removeSuffix("ppv") else l
         if (lab in CODE_STOP) return null
@@ -189,13 +201,13 @@ object CmsParser {
         if (name.isEmpty()) return emptyList()
         val out = LinkedHashMap<String, String>()
         for (m in DATE_T.findAll(name)) {
-            val p = m.value.split(Regex("[-_]"))
+            val p = m.value.split(EC_DASH)
             val n = p[1].trimStart('0')
             if (n.isNotEmpty()) out.putIfAbsent("${p[0]}|$n", m.value)
         }
         for (rx in listOf(CODE_T_SEP, CODE_T_FLAT)) for (m in rx.findAll(name)) {
             var l = m.groupValues[1].lowercase().replace(CODE_SEP, "")
-            if (l.length > 12 || !l.matches(Regex("[a-z][a-z0-9]*"))) continue
+            if (l.length > 12 || !l.matches(LABEL_ALNUM)) continue
             if (l.startsWith("fc2")) l = l.removeSuffix("ppv")
             if (l in CODE_STOP) continue
             val n = m.groupValues[2].trimStart('0')

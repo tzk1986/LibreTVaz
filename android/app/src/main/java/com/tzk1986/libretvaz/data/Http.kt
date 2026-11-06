@@ -1,13 +1,18 @@
 package com.tzk1986.libretvaz.data
 
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 object Http {
     const val CHROME_UA =
@@ -54,50 +59,61 @@ object Http {
         return false
     }
 
-    /** 阻塞式二进制 GET（XMLTV .gz 等需先按魔数判压缩，不能预先按文本读），带跨协议重定向跟随；IO 线程使用 */
-    fun getBytes(url: String, timeoutMs: Int = 15000): ByteArray {
-        val proxy = proxySpec()?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress(it.first, it.second)) }
+    /** 用户 2026-11-06 走查 #1：全 app 普通 GET 与播放数据源共用一个连接池（keep-alive 复用消除逐请求 TCP+TLS 握手） */
+    val sharedPool = ConnectionPool(32, 5, TimeUnit.MINUTES)
+
+    /** client 按「代理×超时」组合缓存（proxyUrl 变更后组合键自然换建新 client） */
+    private val clients = ConcurrentHashMap<String, OkHttpClient>()
+
+    private fun clientFor(timeoutMs: Int): OkHttpClient {
+        val spec = proxySpec()
+        val key = "${spec?.first}:${spec?.second}|$timeoutMs"
+        clients[key]?.let { return it }
+        if (clients.size > 16) clients.clear() // minor#7：组合键枚举本应有限（代理单值×固定超时），防动态超时调用方无限膨胀；sharedPool 在 object 级不受 clear 影响
+        val c = OkHttpClient.Builder()
+            .connectionPool(sharedPool)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .proxy(spec?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress(it.first, it.second)) } ?: Proxy.NO_PROXY)
+            .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .build()
+        return clients.putIfAbsent(key, c) ?: c
+    }
+
+    /** 阻塞 GET 内核：手写 ≤6 跳跨协议重定向循环（Location 相对解析同原 HttpURLConnection 路）；IO 线程使用 */
+    private inline fun <R> execute(url: String, timeoutMs: Int, headers: Map<String, String>, read: (Response) -> R): R {
+        val client = clientFor(timeoutMs)
         var cur = url
         repeat(6) {
-            val conn = (if (proxy != null) URL(cur).openConnection(proxy) else URL(cur).openConnection()) as HttpURLConnection
-            try {
-                conn.connectTimeout = timeoutMs
-                conn.readTimeout = timeoutMs
-                conn.requestMethod = "GET"
-                conn.instanceFollowRedirects = false
-                conn.setRequestProperty("User-Agent", CHROME_UA)
-                val code = conn.responseCode
-                if (code in 200..299) return conn.inputStream.use { it.readBytes() }
+            val rb = Request.Builder().url(cur)
+            headers.forEach { (k, v) -> rb.header(k, v) }
+            client.newCall(rb.build()).execute().use { resp ->
+                val code = resp.code
+                if (code in 200..299) return read(resp)
                 if (code in 300..399) {
-                    val loc = conn.getHeaderField("Location")
+                    val loc = resp.header("Location")
                     if (loc.isNullOrEmpty()) throw IllegalStateException("HTTP $code")
                     cur = try { URL(URL(cur), loc).toString() } catch (e: Exception) { loc }
                     return@repeat
                 }
                 throw IllegalStateException("HTTP $code")
-            } finally {
-                conn.disconnect()
             }
         }
         throw IllegalStateException("重定向次数过多")
     }
 
+    /** 阻塞式二进制 GET（XMLTV .gz 等需先按魔数判压缩，不能预先按文本读）。OkHttp 透明解压 gzip：Epg 两态均可处理 */
+    fun getBytes(url: String, timeoutMs: Int = 15000): ByteArray =
+        execute(url, timeoutMs, mapOf("User-Agent" to CHROME_UA)) { it.body?.bytes() ?: ByteArray(0) }
+
     /** 阻塞式 GET，调用方需在 IO 线程使用 */
     fun get(url: String, extraHeaders: Map<String, String> = emptyMap(), timeoutMs: Int = 8000): String {
-        val proxy = proxySpec()?.let { Proxy(Proxy.Type.HTTP, InetSocketAddress(it.first, it.second)) }
-        val conn = (if (proxy != null) URL(url).openConnection(proxy) else URL(url).openConnection()) as HttpURLConnection
-        try {
-            conn.connectTimeout = timeoutMs
-            conn.readTimeout = timeoutMs
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", CHROME_UA)
-            conn.setRequestProperty("Accept", "application/json, */*")
-            extraHeaders.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-            val code = conn.responseCode
-            if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            return conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        } finally {
-            conn.disconnect()
-        }
+        val headers = LinkedHashMap<String, String>()
+        headers["User-Agent"] = CHROME_UA
+        headers["Accept"] = "application/json, */*"
+        headers.putAll(extraHeaders)
+        // 恒按 UTF-8 解码，与原 bufferedReader(Charsets.UTF_8) 语义逐字一致（不看 Content-Type charset）
+        return execute(url, timeoutMs, headers) { String(it.body?.bytes() ?: ByteArray(0), Charsets.UTF_8) }
     }
 }

@@ -19,16 +19,21 @@ import androidx.compose.ui.unit.dp
 import com.tzk1986.libretvaz.data.CacheTiers
 import com.tzk1986.libretvaz.data.CmsParser
 import com.tzk1986.libretvaz.data.CmsRepository
+import com.tzk1986.libretvaz.data.HealthStore
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
+import com.tzk1986.libretvaz.data.perf.LineSpeed
 import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -39,6 +44,8 @@ import kotlinx.coroutines.withTimeout
  * matchBest=true＝换源弹框（用户 2026-11-03）：每源仅取严格同名一条（等值→包含），增量上屏，不写搜索分片避免污染聚合结果；
  * excludeUrl 排除当前源。BACK 由 Dialog 自身消费关闭回上一页。
  * 用户 2026-11-05：行内逐行测速（⚡角标）已拿掉——换源只需同名命中即点，测速在详情页线路行做。
+ * 用户 2026-11-06 批准重加（改两档自动，无需手点）：即时档=Health.ms 行首圆点（绿≤500/黄≤1500/红=慢或死源沉底）；
+ * 后台档=每行取详情首线首集链接 probeTtfb（A2≤2s）标「⚡快/中/慢」，epoch 变更或关框即停。
  * 用户 2026-11-05 合并改造：换源模式（matchBest）也显示关联词 chips；点词/点「搜索」即切到普通全源搜（best=false），
  * 原「换源」「搜关联」两入口在此合为一个弹窗。
  * 用户 2026-11-05 终改：按 TVBox「快搜」参考图重做——钮与弹窗更名「快搜」。结果区最终定稿＝参考图同款
@@ -70,6 +77,34 @@ fun FindSourceDialog(
     var hint by remember { mutableStateOf<String?>(null) }
     var runToken by remember { mutableIntStateOf(0) }
     val found = sortedMapOf<Int, List<VodSummary>>() // si→该源命中（web bySi：整数值键自动按源序展平）
+    // 用户 2026-11-06 批准的快搜两档自动标记：即时档源健康 + 后台档首字节探测表（"url|id" → 快/中/慢）
+    val health = remember { HealthStore(context) }
+    val probeMarks = remember { mutableStateMapOf<String, String>() }
+    val probed = remember { mutableSetOf<String>() } // 增量 flush 防重复起探
+    val semProbe = remember { Semaphore(3) }
+
+    /** 后台档单行探测：详情（缓存优先）取首线首集链接 → probeTtfb 分档；epoch 外/关框均停写 */
+    fun probeRow(ep: Int, hit: VodSummary) {
+        val k = "${hit.sourceUrl}|${hit.vodId}"
+        if (probeMarks.containsKey(k) || !probed.add(k)) return
+        scope.launch(Dispatchers.IO) {
+            semProbe.withPermit {
+                if (ep != runToken) return@withPermit
+                val src = store.vodSources().firstOrNull { PerfCore.norm(it.url) == PerfCore.norm(hit.sourceUrl) }
+                val link = src?.let { s ->
+                    (repo.detailCached(s, hit.vodId) ?: runCatching { withTimeout(8_000L) { repo.detail(s, hit.vodId) } }.getOrNull())
+                        ?.lines?.firstOrNull()?.list?.firstOrNull()?.link
+                }
+                val ms = link?.takeIf { it.isNotEmpty() }?.let { LineSpeed.probeTtfb(it) }
+                if (ep != runToken) return@withPermit
+                probeMarks[k] = when {
+                    ms == null || ms > 1500 -> "慢"
+                    ms <= 500 -> "快"
+                    else -> "中"
+                }
+            }
+        }
+    }
 
     /** 渐进渲染+SWR（web openFindBox.runFind 等价）：分片先上屏 → 首批 top N 逐源到达即追加 → 1.2s 次批；epoch 丢弃迟到 */
     fun runFind(q: String) {
@@ -79,17 +114,23 @@ fun FindSourceDialog(
         searching = true; results = null; hint = null
         scope.launch {
             val exN = excludeUrl?.let { PerfCore.norm(it) }
-            val items = store.vodSources().mapIndexed { si, s -> si to s }.filter {
-                it.second.isAdult == zone && (exN == null || PerfCore.norm(it.second.url) != exN)
-            } // web collectSources(zone)；换源模式排除当前源
+            val ck = PerfCore.searchKey(query)
+            // 用户 2026-11-06 走查 #4：取源表+分片盘回灌（shardsOf 含磁盘读+JSON 解码）下 IO，状态写回仍在 Main
+            val (items, siOf, splitOpt) = withContext(Dispatchers.IO) {
+                val its = store.vodSources().mapIndexed { si, s -> si to s }.filter {
+                    it.second.isAdult == zone && (exN == null || PerfCore.norm(it.second.url) != exN)
+                } // web collectSources(zone)；换源模式排除当前源
+                val m = its.associateBy({ PerfCore.norm(it.second.url) }, { it })
+                val sp = if (its.isEmpty()) null
+                else PerfCore.splitTtl(shardsOf(ck), CacheTiers.TIERS[settings.cacheTier].search)
+                Triple(its, m, sp)
+            }
             if (items.isEmpty()) {
                 hint = if (zone) "专区池暂无源" else "尚未添加点播源"
                 results = emptyList(); searching = false; return@launch
             }
             synchronized(found) { found.clear() }
-            val ck = PerfCore.searchKey(query)
-            val siOf = items.associateBy({ PerfCore.norm(it.second.url) }, { it })
-            val split = PerfCore.splitTtl(shardsOf(ck), CacheTiers.TIERS[settings.cacheTier].search)
+            val split = splitOpt!!
             val nt0 = CmsParser.normalizeTitle(query)
             (split.fresh.entries + split.stale.entries).forEach { (u, list) ->
                 val x = siOf[u] ?: return@forEach
@@ -105,6 +146,7 @@ fun FindSourceDialog(
                 if (ep != runToken) return
                 val snap = synchronized(found) { found.toSortedMap() }
                 results = snap.values.flatten().take(30)
+                results?.forEach { probeRow(ep, it) } // 后台档：已显示行起探（probed 表去重，增量 flush 只补新行）
             }
             flush()
             suspend fun fire(x: Pair<Int, VodSource>) {
@@ -195,12 +237,19 @@ fun FindSourceDialog(
                 r == null -> Text("点关联词可全源重搜；需改词请去首页「搜索」页", style = MaterialTheme.typography.bodySmall)
                 else -> {
                     hint?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    // 即时档死源沉底（稳定排序：非死源保持源到达序）
+                    val ordered = r.sortedBy { if (health.isDead(it.sourceUrl)) 1 else 0 }
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        items(r) { hit ->
-                            FindTextRow(hit = hit, onClick = { onPick(hit) })
+                        items(ordered) { hit ->
+                            FindTextRow(
+                                hit = hit, onClick = { onPick(hit) },
+                                healthMs = health.of(hit.sourceUrl)?.ms,
+                                dead = health.isDead(hit.sourceUrl),
+                                probe = probeMarks["${hit.sourceUrl}|${hit.vodId}"],
+                            )
                         }
                     }
                 }
@@ -210,10 +259,17 @@ fun FindSourceDialog(
     }
 }
 
-/** 快搜单列文字行（用户 2026-11-05 参考图定稿）：🎥 ｜源名｜ 资源 片名 类型 状态 年份，
- *  整行深底圆角可点；纯文字不依赖图床。源名去掉自带「|资源」尾缀防重复（如「量子|资源」→量子） */
+/** 快搜单列文字行（用户 2026-11-05 参考图定稿）：● 🎥 ｜源名｜ 资源 片名 类型 状态 年份 ⚡档，
+ *  整行深底圆角可点；纯文字不依赖图床。源名去掉自带「|资源」尾缀防重复（如「量子|资源」→量子）。
+ *  ●=即时档源接口延迟（绿≤500ms 黄≤1500ms 红=慢/死 灰=未测，用户 2026-11-06）；⚡=后台档首字节（快/中/慢） */
 @Composable
-private fun FindTextRow(hit: VodSummary, onClick: () -> Unit) {
+private fun FindTextRow(hit: VodSummary, onClick: () -> Unit, healthMs: Long?, dead: Boolean, probe: String?) {
+    val col = when {
+        healthMs == null -> Color(0x66FFFFFF)
+        dead || healthMs > 1500 -> Color(0xFFE05252)
+        healthMs <= 500 -> Color(0xFF4CAF50)
+        else -> Color(0xFFFFC107)
+    }
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
             .background(Color(0x99000000)).clickable(onClick = onClick)
@@ -221,6 +277,7 @@ private fun FindTextRow(hit: VodSummary, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Text("●", style = MaterialTheme.typography.labelSmall, color = col)
         Text("🎥︎", style = MaterialTheme.typography.labelMedium)
         Text(
             "｜${hit.sourceName.removeSuffix("|资源")}｜",
@@ -237,5 +294,15 @@ private fun FindTextRow(hit: VodSummary, onClick: () -> Unit) {
             hit.year?.ifBlank { null }?.let { append(" $it") }
         }
         Text(txt, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        probe?.let {
+            Text(
+                "⚡$it", style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                color = when (it) {
+                    "快" -> Color(0xFF4CAF50)
+                    "中" -> Color(0xFFFFC107)
+                    else -> Color(0xFFE05252)
+                },
+            )
+        }
     }
 }

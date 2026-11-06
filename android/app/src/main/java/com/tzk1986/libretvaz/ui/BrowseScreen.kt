@@ -57,6 +57,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -110,7 +112,6 @@ fun BrowseScreen(
     var type by remember { mutableStateOf<VodType?>(null) }
     var nonce by remember { mutableIntStateOf(0) } // 🔄刷新钮轮次 token：清缓存后重触发分类树+首页拉取
     var showSourcePicker by remember { mutableStateOf(false) }
-    var items by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
     var targetPage by remember { mutableStateOf(1) }
     var loading by remember { mutableStateOf(false) }
     var canLoadMore by remember { mutableStateOf(false) }
@@ -131,6 +132,13 @@ fun BrowseScreen(
     // 用户 2026-11-04 修复返回路径：页签态提升到进程级（进详情/播放返回不再复位「最新」，回原分类如电视剧）
     var aggCat by WallMem.browseCat // -1=最新；0..3=固定四大类
     var aggPreset by WallMem.aggPreset // 地区预设（标签, 地区集）——进程级，同 preset 理由
+    // 用户 2026-11-06 走查 #11：返回保墙态。wallKey=墙记忆槽位主键——聚合含源池指纹（池变即换 key），
+    // 单源含 si/type/preset；nonce 不入 key（🔄=干净首屏）；二级筛选值/页码为组合级复位，跨不到返回故不入
+    val srcFp = remember(sources) { sources.joinToString(";") { it.url } }
+    val wallKey = if (aggMode) "agg|$aggCat|${aggPreset?.first ?: ""}|$srcFp"
+    else "src|$sourceIdx|${type?.id ?: ""}|${preset?.first ?: ""}"
+    // 走查 #11：重建首帧直接种回 keep 墙（若等 effect seed，空墙先量一次会把 gridState 起始滚动钳回 0）
+    var items by remember { mutableStateOf(WallMem.browseKeep.value?.takeIf { it.first == wallKey && it.second.isNotEmpty() }?.second ?: emptyList()) }
     var showFilters by remember { mutableStateOf(false) } // web Vod.showFilters：再点当前分类=展开/收起筛选行
     // 用户 2026-11-05：面板打开即把按键焦点移入，遥控器方向键可直接选筛选项；BACK 收面板
     val panelFocus = remember { FocusRequester() }
@@ -138,7 +146,9 @@ fun BrowseScreen(
     var aggMore by remember { mutableStateOf(false) }
     var aggLoadingMore by remember { mutableStateOf(false) }
     var wallSeq by remember { mutableIntStateOf(0) } // 墙轮次 token：切类/换源/离页后作废旧轮结果
-    var aggWin by remember { mutableIntStateOf(240) } // S4 窗口渲染：聚合墙每次只挂 240 部，哨兵本地展开零请求（web Vod.win 等价）
+    // S4 窗口渲染：聚合墙每次只挂 240 部，哨兵本地展开零请求（web Vod.win 等价）
+    // 终审 #2：返回重建按 keep 墙体量播种，防止已展开的长墙被 240 截断回缩
+    var aggWin by remember { mutableIntStateOf(maxOf(240, WallMem.browseKeep.value?.takeIf { it.first == wallKey }?.second?.size ?: 0)) }
     var pendingRefocus by remember { mutableStateOf(false) } // 哨兵触发的续页画完回焦，遥控可连按 OK
     var sentinelFocused by remember { mutableStateOf(false) }
     val sentinelFr = remember { FocusRequester() }
@@ -210,7 +220,11 @@ fun BrowseScreen(
         if (aggMode) return@LaunchedEffect // 聚合模式由下方墙协程接管
         val s = source ?: return@LaunchedEffect
         val t = type
-        loading = true
+        // 走查 #11：单源墙 key 命中=返回重建（items 已在 remember 初始播种），tp=1 网络回来照旧整体替换，
+        // 只消除白屏与滚动复位；命中时不再叠 loading 菊花
+        val keepHit = WallMem.browseKeep.value?.takeIf { it.first == wallKey && it.second.isNotEmpty() }?.second
+        if (keepHit != null && items.isEmpty()) items = keepHit
+        loading = keepHit == null
         error = null
         // web loadVod 分支序：①preset&&pSrv→服务端合并 ②tab 有子类且未选子→父类聚子类 ③直查 effT+area/year/lang
         var mergedMode = false
@@ -240,7 +254,10 @@ fun BrowseScreen(
                 } else false
                 val pages = Agg.fetchMerged(repo, s, mk, areaSel ?: "", yearSel ?: "", langSel ?: "", targetPage)
                 val fresh = Agg.dedupByName(Agg.dedupById(pages.flatten()))
-                if (targetPage == 1 && fresh.isEmpty() && cachedShown) { loading = false; return@LaunchedEffect } // 拉新为空保留缓存首屏
+                if (targetPage == 1 && fresh.isEmpty() && cachedShown) {
+                    WallMem.browseKeep.value = wallKey to items // 走查 #11：缓存首屏也回存
+                    loading = false; return@LaunchedEffect
+                } // 拉新为空保留缓存首屏
                 mergedAny = pages.any { it.isNotEmpty() }
                 if (targetPage == 1) {
                     if (fresh.isNotEmpty()) Agg.mrgPut(ck, fresh)
@@ -255,10 +272,12 @@ fun BrowseScreen(
                 list
             }
         }
-        if (page.isNotEmpty()) VocabPools.get(context).addWords(page.map { it.name }, false) // 进墙片名入点播池词库
+        // 终审 #4：拼音派生 CPU 重（8000 词条×N 名）移出主线程
+        if (page.isNotEmpty()) withContext(Dispatchers.Default) { VocabPools.get(context).addWords(page.map { it.name }, false) } // 进墙片名入点播池词库
         if (targetPage == 1) {
             // web loadVod pg===1：sortByYearDesc——首绘年降序最新优先（同年保持源序），增量轮追加队尾不重排
-            items = Agg.yearDesc(page)
+            // 终审 #2：keep 命中=返回重建，tp1 不再整体替换（多页墙不塌回首屏、滚动位不钳）；#1：firstWallOf 同 id 去重防 grid 重复 key 闪退
+            if (keepHit == null) items = Agg.firstWallOf(page)
             canLoadMore = if (mergedMode) mergedAny else page.isNotEmpty() // web L1625：pg=1 任一子类有页即可续
         } else {
             // S4：追加轮 dedupById+dedupByName、以增量判底，防重复卡与空转
@@ -270,9 +289,10 @@ fun BrowseScreen(
         }
         val pr = preset
         if (pr != null && pSrv == null && targetPage >= 10) canLoadMore = false // R8 客户端地区过滤 10 页护栏（服务端合并 pSrv 不受限，web atCap）
-        if (page.isEmpty() && targetPage == 1) {
+        if (page.isEmpty() && targetPage == 1 && keepHit == null) { // 终审 #2：已有保墙时空回不盖 error
             error = if (type == null) "源未返回最近更新数据，可点「点播」按分类浏览" else "该分类暂无数据，源可能不支持分类列表"
         }
+        WallMem.browseKeep.value = wallKey to items // 走查 #11：单源墙统一出口回存
         loading = false
         if (pendingRefocus) {
             pendingRefocus = false
@@ -288,44 +308,78 @@ fun BrowseScreen(
         if (!aggMode) return@LaunchedEffect
         val my = wallSeq + 1
         wallSeq = my
+        // 走查 #11：key 命中=返回重建，恢复原墙不清空（🔄/切类/换预设/源池变更自然换 key→干净首屏）；
+        // drawn/firstDrawn 播种，本轮 mergeFrom 走增量分支只补没上墙的片名
+        val keepHit = WallMem.browseKeep.value?.takeIf { it.first == wallKey && it.second.isNotEmpty() }?.second
         val pool = Agg.poolOf(sources) { s -> Agg.healthMs(health, s) }
         val cat = aggCatOf()
         val ttl = aggTtl()
-        items = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
+        items = keepHit ?: emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
         error = null
-        loading = pool.isNotEmpty()
+        loading = pool.isNotEmpty() && keepHit == null
         if (pool.isEmpty()) { error = "聚合池为空，请先在「源管理」导入点播源"; loading = false; return@LaunchedEffect }
         // 队列化渲染：首绘整体年降序一次，此后每轮只把没上墙的片名追加队尾（已显示条目不动）
-        val drawn = HashSet<String>()
-        var firstDrawn = false
-        var mergedOnce = false
-        fun mergeFrom(): Boolean {
-            val merged = Agg.mergeShards(pool, cat)
+        val drawn = if (keepHit != null) HashSet(keepHit.map { Agg.nameKey(it) }) else HashSet()
+        var firstDrawn = keepHit != null
+        var mergedOnce = keepHit != null
+        // 用户 2026-11-06 走查 #4：mergeShards（读盘+JSON 编解码）下 IO 线程，状态写回恒在 Main
+        suspend fun mergeFrom(c: AggCat?): Boolean {
+            val merged = withContext(Dispatchers.IO) { Agg.mergeShards(pool, c) }
             if (merged.isEmpty()) return false
-            if (!firstDrawn) { firstDrawn = true; items = Agg.yearDesc(merged) }
-            else {
-                val fresh = merged.filter { drawn.add(Agg.nameKey(it)) }
-                if (fresh.isNotEmpty()) items = items + fresh
+            withContext(Dispatchers.Default) { VocabPools.get(context).addWords(merged.map { it.name }, false) } // 新片名进点播池词库；终审 #4：拼音派生移出 Main
+            withContext(Dispatchers.Main) {
+                error = null // 有数据上墙即撤「聚合无数据」文案（地区增补到达同适用）
+                if (!firstDrawn) {
+                    firstDrawn = true; items = Agg.yearDesc(merged)
+                    merged.forEach { drawn.add(Agg.nameKey(it)) } // minor#5：仅首绘播种 drawn（增量分支 filter 判重时已顺带入集，原尾随全量 forEach 是冗余拷贝）
+                } else {
+                    val fresh = merged.filter { drawn.add(Agg.nameKey(it)) }
+                    if (fresh.isNotEmpty()) items = items + fresh
+                }
+                aggMore = true
+                mergedOnce = true
+                WallMem.browseKeep.value = wallKey to items // 走查 #11：items 每次变更后同步回存
             }
-            merged.forEach { drawn.add(Agg.nameKey(it)) }
-            VocabPools.get(context).addWords(merged.map { it.name }, false) // 新片名进点播池词库
-            aggMore = true
-            mergedOnce = true
             return true
         }
-        mergeFrom()
+        mergeFrom(cat)
         val need = pool.take(Agg.POOL_SIZE).filterNot { Agg.fresh(it, cat, ttl) }.toMutableList()
         coroutineScope {
             need.forEach { s ->
-                launch {
+                launch(Dispatchers.IO) {
                     val got = runCatching { Agg.fetchSource(repo, s, cat, 1) }.getOrDefault(emptyList())
                     Agg.putShard(s, cat, got)
-                    if (my == wallSeq) mergeFrom() // 一源返回就重画，不等最慢源
+                    if (my == wallSeq) mergeFrom(cat) // 一源返回就重画，不等最慢源
                 }
             }
         }
         if (my != wallSeq) return@LaunchedEffect
         loading = false
+        // 方案A（用户 2026-11-06 批准，铁律放宽为「chip 切换零阻塞、允许后台定向增补」）：过滤态先秒併已有
+        // @区 分片，再低并发(2)按 hasRegionKid 优先序拉各源地区子类逐源追加墙尾——首屏仍是「全部」分片客户端
+        // 过滤秒显，增补只增量补新片名，不改道、不清墙（take(3) 拉不到日剧等第 4+ 位子类，实测根因）
+        val rc = aggPreset?.second?.let { if (it.isNotEmpty()) Agg.regionCatOf(cat, it) else null }
+        if (rc != null) {
+            launch {
+                mergeFrom(rc)
+                val caps = pool.mapNotNull { s ->
+                    runCatching { if (Agg.hasRegionKid(Agg.typesOf(repo, s), rc)) s.url else null }.getOrNull()
+                }.toSet()
+                coroutineScope {
+                    val sem = Semaphore(2)
+                    Agg.preferRegionFirst(pool, caps).filterNot { Agg.fresh(it, rc, ttl) }.forEach { s ->
+                        launch(Dispatchers.IO) {
+                            sem.withPermit {
+                                if (my != wallSeq) return@withPermit
+                                val got = runCatching { Agg.fetchSource(repo, s, rc, 1) }.getOrDefault(emptyList())
+                                Agg.putShard(s, rc, got)
+                                if (my == wallSeq) mergeFrom(rc)
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (!mergedOnce) {
             error = "聚合无数据：${pool.size} 个源均未返回" +
                 (if (cat == null) "最新" else "「${cat.key}${aggPreset?.first?.let { "·$it" } ?: ""}」") +
@@ -336,10 +390,10 @@ fun BrowseScreen(
             launch {
                 coroutineScope {
                     back.forEach { s ->
-                        launch {
+                        launch(Dispatchers.IO) {
                             val got = runCatching { Agg.fetchSource(repo, s, cat, 1) }.getOrDefault(emptyList())
                             Agg.putShard(s, cat, got)
-                            if (my == wallSeq) mergeFrom()
+                            if (my == wallSeq) mergeFrom(cat)
                         }
                     }
                 }
@@ -356,7 +410,8 @@ fun BrowseScreen(
         val refocus = sentinelFocused
         val my = wallSeq
         val pg = aggPage + 1
-        val cat = aggCatOf()
+        // 过滤态续轮走 @区 定向分片（拉日剧第 N 页远比拉国产剧第 N 页有效）；「全部」labs 空=regionCatOf 原样返回基础 cat
+        val cat = Agg.regionCatOf(aggCatOf(), aggPreset?.second ?: emptyList())
         val pool = Agg.poolOf(sources) { s -> Agg.healthMs(health, s) }
         aggLoadingMore = true
         scope.launch {
@@ -368,22 +423,25 @@ fun BrowseScreen(
                     }.getOrDefault(emptyList())
                     if (more.isNotEmpty()) Agg.appendShard(s, cat, more)
                     if (my != wallSeq) return@launch
-                    // 本源一回就重并上墙（主线程写状态）
+                    // 本源一回就重并上墙（用户 2026-11-06 走查 #4：mergeShards 下 IO，主线程只写状态）
+                    val all = withContext(Dispatchers.IO) { Agg.mergeShards(pool, cat) }
                     withContext(Dispatchers.Main) {
-                        val all = Agg.mergeShards(pool, cat)
                         val onWall = items.mapTo(HashSet()) { Agg.nameKey(it) }
                         val added = all.filter { onWall.add(Agg.nameKey(it)) } // 本轮见过的不再上墙
                         if (added.isNotEmpty()) {
                             items = items + added
-                            VocabPools.get(context).addWords(added.map { it.name }, false)
+                            launch(Dispatchers.Default) { VocabPools.get(context).addWords(added.map { it.name }, false) } // 终审 #4：词库派生后台化
+                            WallMem.browseKeep.value = wallKey to items // 走查 #11：续轮追加同样回存
                         }
                     }
                     if (done.incrementAndGet() == pool.size) {
                         aggLoadingMore = false
                         aggPage = pg
                         // 空轮不判到底（用户 2026-11-04：下拉要继续拉更多——CMS 尾页常整页重复、后页反有新数据；
-                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）
-                        aggMore = aggPage < Agg.FUSE_ROUND && pool.any { (Agg.shards.getRaw(Agg.key(it, cat))?.v?.size ?: 0) < Agg.DEPTH }
+                        // 仅当全池分片都到 800 封顶或触 FUSE 轮才停）；地区 chip 下短过滤墙底栏恒可见
+                        // →AutoLoadMore 自链「一直加载中」，10 轮封顶（走查 2026-11-06 日剧案，R8 单源护栏同构）
+                        aggMore = Agg.aggMoreContinue(aggPage, aggPreset != null,
+                            pool.any { (Agg.shards.getRaw(Agg.key(it, cat))?.v?.size ?: 0) < Agg.DEPTH })
                         if (refocus) {
                             delay(80) // 追加重绘后回焦哨兵，支持连按 OK 无限下刷
                             runCatching { sentinelFr.requestFocus() }
@@ -394,23 +452,41 @@ fun BrowseScreen(
         }
     }
 
-    val gridState = rememberLazyGridState()
+    val scr0 = remember { WallMem.browseScroll.value?.takeIf { it.first == wallKey }?.let { it.second to it.third } ?: (0 to 0) }
+    val gridState = rememberLazyGridState(scr0.first, scr0.second)
+    LaunchedEffect(wallKey) {
+        var first = true
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .collect {
+                // minor#6：切 key 后首发=同一 gridState 的旧墙滚动位瞬态值，写入会污染新 key 的恢复点（items 钳位虽自愈，跳过更干净）
+                if (first) { first = false; return@collect }
+                WallMem.browseScroll.value = Triple(wallKey, it.first, it.second)
+                delay(250) // 简易节流：延迟期间滚动中间态被 conflated 丢弃
+            }
+    }
     // R8 三级 (b)：仅客户端过滤模式（preset 且无 pSrv）生效，UNKNOWN 保守剔除并计数（web drawVodGrid）
     val prNow = preset
     val regionSel = if (prNow != null && pSrv == null) prNow.second else emptyList()
+    // 用户 2026-11-06 走查 #10：地区过滤每次重组全表重算 → 按源数据+选择 remember（unknownCnt 同块赋值语义不变）
     var unknownCnt = 0
-    val shown = if (regionSel.isEmpty()) items else run {
-        val l = ArrayList<VodSummary>()
-        for (it in items) {
-            val r = Region.of(it)
-            if (r == "UNKNOWN") { unknownCnt++; continue }
-            if (regionSel.contains(r)) l.add(it)
+    val shown = remember(items, regionSel) {
+        var cnt = 0
+        if (regionSel.isEmpty()) items else run {
+            val l = ArrayList<VodSummary>()
+            for (it in items) {
+                val r = Region.of(it)
+                if (r == "UNKNOWN") { cnt++; continue }
+                if (regionSel.contains(r)) l.add(it)
+            }
+            unknownCnt = cnt
+            l
         }
-        l
     }
     val aggLabs = aggPreset?.second ?: emptyList()
-    val aggShown = if (aggLabs.isEmpty()) items
+    val aggShown = remember(items, aggLabs) {
+        if (aggLabs.isEmpty()) items
         else items.filter { aggLabs.contains(Region.of(it)) }
+    }
     // S4 窗口渲染：墙内条目先只挂 aggWin 部；哨兵「展开更多」本地放量零请求，展完才联网续轮（web moreBtn.onclick 等价）
     val aggExpandable = aggShown.size > aggWin
     val aggView = if (aggExpandable) aggShown.take(aggWin) else aggShown
@@ -433,6 +509,7 @@ fun BrowseScreen(
         aggPreset = null
         resetFilterVals()
         if (aggMode) Agg.purgeWallShards() else source?.let { Agg.purgeTypesOf(it.url); Agg.purgeMrgOf(it.url) }
+        WallMem.browseKeep.value = null; WallMem.browseScroll.value = null // 走查 #11：刷新=唯一整体重置口，连墙记忆一并清（nonce 不入 key，否则清不了旧墙）
         Toast.makeText(context, "已清本页缓存，重新拉取中…", Toast.LENGTH_SHORT).show()
         nonce++
     }
@@ -466,6 +543,10 @@ fun BrowseScreen(
         if (atHomeNow) keepUpdCount.intValue = KeepStore(context).updatedCount(false)
     }
     val browseTopBar: @Composable () -> Unit = {
+            // 常用置顶（用户 2026-11-03）：历史→搜索→刷新→其余按导航栏存档序
+            // 用户 2026-11-06 走查 #9：每次重组重解析 tabsJson → 按存档串 remember（LazyListScope 顶层不可 remember，上提至组合体）
+            val cards = remember(settings.tabsJson) { orderedCards(settings) }
+            val pinned = listOf("hist", "search").mapNotNull { id -> cards.firstOrNull { it.id == id } }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -481,8 +562,6 @@ fun BrowseScreen(
                             onClick = { showSourcePicker = true },
                         )
                     }
-                    // 常用置顶（用户 2026-11-03）：历史→搜索→刷新→其余按导航栏存档序
-                    val cards = orderedCards(settings)
                     fun go(id: String) {
                         when (id) {
                             "live" -> onLive()
@@ -494,12 +573,11 @@ fun BrowseScreen(
                             "settings" -> onSettings()
                         }
                     }
-                    val pinned = listOf("hist", "search").mapNotNull { id -> cards.firstOrNull { it.id == id } }
-                    itemsIndexed(pinned) { _, card ->
+                    itemsIndexed(pinned, contentType = { _, _ -> "func" }) { _, card ->
                         FuncCard(icon = null, name = card.title, onClick = { go(card.id) })
                     }
                     item { FuncCard(icon = null, name = "刷新", onClick = { refreshPage() }) }
-                    itemsIndexed(cards.filter { it.id != "hist" && it.id != "search" }) { _, card ->
+                    itemsIndexed(cards.filter { it.id != "hist" && it.id != "search" }, contentType = { _, _ -> "func" }) { _, card ->
                         FuncCard(
                             icon = null,
                             name = if (card.id == "keep" && keepUpdCount.intValue > 0) "收藏·${keepUpdCount.intValue}更" else card.title,
@@ -723,7 +801,7 @@ fun BrowseScreen(
             if (aggMode) {
                 // 聚合墙卡片（用户 2026-11-03 要求，偏离 web 点卡直达详情）：只显示海报+名称（数据层
                 // mergeShards 已按归一剧名去重），点击=带剧名进搜索页全源聚合，用户再选源播放
-                itemsIndexed(aggView, key = { _, it -> "${it.sourceUrl}|${it.vodId}" }) { _, item ->
+                itemsIndexed(aggView, key = { _, it -> "${it.sourceUrl}|${it.vodId}" }, contentType = { _, _ -> "poster" }) { _, item ->
                     PosterCard(item = item, onClick = { onAggSearch(item.name) })
                 }
                 if (aggView.isNotEmpty()) {
@@ -739,7 +817,8 @@ fun BrowseScreen(
                     }
                 }
             } else {
-                itemsIndexed(shown) { _, item ->
+                // 用户 2026-11-06 走查 #10：单源墙补 key（与聚合墙同键式）+contentType
+                itemsIndexed(shown, key = { _, it -> "${it.sourceUrl}|${it.vodId}" }, contentType = { _, _ -> "poster" }) { _, item ->
                     PosterCard(item = item, onClick = { onPick(item) })
                 }
                 if (shown.isNotEmpty()) {

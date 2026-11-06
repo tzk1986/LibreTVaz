@@ -26,10 +26,17 @@ class App : Application() {
             def?.uncaughtException(t, e)
         }
         DiskCache.init(this)
+        // B3 测速网络指纹需要 ConnectivityManager（用户 2026-11-05 批准）
+        com.tzk1986.libretvaz.data.perf.LineSpeed.init(this)
+        // 用户 2026-11-06 走查 #8：词库双池 restore（读盘+8000 词 ICU 拼音派生）原落在首屏首次
+        // addWords 的主线程上 → 冷启动后台预热，UI 首次取用时已就绪（VocabPools.get 持锁，并发安全）
+        Thread { runCatching { com.tzk1986.libretvaz.data.VocabPools.get(this) } }.start()
         // 用户 2026-11-04：海报墙图统一走单例 ImageLoader——磁盘缓存 200MB LRU，
         // 同 URL 冷启动/翻页直接复用不再重拉；超 3 天条目由 ImageGc 清除（冷启动+周期任务）
         coil.Coil.setImageLoader(
             coil.ImageLoader.Builder(this)
+                // 用户 2026-11-06 走查 #12：海报到位硬切跳变 → 淡入过渡（磁盘命中同受 effect 管，短暂 alpha 无感）
+                .crossfade(true)
                 .diskCache(
                     coil.disk.DiskCache.Builder()
                         .directory(cacheDir.resolve("image_cache"))

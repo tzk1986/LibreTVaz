@@ -54,6 +54,8 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     // B17 点播提速：OkHttp 播放数据源（HTTP/2 多路复用+大连接池，替代 HttpURLConnection）
     implementation(libs.androidx.media3.datasource.okhttp)
+    // 用户 2026-11-06 走查 #1：CMS/订阅等普通 GET 也上 OkHttp 共享连接池（版本对齐 media3 传递的 4.12.0）
+    implementation(libs.okhttp)
     // B11 视频播放盘缓存 SimpleCache 需要数据库提供器；周期清理任务用 WorkManager
     implementation(libs.androidx.media3.database)
     implementation(libs.androidx.work.runtime.ktx)

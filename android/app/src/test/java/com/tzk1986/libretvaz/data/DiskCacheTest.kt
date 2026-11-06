@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** B11 磁盘层纯函数：键→文件名消毒与命名空间前缀匹配、各编解码 roundtrip、坏数据静默判废 */
 class DiskCacheTest {
@@ -90,5 +91,30 @@ class DiskCacheTest {
     @Test
     fun `hard ttl is 7 days like web prune`() {
         assertEquals(7 * 24 * 3600_000L, DiskCache.HARD_TTL_MS)
+    }
+
+    @Test
+    fun `purgeExpired parses t from file head and falls back to full read`() {
+        // 走查 #15：purge 原整读每文件全 JSON（大分片数 MB）→ 只读头 32 字节匹配 {"t":N；
+        // 头不匹配（旧写序/异常文件）必须回落整读判 t——本测钉住两态行为：新格式删对、旧格式不冤枉删
+        val tmp = java.nio.file.Files.createTempDirectory("cms-purge").toFile()
+        val dirF = DiskCache::class.java.getDeclaredField("dir").apply { isAccessible = true }
+        dirF.set(DiskCache, tmp)
+        try {
+            val now = System.currentTimeMillis()
+            val fresh = File(tmp, DiskCache.fileName("aggs:t|fresh"))
+            fresh.writeText("{\"t\":$now,\"d\":\"[]\"}")
+            val stale = File(tmp, DiskCache.fileName("aggs:t|stale"))
+            stale.writeText("{\"t\":1,\"d\":\"[]\"}")
+            val legacy = File(tmp, DiskCache.fileName("aggs:t|legacy")) // JSONObject 不保序：t 不在头
+            legacy.writeText("{\"d\":\"[]\",\"t\":1}")
+            DiskCache.purgeExpired(now)
+            assertTrue(fresh.exists())
+            assertFalse(stale.exists())
+            assertFalse("旧格式须回落整读后删除", legacy.exists())
+        } finally {
+            dirF.set(DiskCache, null)
+            tmp.deleteRecursively()
+        }
     }
 }

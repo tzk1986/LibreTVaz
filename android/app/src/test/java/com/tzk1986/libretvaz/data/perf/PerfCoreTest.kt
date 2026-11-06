@@ -176,6 +176,21 @@ class PerfCoreTest {
         assertEquals(PerfCore.SpeedTag("8.8MB/s 流畅", "sp-ok"), PerfCore.lineSpeedTag(9000))
     }
 
+    @Test fun `lineSpeedTagSoft 余量达标放宽措辞`() {
+        // 100KB/s 对 80000B/s(640kbps) 节目：余量=100*1024/80000=1.28 <1.5 → 保持慢/不可用
+        assertEquals(PerfCore.lineSpeedTag(100), PerfCore.lineSpeedTagSoft(100, 80_000))
+        // 100KB/s 对 50000B/s 节目：余量=2.05 ≥1.5 → 放宽「可能卡顿」
+        assertEquals(PerfCore.SpeedTag("100KB/s 可能卡顿", "sp-mid"), PerfCore.lineSpeedTagSoft(100, 50_000))
+        // 0 判死不放宽；码率未知/≤0 不放宽
+        assertEquals(PerfCore.lineSpeedTag(0), PerfCore.lineSpeedTagSoft(0, 1000))
+        assertEquals(PerfCore.lineSpeedTag(100), PerfCore.lineSpeedTagSoft(100, null))
+        assertEquals(PerfCore.lineSpeedTag(100), PerfCore.lineSpeedTagSoft(100, 0))
+        // 非 sp-bad 档原样返回
+        assertEquals(PerfCore.lineSpeedTag(2000), PerfCore.lineSpeedTagSoft(2000, 50_000))
+        assertEquals(PerfCore.lineSpeedTag(-1), PerfCore.lineSpeedTagSoft(-1, 50_000))
+        assertNull(PerfCore.lineSpeedTagSoft(null, 50_000))
+    }
+
     private fun line(vararg links: String) =
         PlayLine("l", links.mapIndexed { i, u -> PlayEpisode("e$i", u) })
 
@@ -217,6 +232,22 @@ class PerfCoreTest {
         assertEquals(2, PerfCore.pickBestLine(lines, listOf(500L, 900L, 3000L, 200L))) // c 最快（d 非流后缀排除）
         assertEquals(1, PerfCore.pickBestLine(lines, listOf(100L, null, null, null))) // 无有效测速→首个流后缀线
         assertEquals(0, PerfCore.pickBestLine(listOf(line("http://x/share")), listOf(5000L))) // 全壳页→首个非空
+    }
+
+    @Test fun `pickBestLine A4 余量比优先`() {
+        val lines = listOf(
+            line("http://b/1.m3u8"), // 高码率 4Mbps：3000KB/s 余量比=6.0 达标最快
+            line("http://c/1.mp4"),  // 低码率 0.5Mbps：900KB/s 余量比=1.8 达标但更慢
+            line("http://d/1.mp4"),  // 码率未知：10000KB/s 不参与余量比较
+        )
+        val sp = listOf(3000L, 900L, 10000L)
+        val bps = listOf(500_000L, 62_500L, null)
+        // a/b 均达标（6.1/14.7），达标者中取吞吐最大→a；d 码率未知不参与余量比较
+        assertEquals(0, PerfCore.pickBestLine(lines, sp, 0, bps))
+        // a 余量 0.6 不足、b 余量 14.7 达标→达标者中最快=b（a 绝对更快但播不动）
+        assertEquals(1, PerfCore.pickBestLine(lines, listOf(300L, 900L, 200L), 0, bps))
+        // 码率全未知→退绝对速度最大
+        assertEquals(2, PerfCore.pickBestLine(lines, sp, 0, listOf(null, null, null)))
     }
 
     @Test fun `MemCache TTL 与 LRU 逐出`() {

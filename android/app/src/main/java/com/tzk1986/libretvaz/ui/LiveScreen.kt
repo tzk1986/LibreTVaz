@@ -193,17 +193,34 @@ fun LiveScreen(
                         }
                     }
                 }
-                val visIdx = catChans.map { pl.channels.indexOf(it) }.let { idxs ->
-                    if (group == null) idxs else idxs.filter { pl.channels[it].group == group }
+                // 用户 2026-11-06 走查 #5：原 indexOf/indexOfFirst/行内 count 三重 O(n²) →
+                // remember 单次遍历预计算可见下标表+逐名线数表（cat/group/fav 谓词与原链逐条等价；
+                // B16 同名多线合并语义保留：只列首个，其余作备用线路）
+                val (visIdx, lineCounts) = remember(pl, cat, group, favUrls) {
+                    val first = HashMap<String, Int>()
+                    val counts = HashMap<String, Int>()
+                    pl.channels.forEachIndexed { i, ch ->
+                        if (!first.containsKey(ch.name)) first[ch.name] = i
+                        counts[ch.name] = (counts[ch.name] ?: 0) + 1
+                    }
+                    val fav = cat == LiveStore.LIVE_FAV_GROUP
+                    val idxs = pl.channels.indices.filter { i ->
+                        val ch = pl.channels[i]
+                        val inCat = when {
+                            fav -> favUrls.contains(ch.url)
+                            cat == null -> true
+                            else -> LiveGeo.catOf(ch.tvgId) == cat
+                        }
+                        inCat && (group == null || ch.group == group) && first[ch.name] == i
+                    }
+                    idxs to counts
                 }
-                    // B16 同名多线合并：只列首个（精筛表按速度降序），其余作备用线路
-                    .filter { i -> pl.channels.indexOfFirst { it.name == pl.channels[i].name } == i }
                 Text("共 ${visIdx.size} 个频道", style = MaterialTheme.typography.bodySmall)
                 minuteTick // 每分钟订阅刷新行内「正在」
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(visIdx) { i ->
                         val ch = pl.channels[i]
-                        val nLines = pl.channels.count { it.name == ch.name }
+                        val nLines = lineCounts[ch.name] ?: 1
                         ChannelRow(
                             channel = ch,
                             now = Epg.now(epgIdx, ch.name),
@@ -304,7 +321,9 @@ private fun ChannelRow(
             if (fav) "★" else "☆",
             style = MaterialTheme.typography.titleMedium,
             color = if (fav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.clickable(onClick = onFav),
+            // 走查 #14：TV 点★难命中——glyph 触控面撑到 ~42dp（foundation 1.12.1 无
+            // minimumInteractiveTouchArea，按简报用内层 padding 等效；padding 须在 clickable 内侧才计入手势界）
+            modifier = Modifier.clickable(onClick = onFav).padding(horizontal = 8.dp, vertical = 14.dp),
         )
         onEpg?.let {
             TmBtn(onClick = it) { Text("节目单") }

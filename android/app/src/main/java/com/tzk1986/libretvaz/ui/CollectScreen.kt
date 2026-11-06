@@ -19,52 +19,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.tzk1986.libretvaz.data.*
 import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /** 指定搜索源：全表下标+源名（null=全部源聚合，web Search.srcSel 等价） */
 data class SpecSrc(val si: Int, val name: String)
 
-/** 搜索分片缓存：ck → (norm(url) → 带时间戳分片)，内存+DiskCache 双层（web searchShardSet/localStorage 等价，跨会话 SWR）；找片框共用同缓存（web openFindBox 同款 searchShardSet） */
-internal val SEARCH_CACHE = ConcurrentHashMap<String, ConcurrentHashMap<String, PerfCore.Shard<VodSummary>>>()
+/** 搜索排序三态（用户 2026-11-06）：点钮循环 DESC→ASC→NONE；枚举序即循环序，默认 DESC */
+private enum class YearOrder { DESC, ASC, NONE }
 
-/** 设置页「清理缓存」钩子（web cache_purge 等价：进程内存 + 磁盘分片一起清） */
-internal fun clearSearchShardsCache() { SEARCH_CACHE.clear(); DiskCache.removePrefix("search:") }
-
-/** 读盘回灌：内存未中时按 ck 反序列化 DiskCache 分片（写失败/坏数据=空表） */
-internal fun shardsOf(ck: String): ConcurrentHashMap<String, PerfCore.Shard<VodSummary>> =
-    SEARCH_CACHE.computeIfAbsent(ck) { ConcurrentHashMap() }.apply {
-        if (isEmpty()) {
-            runCatching {
-                val (_, payload) = DiskCache.read(ck) ?: return@runCatching
-                val o = org.json.JSONObject(payload)
-                for (u in o.keys()) {
-                    val e = o.optJSONObject(u) ?: continue
-                    val list = CmsCodecs.decSummaries(e.getJSONArray("v").toString()) ?: continue
-                    put(u, PerfCore.Shard(e.getLong("t"), list))
-                }
-            }
-        }
-    }
-
-/** 分片整包落盘（内存 map 变更后异步写 DiskCache，7 天硬清兜底） */
-internal fun persistShards(ck: String, map: Map<String, PerfCore.Shard<VodSummary>>) {
-    runCatching {
-        val o = org.json.JSONObject()
-        map.forEach { (u, sh) ->
-            o.put(u, org.json.JSONObject().put("t", sh.t).put("v", org.json.JSONArray(CmsCodecs.encSummaries(sh.d))))
-        }
-        DiskCache.write(ck, System.currentTimeMillis(), o.toString())
-    }
-}
+// 用户 2026-11-06 走查 #2/#3：搜索分片双层缓存迁 data/SearchShards（LRU 封顶 30 词 + 500ms 防抖后台落盘）。
+// 本文件保留同名薄委托（web searchShardSet/localStorage 语义不变，FindSourceDialog/Settings 调用点零改动）
+internal fun clearSearchShardsCache() = SearchShards.clearAll()
+internal fun shardsOf(ck: String) = SearchShards.shardsOf(ck)
+internal fun persistShards(ck: String, map: Map<String, PerfCore.Shard<VodSummary>>) = SearchShards.persistSoon(ck, map)
 
 private const val SOURCE_TIMEOUT_MS = 8_000L
 
@@ -97,6 +75,9 @@ fun CollectScreen(
     var done by remember { mutableIntStateOf(0) }
     var fails by remember { mutableIntStateOf(0) }
     var tabIdx by remember { mutableStateOf<Int?>(null) } // null=全部
+    // 用户 2026-11-06 指示（偏离 web 新增）→同日三态终改：搜索排序钮循环「年份↓(默认)→年份↑→默认顺序」。
+    // 调研依据：aria-sort 三态范式 + 时间类数据默认倒序（jOOq Sensible Default Ordering）；钮示当前已应用态
+    var yearSort by remember { mutableStateOf(YearOrder.DESC) }
     val bySite = remember { mutableStateMapOf<Int, List<VodSummary>>() }
     var seq by remember { mutableStateOf<List<Int>>(emptyList()) } // 到达序
     var noSources by remember { mutableStateOf(false) }
@@ -107,7 +88,7 @@ fun CollectScreen(
         if (ep != runSeq || list.isEmpty()) return
         bySite[si] = list
         if (!seq.contains(si)) seq = seq + si
-        vocab.addWords(list.map { it.name }, zone)
+        scope.launch(kotlinx.coroutines.Dispatchers.Default) { vocab.addWords(list.map { it.name }, zone) } // 终审 #4：调用点混跨 IO/Main，统一交后台派生
     }
 
     /** 单源一轮：成功写分片+上屏，失败计数入补试名单；返回是否成功 */
@@ -134,37 +115,43 @@ fun CollectScreen(
 
     fun start(ep: Int, kwNow: String) {
         scope.launch {
-            val all = store.vodSources().mapIndexed { si, s -> si to s }
-            // 死源过滤仅在自动维护开启时生效（web collectSources 同款：关掉维护就全源照搜）
-            var items = all.filter { it.second.isAdult == zone && !(settings.autoMaintain && health.isDead(it.second.url)) }
-            items = PerfCore.orderSources(items, settings.siteIdx, { it.first }, { health.of(it.second.url)?.ms })
-            if (srcSel != null && items.any { it.first == srcSel.si })
-                items = items.filter { it.first == srcSel.si } // 指定源生效；源已删则回退聚合
+            val ck = PerfCore.searchKey(kwNow)
+            // 用户 2026-11-06 走查 #4：取源表+番号全分片扫描+SWR 分片回灌（磁盘读+JSON 解码）下 IO；
+            // 上屏（appendTab 写状态）回 Main 执行，波次派发不变
+            val (items, codeHits, swrHits) = withContext(Dispatchers.IO) {
+                val all = store.vodSources().mapIndexed { si, s -> si to s }
+                // 死源过滤仅在自动维护开启时生效（web collectSources 同款：关掉维护就全源照搜）
+                var its = all.filter { it.second.isAdult == zone && !(settings.autoMaintain && health.isDead(it.second.url)) }
+                its = PerfCore.orderSources(its, settings.siteIdx, { it.first }, { health.of(it.second.url)?.ms })
+                if (srcSel != null && its.any { it.first == srcSel.si })
+                    its = its.filter { it.first == srcSel.si } // 指定源生效；源已删则回退聚合
+                if (its.isEmpty()) return@withContext Triple(its, emptyList<Pair<Int, List<VodSummary>>>(), emptyList())
+                // 番号查询本地秒查（用户 2026-11-04）：扫聚合 latest 分片（每源 ≤800 条）直接过滤命中
+                val code = CmsParser.codeCanon(kwNow)?.let { canon ->
+                    its.mapNotNull { (si, s) ->
+                        val hits = Agg.shards.getRaw(Agg.key(s, null))?.v
+                            ?.filter { CmsParser.codeMatch(it.name, canon) }.orEmpty()
+                        if (hits.isEmpty()) null else si to hits
+                    }
+                } ?: emptyList()
+                // SWR：上轮分片（fresh+stale，含跨会话落盘回灌）
+                val swr = shardsOf(ck).takeIf { it.isNotEmpty() }?.let { shards ->
+                    val siOf = its.associateBy({ PerfCore.norm(it.second.url) }, { it })
+                    val split = PerfCore.splitTtl(shards, CacheTiers.TIERS[settings.cacheTier].search)
+                    (split.fresh.entries + split.stale.entries).mapNotNull { (u, list) ->
+                        val x = siOf[u] ?: return@mapNotNull null
+                        x.first to list
+                    }
+                } ?: emptyList()
+                Triple(its, code, swr)
+            }
             total = items.size
             done = 0; fails = 0
             bySite.clear(); seq = emptyList(); tabIdx = null; noSources = items.isEmpty()
             if (items.isEmpty()) return@launch
-
-            // 番号查询本地秒查（用户 2026-11-04）：扫聚合 latest 分片（每源 ≤800 条）直接过滤命中即上屏，
-            // 服务端搜索并行进行、到达后经 appendTab 整替（含最新池外的全库条目）
-            CmsParser.codeCanon(kwNow)?.let { canon ->
-                items.forEach { (si, s) ->
-                    val hits = Agg.shards.getRaw(Agg.key(s, null))?.v
-                        ?.filter { CmsParser.codeMatch(it.name, canon) }.orEmpty()
-                    if (hits.isNotEmpty()) appendTab(ep, si, hits)
-                }
-            }
-
-            // SWR：上轮分片（fresh+stale，含跨会话落盘回灌）先上屏，联网结果随后替换
-            val ck = PerfCore.searchKey(kwNow)
-            shardsOf(ck).takeIf { it.isNotEmpty() }?.let { shards ->
-                val siOf = items.associateBy({ PerfCore.norm(it.second.url) }, { it })
-                val split = PerfCore.splitTtl(shards, CacheTiers.TIERS[settings.cacheTier].search)
-                (split.fresh.entries + split.stale.entries).forEach { (u, list) ->
-                    val x = siOf[u] ?: return@forEach
-                    appendTab(ep, x.first, list)
-                }
-            }
+            // 命中即上屏；服务端搜索并行进行、到达后经 appendTab 整替（含最新池外的全库条目）
+            codeHits.forEach { (si, hits) -> appendTab(ep, si, hits) }
+            swrHits.forEach { (si, list) -> appendTab(ep, si, list) }
 
             val failed = mutableListOf<Pair<Int, VodSource>>()
             val doneCnt = AtomicInteger(0)
@@ -206,17 +193,28 @@ fun CollectScreen(
 
     val allItems = if (tabIdx != null) bySite[tabIdx] ?: emptyList()
     else seq.flatMap { bySite[it] ?: emptyList() }
+    // 用户 2026-11-06：排序仅影响展示序，空态/chip 判断仍用原始 allItems
+    val shown = when (yearSort) {
+        YearOrder.DESC -> Agg.yearDesc(allItems)
+        YearOrder.ASC -> Agg.yearAsc(allItems)
+        YearOrder.NONE -> allItems
+    }
     val allDone = total > 0 && done >= total
-    val suggChips: List<String> = if (allItems.isNotEmpty() || !allDone || tabIdx != null) emptyList()
-    else {
-        val q = kw.lowercase(Locale.ROOT)
-        if (!Regex("^[a-z0-9]{2,}$").matches(q)) emptyList()
+    // 用户 2026-11-06 走查 #8：联想词索引遍历（8000 词 suggest/fuzzy/truncateByQuery）原在组合期同步跑
+    // → 挪 Default 线程，组合期只读状态；触发条件不变（全空态+全部返回完成+聚合 Tab 才计算）
+    var suggChips by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(kw, zone, allDone, tabIdx, allItems.isEmpty()) {
+        suggChips = if (allItems.isNotEmpty() || !allDone || tabIdx != null) emptyList()
         else {
-            val pi = vocab.index(zone)
-            val hits = pi.suggest(q, 30)
-            val cand = (hits + pi.fuzzy(q, 30)).distinct()
-            val truncs = PerfCore.truncateByQuery(q, cand, 2, 2) { pi.variants(it) }
-            if (truncs.isNotEmpty()) truncs else hits.take(2)
+            val q = kw.lowercase(Locale.ROOT)
+            if (!Regex("^[a-z0-9]{2,}$").matches(q)) emptyList()
+            else withContext(Dispatchers.Default) {
+                val pi = vocab.index(zone)
+                val hits = pi.suggest(q, 30)
+                val cand = (hits + pi.fuzzy(q, 30)).distinct()
+                val truncs = PerfCore.truncateByQuery(q, cand, 2, 2) { pi.variants(it) }
+                if (truncs.isNotEmpty()) truncs else hits.take(2)
+            }
         }
     }
     val poolSources = remember { store.vodSources() }
@@ -227,6 +225,9 @@ fun CollectScreen(
             TmBtn(onClick = onBack) { Text("← 返回") }
             Text("“$kw” 的搜索结果", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.weight(1f))
+            YearSortBtn(order = yearSort) {
+                yearSort = YearOrder.entries[(yearSort.ordinal + 1) % YearOrder.entries.size]
+            }
             Text(
                 if (noSources) "无点播源" else "已返回 $done/$total · 失败 $fails",
                 style = MaterialTheme.typography.bodySmall,
@@ -282,7 +283,7 @@ fun CollectScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    gridItems(allItems, key = { "${it.sourceUrl}|${it.vodId}" }) { it ->
+                    gridItems(shown, key = { "${it.sourceUrl}|${it.vodId}" }, contentType = { "poster" }) { it ->
                         PosterCard(
                             item = it, onClick = { onPick(it) },
                             siteLabel = if (tabIdx == null) it.sourceName else null,
@@ -292,6 +293,28 @@ fun CollectScreen(
                 }
             }
         }
+    }
+}
+
+/** 三态排序钮（用户 2026-11-06）：大箭头(18sp)+当前态文字明示已应用排序，替代 TmChip labelMedium
+ *  截断「年份↑」看不清的问题；排序生效态(DESC/ASC)高亮白40%底，默认顺序态白20%底 */
+@Composable
+private fun YearSortBtn(order: YearOrder, onClick: () -> Unit) {
+    val (icon, label) = when (order) {
+        YearOrder.DESC -> "▼" to "年份↓ 最新在前"
+        YearOrder.ASC -> "▲" to "年份↑ 最早在前"
+        YearOrder.NONE -> "≡" to "默认顺序"
+    }
+    Row(
+        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+            .background(if (order == YearOrder.NONE) Color(0x33FFFFFF) else Color(0x66FFFFFF))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(icon, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = Color.White, maxLines = 1)
     }
 }
 
