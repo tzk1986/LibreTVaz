@@ -577,11 +577,22 @@ fun DetailScreen(
             player.removeListener(listener); player.release()
         }
     }
-    BackHandler { if (fs && fsEpPanel) fsEpPanel = false else if (fs) exitFs() else onBack() } // 分层返回：面板→关面板→退全屏→回墙
+    // 分层返回（用户 2026-11-06 两档定稿）：面板→关面板→控件亮则只隐控件→再按才退全屏→回墙
+    BackHandler {
+        when {
+            fs && fsEpPanel -> fsEpPanel = false
+            fs && fsBar -> fsBar = false
+            fs -> exitFs()
+            else -> onBack()
+        }
+    }
     LaunchedEffect(fs, fsSeq, fsBar) {
         if (fs && fsBar) { delay(5000); fsBar = false } // web showFsBar 5s fade
     }
     LaunchedEffect(fs) { if (fs) runCatching { focusReq.requestFocus() } }
+    // 两档返回走查（用户 2026-11-06）：控件 5s 自隐时焦点钮随 AnimatedVisibility 销毁、焦点落空，
+    // DPAD 类键不再进 fsKeyMod（任意键唤出失效）→ 隐后把焦点重新锚回根
+    LaunchedEffect(fs, fsBar) { if (fs && !fsBar) runCatching { focusReq.requestFocus() } }
 
     val g = lines().getOrNull(line)
     val total = g?.list?.size ?: 0
@@ -597,7 +608,8 @@ fun DetailScreen(
     val fsKeyMod = Modifier.onPreviewKeyEvent { ev ->
         if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         if (!fs) return@onPreviewKeyEvent false
-        pokeFs()
+        // 两档返回（用户 2026-11-06）：Back 不呼出控件，否则返回瞬间 fsBar 被点亮、永远退不了全屏
+        if (ev.key != Key.Back) pokeFs()
         // 选集看板打开时方向键=网格走焦（2 列：左右±1/上下±2），OK=选中即播并收看板，Esc/Back=收（用户 2026-11-04 遥控要求）
         if (fsEpPanel) {
             val nEp = lines().getOrNull(line)?.list?.size ?: 0
