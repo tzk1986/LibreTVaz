@@ -11,7 +11,8 @@ import org.json.JSONArray
  * 首启/升版本自动种入（版本闸门，用户删过不再回填）；源管理「添加内置已测源」可手动补缺。
  */
 object BuiltinSources {
-    const val SEED_VER = "v1"
+    // v2（用户 2026-11-06）：站单新增量子/索尼两源，升闸门让既有安装首启补缺
+    const val SEED_VER = "v2"
 
     /** 纯解析（供导入/asset 两处复用）：[["name","url"],...]，坏条目跳过，名称空退主机名 */
     fun parsePreset(text: String): List<VodSource> = runCatching {

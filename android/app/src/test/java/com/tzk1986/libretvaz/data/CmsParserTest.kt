@@ -148,4 +148,31 @@ class CmsParserTest {
         assertTrue(CmsParser.isAdultType("伦理片"))
         assertFalse(CmsParser.isAdultType("喜剧"))
     }
+
+    // 用户 2026-11-06 海报墙：季数前置到更新集数徽章前——从片名提取「第X季」纯函数
+    @Test
+    fun `seasonOf extracts last season marker from title`() {
+        assertEquals("第二季", CmsParser.seasonOf("庆余年 第二季"))
+        assertEquals("第3季", CmsParser.seasonOf("老子英雄铁女儿 第3季"))
+        assertEquals("第2季", CmsParser.seasonOf("某某 第1季 第2季")) // 多季并排取最后
+        assertNull(CmsParser.seasonOf("妈妈发疯了"))
+        assertNull(CmsParser.seasonOf("2季 不算")) // 缺「第」不算
+    }
+
+    // 用户 2026-11-06 海报墙截断优化 A+B：显示名先裁「第X季」（徽章已承载）与结尾年份，仍长再换行
+    @Test
+    fun `displayTitle strips season marker and trailing year`() {
+        assertEquals("庆余年", CmsParser.displayTitle("庆余年 第二季"))
+        assertEquals("爱情保卫战", CmsParser.displayTitle("爱情保卫战2026"))
+        assertEquals("爱情保卫战", CmsParser.displayTitle("爱情保卫战 - 2026"))
+        assertEquals("乔治和曼迪的头婚生活", CmsParser.displayTitle("乔治和曼迪的头婚生活第三季 2026"))
+        assertEquals("老子英雄铁女儿", CmsParser.displayTitle("老子英雄铁女儿 第3季"))
+    }
+
+    @Test
+    fun `displayTitle keeps plain and degenerate names`() {
+        assertEquals("凡人修仙传", CmsParser.displayTitle("凡人修仙传"))
+        assertEquals("2026", CmsParser.displayTitle("2026")) // 裁空则回退原名
+        assertEquals("第3季", CmsParser.displayTitle("第3季"))
+    }
 }

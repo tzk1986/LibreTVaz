@@ -1139,14 +1139,41 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // 用户 2026-11-06 截图版式：年份放海报左上（黑透明白字圆角徽章），番号徽章（2026-11-04 搜索增强）排其右
-            Row(
+            // 用户 2026-11-06 截图版式：年份放海报左上（黑透明白字圆角徽章），番号徽章（2026-11-04 搜索增强）排其右；
+            // 追加：季数「第X季」单独成徽章放年份下方（同款 55% 黑透样式）
+            Column(
                 modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                item.year?.takeIf { it.isNotBlank() && it != "0" }?.let { y ->
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    item.year?.takeIf { it.isNotBlank() && it != "0" }?.let { y ->
+                        Text(
+                            text = y,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                    if (codeBadge) CmsParser.codeRaw(item.name)?.let { c ->
+                        Text(
+                            text = c.uppercase(),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                CmsParser.seasonOf(item.name)?.let { s2 ->
                     Text(
-                        text = y,
+                        text = s2,
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
@@ -1154,18 +1181,6 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                             .clip(RoundedCornerShape(6.dp))
                             .background(Color.Black.copy(alpha = 0.55f))
                             .padding(horizontal = 8.dp, vertical = 2.dp),
-                    )
-                }
-                if (codeBadge) CmsParser.codeRaw(item.name)?.let { c ->
-                    Text(
-                        text = c.uppercase(),
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
                     )
                 }
             }
@@ -1203,7 +1218,8 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                     )
                 }
-                // 用户 2026-11-06 追加：名称居中（weight fill=false 保持组内居中且超长省略）
+                // 用户 2026-11-06 追加：名称居中（weight fill=false 保持组内居中且超长省略）；
+                // A+B 截断优化：显示名先经 displayTitle 裁剪（季数/结尾年份已由徽章承载），仍超长允许两行
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center,
@@ -1214,10 +1230,10 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                 ) {
                     AdultTag(adultOf(item))
                     Text(
-                        text = item.name,
+                        text = CmsParser.displayTitle(item.name),
                         style = MaterialTheme.typography.titleSmall,
                         color = Color.White,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )

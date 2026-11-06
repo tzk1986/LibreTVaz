@@ -222,6 +222,19 @@ object CmsParser {
     /** 标题是否含指定规范键番号 */
     fun codeMatch(name: String, canon: String): Boolean = extractCodes(name).any { it.first == canon }
 
+    /** 片名末个「第X季」标记（用户 2026-11-06 海报墙季数并入更新集数徽章）；无则 null */
+    fun seasonOf(name: String): String? =
+        Regex("第[0-9０-９一二三四五六七八九十两]+季").findAll(name).lastOrNull()?.value
+
+    /** 海报显示名（用户 2026-11-06 截断优化 A+B 之 A）：裁「第X季」（季数徽章已承载）与结尾年份；裁空回退原名 */
+    fun displayTitle(name: String): String {
+        val s = Regex("第[0-9０-９一二三四五六七八九十两]+季").replace(name, " ")
+            .let { Regex("\\s*[-–—]?\\s*(?:19|20)\\d{2}\\s*$").replace(it, "") }
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+        return s.ifBlank { name.trim() }
+    }
+
     /** 搜索相关性入口：番号形态查询走提取精确匹配，另兜底严格常规匹配（标题编号写法过糙提不出时不丢命中）；其余回落 isRelevant（web 语义不变） */
     fun relevantForSearch(name: String, wd: String, fuzzy: Boolean = true): Boolean {
         codeCanon(wd)?.let { c -> return codeMatch(name, c) || isRelevant(name, wd, false) }
