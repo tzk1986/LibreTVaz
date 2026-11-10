@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 圆圈中间暂停（用户 2026-11-10 右上状态标）：描边圆环+中央双竖条，tint 白 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,2.7 C17.13,2.7 21.3,6.87 21.3,12 C21.3,17.13 17.13,21.3 12,21.3 C6.87,21.3 2.7,17.13 2.7,12 C2.7,6.87 6.87,2.7 12,2.7 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:fillColor="#00000000" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.2,8.2 h1.9 v7.6 h-1.9 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12.9,8.2 h1.9 v7.6 h-1.9 z" />
+</vector>

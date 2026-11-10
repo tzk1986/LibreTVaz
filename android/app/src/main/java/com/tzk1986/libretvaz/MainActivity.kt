@@ -110,14 +110,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Browse) }
-                    // 扫码远程输入：全局长轮询挂活动级，命中派发到目标页（B8，web remoteLoop 等价）
-                    var serverUrl by remember { mutableStateOf(settingsStore.serverUrl) }
+                    // 扫码远程输入（TVBox 同构·APK 自托管 9978，用户 2026-11-10）：起服务+收件挂活动级，命中派发到目标页
                     var remoteKw by remember { mutableStateOf<String?>(null) }
                     var remoteSub by remember { mutableStateOf<String?>(null) }
-                    LaunchedEffect(screen) { serverUrl = settingsStore.serverUrl }
-                    LaunchedEffect(serverUrl) {
-                        if (serverUrl.isNotEmpty()) RemoteHub.runLoop(serverUrl, this)
-                    }
+                    LaunchedEffect(Unit) { RemoteHub.runLoop(this) }
                     DisposableEffect(Unit) {
                         val off = RemoteHub.addHandler { mode, text ->
                             if (mode == "sub") remoteSub = text

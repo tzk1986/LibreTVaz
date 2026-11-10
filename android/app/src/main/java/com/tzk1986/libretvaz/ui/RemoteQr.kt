@@ -31,14 +31,15 @@ private fun qrBitmap(text: String, px: Int): Bitmap? = runCatching {
 }.getOrNull()
 
 /**
- * 扫码远程输入弹窗（web openQrModal 等价）：mode=search 手机页推词、电视收到即搜当前池；
- * mode=sub 推订阅地址、源管理页按 qrAuto 直导/遥控确认。base 未就绪（未配服务器/网络断）时给指引不放码。
+ * 扫码远程输入弹窗（TVBox 同构·APK 自托管，用户 2026-11-10）：mode=search 手机页推词、电视收到即搜当前池；
+ * mode=sub 推订阅地址、源管理页按 qrAuto 直导/遥控确认。二维码指本机局域网 9978，零配置；
+ * 仅当取不到局域网 IP（未连 WiFi）时给指引不放码。
  */
 @Composable
 fun RemoteQrDialog(mode: String, onDismiss: () -> Unit) {
     fun curUrl() = if (RemoteHub.base.isEmpty()) "" else RemoteHub.qrUrl(mode)
     var url by remember { mutableStateOf(curUrl()) }
-    // 循环在途/刚配服务器时 base 尚未就绪：开窗后 1s×20 轮询补画
+    // 服务起动的瞬间 base 可能未就绪：开窗后 1s×20 轮询补画（也覆盖晚连 WiFi 场景）
     LaunchedEffect(Unit) {
         var tries = 0
         while (url.isEmpty() && tries < 20) {
@@ -59,7 +60,7 @@ fun RemoteQrDialog(mode: String, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (url.isEmpty()) {
-                    Text("未配置服务器地址：请到「设置 → 服务器地址」填写调试台地址（如 http://192.168.1.10:8787）后重开本窗",
+                    Text("未取得局域网地址：请确认本机已连接 WiFi（手机与电视须同一网络）",
                         color = MaterialTheme.colorScheme.error)
                 } else {
                     bmp?.let {

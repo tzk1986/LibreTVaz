@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -22,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
@@ -30,8 +32,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -249,8 +253,15 @@ fun SearchScreen(
                     // 改同圆角同内边距自然等高，字号随按钮走 labelMedium。m3 不支持改内容内边距→仍自绘描边容器
                     val tfSrc = remember { MutableInteractionSource() }
                     val tfFocused by tfSrc.collectIsFocusedAsState()
+                    val fmEscape = LocalFocusManager.current
+                    // 用户 2026-11-10 遥控走查修复：触屏设备上焦点进输入框会弹系统 IME，
+                    // DPAD 随后全被 IME 窗口吞掉（候选导航）致页面焦点困死——手指点按（fromTouch）才弹键盘，
+                    // 键位导航聚焦则立即 hide()，输入走 ⌨键盘 36 键/远程扫码
+                    var fromTouch by remember { mutableStateOf(false) }
+                    val kbCtrl = LocalSoftwareKeyboardController.current
                     Box(
                         modifier = Modifier.weight(1f)
+                            .pointerInput(Unit) { detectTapGestures(onPress = { fromTouch = true }) }
                             .clip(RoundedCornerShape(10.dp))
                             .border(
                                 if (tfFocused) TvColors.StrokeW else 1.dp,
@@ -282,7 +293,20 @@ fun SearchScreen(
                             keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                                 onSearch = { search(query) },
                             ),
-                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                            // 用户 2026-11-10 遥控器走查修复：TextField 默认吞 DPAD 致焦点困死在输入框，
+                            // 上下键手动 focusSearch 逃逸到相邻控件（左右仍留给光标移动）
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus)
+                                .onFocusEvent { st ->
+                                    if (st.isFocused) { if (!fromTouch) kbCtrl?.hide() } else fromTouch = false
+                                }
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                    when (e.key) {
+                                        Key.DirectionUp -> fmEscape.moveFocus(FocusDirection.Up)
+                                        Key.DirectionDown -> fmEscape.moveFocus(FocusDirection.Down)
+                                        else -> false
+                                    }
+                                },
                         )
                     }
                     HomeBtn(if (kbShow) "⌨隐藏" else "⌨键盘", fill = false, onClick = { kbShow = !kbShow })

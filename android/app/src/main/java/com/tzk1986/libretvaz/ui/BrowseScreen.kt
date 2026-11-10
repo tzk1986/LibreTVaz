@@ -31,7 +31,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1141,9 +1143,18 @@ internal fun NetClockPair() {
 
 @Composable
 internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null, codeBadge: Boolean = false) {
-    // 用户 2026-11-09 #133：全 app 墙卡遥控焦点=白描边+40%红罩层（TVBox 同调，clickable 节点天然可焦）
+    // 用户 2026-11-10 修订 #133：焦点=仅白描边（去红罩）+整卡 1.08 放大抽屉外推，移焦还原
     var cardFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    Column(modifier = Modifier.onFocusEvent { cardFocused = it.isFocused }.clickable(onClick = onClick)) {
+    Column(
+        modifier = Modifier
+            .onFocusEvent { cardFocused = it.isFocused }
+            .zIndex(if (cardFocused) 1f else 0f)
+            .graphicsLayer {
+                scaleX = if (cardFocused) 1.08f else 1f
+                scaleY = if (cardFocused) 1.08f else 1f
+            }
+            .clickable(onClick = onClick),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1270,7 +1281,6 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                 Box(
                     Modifier
                         .matchParentSize()
-                        .background(TvColors.Red40)
                         .border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)),
                 )
             }

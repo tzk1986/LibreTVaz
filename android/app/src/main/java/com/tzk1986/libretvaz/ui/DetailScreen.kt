@@ -58,6 +58,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -93,7 +94,8 @@ private data class ResumeCtx(val line: Int, val ep: Int, val sec: Long)
 private fun fmtHms(sec: Long): String {
     val s = sec.coerceAtLeast(0)
     val h = s / 3600; val m = (s % 3600) / 60; val ss = s % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, ss) else "%d:%02d".format(m, ss)
+    // 按 TVBox 实拍图零填充（05:46 / 42:07、00:42:07）——用户 2026-11-10
+    return if (h > 0) "%02d:%02d:%02d".format(h, m, ss) else "%02d:%02d".format(m, ss)
 }
 
 /** 详情按钮行钮（用户 2026-11-05 参考图边界核对：深色画面上黑底再浓也看不出边——参考图的药丸边界
@@ -162,13 +164,14 @@ private fun FsAct(
         onClick = onClick,
         enabled = !off,
         interactionSource = actSrc,
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
         // M3 1.4.0 无 focusedContainerColor：焦点亮底折进 containerColor
         colors = ButtonDefaults.textButtonColors(
             // TVBox 复刻：焦点/按下→40%红底，未激活全屏透明（button_dialog_vod）
             containerColor = tvBtnContainer(focused, actPressed, TvBtnKind.Fs),
         ),
-        modifier = modifier.semantics { contentDescription = desc }
+        // 紧凑修订（用户 2026-11-10 手机实拍）：固定 40dp 高（覆掉 M3 48dp 最小触控高的留白）
+        modifier = modifier.height(40.dp).semantics { contentDescription = desc }
             .onFocusEvent { focused = it.isFocused; onFocused(it.isFocused) }
             .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(TvColors.RadiusFs)) else Modifier),
     ) {
@@ -184,11 +187,39 @@ private fun FsAct(
                 painter = androidx.compose.ui.res.painterResource(res),
                 contentDescription = desc,
                 tint = fg,
-                modifier = Modifier.size(tvu(34)),
+                modifier = Modifier.size(tvu(26)),
             )
         } else {
-            Text(icon + "︎", fontSize = 22.sp, color = fg)
+            Text(icon + "︎", fontSize = 18.sp, color = fg)
         }
+    }
+}
+
+/** 全屏右上暂停标（用户 2026-11-10 按 TVBox 实拍图）：仅暂停时由调用方挂载——
+ *  「当前 / 总时长」文字在前、圆圈双竖条暂停图标在后（点按续播），短细进度线（红前白后）仅挂在时间文字下方。
+ *  控件亮/自隐两处共用；toggle=null 时图标不可点。 */
+@Composable
+private fun FsPauseBadge(timeTxt: String, frac: Float, toggle: (() -> Unit)?) {
+    // 用户 2026-11-10 修订：短进度线只挂在时间下方，不越过圆圈图标
+    // 用户 2026-11-10 修订：进度线宽度=时间文字实测宽（onTextLayout），红色填充按 frac 等比，
+    // 不再固定 110dp——避免短于/长于文字看着不协调
+    val dens = LocalDensity.current
+    var textW by remember { mutableStateOf(0.dp) }
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                timeTxt, color = Color.White, style = MaterialTheme.typography.titleMedium,
+                onTextLayout = { r -> textW = with(dens) { r.size.width.toDp() } },
+            )
+            Box(Modifier.width(textW).height(3.dp).background(TvColors.Track, RoundedCornerShape(2.dp))) {
+                Box(Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
+            }
+        }
+        val m = Modifier.size(32.dp)
+        Icon(
+            painterResource(R.drawable.tvb_v_pause_circle), "已暂停", tint = Color.White,
+            modifier = if (toggle != null) m.clickable { toggle() } else m,
+        )
     }
 }
 
@@ -779,11 +810,12 @@ fun DetailScreen(
         if (locked && ev.key != Key.Escape && ev.key != Key.Back) return@onPreviewKeyEvent true
         val horiz = ev.key == Key.DirectionLeft || ev.key == Key.DirectionRight
         if (ev.type == KeyEventType.KeyUp) {
-            // 滑动松手：一次性 seek 到预览位并续播（tvSlideStop 语义）
+            // 滑动松手：一次性 seek 到预览位（tvSlideStop 语义）
+            // 修订（用户 2026-11-10）：不再强制续播——保持原播放/暂停态，暂停中快进后退
+            // 由右上常驻时间反映新时间点（fsPos 1s 轮询刷新）
             if (horiz && slide.active && !fsEpPanel) {
                 slideFinal = slide.simPos; slideDirFinal = slide.dir
                 player.seekTo(slide.simPos)
-                player.playWhenReady = true
                 slide.stop(); slideTick++
                 return@onPreviewKeyEvent true
             }
@@ -1029,6 +1061,26 @@ fun DetailScreen(
                                         .padding(horizontal = tvu(16), vertical = tvu(4)),
                                 )
                             }
+                            // 用户 2026-11-10 改：缓冲中/详情失败/播放失败等状态文案统一浮显在视频窗右上角
+                            // （原详情信息列两处 Text 撤除；对齐全屏右上角「缓冲中…」的位置语义）
+                            val stLine = listOfNotNull(errText, errorHint).joinToString("｜")
+                            if (buffering || stLine.isNotEmpty()) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(tvu(8)),
+                                    horizontalAlignment = Alignment.End,
+                                    verticalArrangement = Arrangement.spacedBy(tvu(4)),
+                                ) {
+                                    @Composable fun chip(txt: String, c: Color) = Text(
+                                        txt, color = c, fontSize = tvSp(15), maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = tvu(360))
+                                            .background(TvColors.Overlay, RoundedCornerShape(tvu(6)))
+                                            .padding(horizontal = tvu(8), vertical = tvu(2)),
+                                    )
+                                    if (buffering) chip("缓冲中…", Color.Yellow)
+                                    if (stLine.isNotEmpty()) chip(stLine, Color(0xFFFF6B6B))
+                                }
+                            }
                         }
                     // 右信息列（蓝本右列：标题 ts_30 bold→元信息 ts_18→演员/导演→简介 ts_16 maxLines4
                     // 行距1.1→Spacer 吃余量→动作行；列高=窗高，全文走「简介」弹窗）
@@ -1056,10 +1108,7 @@ fun DetailScreen(
                         detail?.director?.ifBlank { null }?.let { Text("导演：$it", fontSize = tvSp(16), color = Color(0xCCFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         descFull?.let { Text(it, fontSize = tvSp(16), color = Color(0xCCFFFFFF), maxLines = 4, lineHeight = tvSp(18), overflow = TextOverflow.Ellipsis) }
                         if (wide) Spacer(modifier = Modifier.weight(1f))
-                        if (buffering) Text("缓冲中…", color = Color.Yellow, fontSize = tvSp(16), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        listOfNotNull(errText, errorHint).joinToString("｜").takeIf { it.isNotEmpty() }?.let {
-                            Text(it, color = Color(0xFFFF6B6B), fontSize = tvSp(16), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+                        // 用户 2026-11-10 改：缓冲/错误等状态文案撤出详情信息列，统一浮显在视频窗右上角（见上方窗 Box）
                         // 动作行（Ruling④：播放(预览停摆才显)/快搜/倒序/测速/简介/收藏/🔗复制；
                         // 「返回」撤——遥控 Back 分层返回、触屏走系统手势）
                         Row(
@@ -1207,20 +1256,22 @@ fun DetailScreen(
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (fsBit.isNotEmpty()) Text(fsBit, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                     if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodySmall)
-                    // 用户 2026-11-10 实拍图：右上=暂停/播放状态标（点按=切播放）+「当前 / 总时长」
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(
-                            painterResource(if (playing) R.drawable.tvb_v_pause else R.drawable.tvb_v_play),
-                            null, tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                                .clickable { togglePlayFs(); pokeFs() },
-                        )
-                        Text(
-                            fmtHms(shownMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
-                            color = Color.White, style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
+                    // 用户 2026-11-10 修订：播放中什么都不显，仅暂停时显「时间+圆圈标+短进度线」标（FsPauseBadge）
+                    if (!playing) FsPauseBadge(
+                        fmtHms(shownMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
+                        if (fsDur > 0) shownMs.toFloat() / fsDur else 0f,
+                        { togglePlayFs(); pokeFs() },
+                    )
                 }
+            }
+            // 修订（用户 2026-11-10）：底栏控件自隐后，右上继续显示「⏸ + 暂停时间点」——
+            // 快进/后退(←→/拖拽)后 fsPos 1s 轮询刷新，靠此时间反映当前位置；替代原居中进度胶囊
+            AnimatedVisibility(visible = fsBar.not() && !playing && !locked && !buffering, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(20.dp, 14.dp)) {
+                FsPauseBadge(
+                    fmtHms(shownMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
+                    if (fsDur > 0) shownMs.toFloat() / fsDur else 0f,
+                    { togglePlayFs(); pokeFs() },
+                )
             }
             // 用户 2026-11-10 实拍图版式：右中「<」=退出全屏回详情页（原 CenterEnd 大时间区迁至右下）
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
@@ -1256,30 +1307,30 @@ fun DetailScreen(
                 }
             }
             // 用户 2026-11-10 实拍图版式：右下（控件上方）=当前时间大时钟 + 影片剩余/结束时刻
-            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 118.dp)) {
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (fsClock.isNotEmpty()) Text(fsClock, color = Color.White, style = MaterialTheme.typography.displaySmall)
+            // 修订（用户手机实拍：与右中「<」重叠）：字号 displaySmall→headlineMedium、bottom 贴合紧凑后的底栏
+            // 再修（用户 2026-11-10）：靠右贴边（与右上对齐，end=20dp）——底栏紧凑+时钟缩小后与「<」已无竖向交叠；
+            // 剩余/结束分隔改「/」
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 88.dp)) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (fsClock.isNotEmpty()) Text(fsClock, color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Normal)
                     if (fsDur > 0) Text(
-                        "剩余 " + fmtHms((fsDur - shownMs).coerceAtLeast(0L) / 1000) + " · 结束 " + fsEndTxt,
-                        color = Color(0xBBFFFFFF), style = MaterialTheme.typography.bodyMedium,
+                        "影片剩余 " + fmtHms((fsDur - shownMs).coerceAtLeast(0L) / 1000) + " | 影片结束 " + fsEndTxt,
+                        color = Color(0xE6FFFFFF), fontSize = 15.sp,
                     )
                 }
             }
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+                // 紧凑化修订（用户 2026-11-10 手机实拍）：撤底栏内小时钟行（与右下大时钟重复且占高），
+                // padding/进度盒缩小，按钮行 40dp 触控高——整栏 ~74dp，为右下时钟与退出钮让出空间
                 Column(
-                    modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 24.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 24.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    // TVBox 复刻（用户 2026-11-09）底栏右上时钟（HH:MM，1s 快照刷新）
-                    Row(Modifier.fillMaxWidth()) {
-                        Spacer(Modifier.weight(1f))
-                        if (fsClock.isNotEmpty()) Text(fsClock, color = Color(0xCCFFFFFF), style = MaterialTheme.typography.bodySmall)
-                    }
                     // 进度行（参考图样式）：当前时间—红细线+圆点拇指—总时长；手指按住即拖（跟手预览、松手 seek）、单击定位；遥控 ←→ 仍走 ±15s（fsKeyMod）
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.bodySmall)
                         Box(
-                            modifier = Modifier.weight(1f).height(24.dp).pointerInput(fsDur) {
+                            modifier = Modifier.weight(1f).height(18.dp).pointerInput(fsDur) {
                                 awaitEachGesture {
                                     val downEv = awaitFirstDown(requireUnconsumed = false)
                                     val w = size.width.toFloat()
@@ -1302,10 +1353,10 @@ fun DetailScreen(
                                 val f = if (fsDur > 0L) (shownMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
                                 // TVBox 复刻（用户 2026-11-09）：轨道 40%白 → 次缓冲 深灰 → 已播 主题红 → 红圆拇指
                                 val bf = if (fsDur > 0L) (fsBuf.toFloat() / fsDur).coerceIn(f, 1f) else 0f
-                                drawLine(TvColors.Track, Offset(0f, half), Offset(size.width, half), 3.dp.toPx())
-                                drawLine(TvColors.Buffer, Offset(0f, half), Offset(size.width * bf, half), 3.dp.toPx())
-                                drawLine(TvColors.Red, Offset(0f, half), Offset(size.width * f, half), 5.dp.toPx())
-                                drawCircle(TvColors.Red, 8.dp.toPx(), Offset(size.width * f, half))
+                                drawLine(TvColors.Track, Offset(0f, half), Offset(size.width, half), 2.dp.toPx())
+                                drawLine(TvColors.Buffer, Offset(0f, half), Offset(size.width * bf, half), 2.dp.toPx())
+                                drawLine(TvColors.Red, Offset(0f, half), Offset(size.width * f, half), 4.dp.toPx())
+                                drawCircle(TvColors.Red, 7.dp.toPx(), Offset(size.width * f, half))
                             }
                         }
                         Text(if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
@@ -1361,29 +1412,8 @@ fun DetailScreen(
                         modifier = Modifier.size(30.dp).offset(x = 2.dp))
                 }
             }
-            // 暂停浮层（控件隐去后居中）：时间 + 3dp 细线 + 图标，渐变胶囊底，点按续播
-            if (fs && !playing && !fsBar && !locked && !buffering) {   // !buffering：seek/换集缓冲窗口 playing=false 属常态，不误弹暂停 UI
-                Row(
-                    modifier = Modifier.align(Alignment.Center)
-                        .background(
-                            Brush.horizontalGradient(listOf(Color.Transparent, TvColors.Overlay, Color.Transparent)),
-                            RoundedCornerShape(18.dp),
-                        )
-                        .clickable { player.playWhenReady = true; pokeFs() }
-                        .padding(horizontal = 32.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.titleMedium)
-                    Box(Modifier.width(160.dp).height(3.dp).background(TvColors.Track, RoundedCornerShape(2.dp))) {
-                        val f = if (fsDur > 0) (shownMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
-                        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
-                    }
-                    // 修（用户 2026-11-10）：同居中大钮，▶ 字形换矢量图标光学居中
-                    Icon(painterResource(R.drawable.tvb_v_play), null, tint = TvColors.Red,
-                        modifier = Modifier.size(22.dp).offset(x = 1.dp))
-                }
-            }
+            // 暂停浮层居中胶囊已撤（用户 2026-11-10：不要再显示进度条在中间）；
+            // 暂停时间点改由右上常驻「⏸+时间」承载（见 TopEnd 修订块），点画面中心仍可续播（TapZone.Center）
             // 快进/快退时间胶囊（TVBox tv_progress_container 复刻：方向图标+目标/总时间+3dp 细线；
             // 独立于底栏显隐，松手 1s 后自隐——需求 c：只见时间控件不见进度条）
             if (slideShow) {
