@@ -291,7 +291,9 @@ fun DetailScreen(
     var speeds by remember { mutableStateOf<List<Long?>?>(null) }
     var probeSeq by remember { mutableIntStateOf(0) }
     var autoSrcTried by remember { mutableStateOf(false) }
-    var buffering by remember { mutableStateOf(true) }
+    // C1 修复：初值改 false——播放器未 load 时不该显「缓冲中」（旧初值 true 是"进页即起播"时代的加载反馈，
+    // 预览关待播态下 player 永不发事件，文案恒挂=误判成"关预览仍起播"）
+    var buffering by remember { mutableStateOf(false) }
     var errorHint by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(true) }
     // TVBox 对标 C1（2026-11-10）：窗口预览关=进详情 paint 不 load，窗显海报+常驻播放钮；
@@ -659,7 +661,7 @@ fun DetailScreen(
         speeds = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, e))
         if (!settings.winPreview) {
             // C1：起播链整体后移到用户点播放/窗OK（startPending），线/集/续播位照常先算好
-            pendSec = sec; pendProg = fromProg; noPreview = true
+            pendSec = sec; pendProg = fromProg; noPreview = true; buffering = false
             return
         }
         playAt(l, e, sec * 1000)
