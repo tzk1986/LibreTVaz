@@ -60,6 +60,7 @@ fun SettingsScreen(
     var threads by remember { mutableStateOf(store.searchThreads) }
     var histMax by remember { mutableStateOf(store.histMax) }
     var cacheTier by remember { mutableStateOf(store.cacheTier) }
+    var zoomPref by remember { mutableStateOf(store.zoomPref) }
     var lineSpeed by remember { mutableStateOf(store.lineSpeed) }
     var autoBestLine by remember { mutableStateOf(store.autoBestLine) }
     var fuzzy by remember { mutableStateOf(store.fuzzy) }
@@ -102,6 +103,8 @@ fun SettingsScreen(
             item { SettingCard("搜索线程（首批并发源数）", "$threads") { dlg = "threads" } }
             item { SettingCard("历史记录条数", "$histMax 条") { dlg = "histmax" } }
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }
+            // TVBox 对标 C4（2026-11-10）：画面缩放全局档，详情预览+全屏窗初始态（比例钮循环不受档 2 约束）
+            item { SettingCard("画面缩放", ZOOM_LABELS[zoomPref]) { dlg = "zoom" } }
             item { SettingCard("清理缓存", purgeMsg) {
                 // B11 扩磁盘：CMS 分片文件全删 + 视频 SimpleCache 释放重建，报回收体积（web cache_purge 等价）
                 // 用户 2026-11-05：整段 runCatching 兜底——原先未捕获异常直冲 rememberCoroutineScope
@@ -155,6 +158,10 @@ fun SettingsScreen(
     if (dlg == "cache") PickerDialog("缓存时长档位（聚合+搜索 TTL 一组切换）",
         CacheTiers.TIERS.map { it.label }, cacheTier,
         onDismiss = { dlg = "" }) { i -> cacheTier = i; store.cacheTier = i }
+
+    if (dlg == "zoom") PickerDialog("画面缩放（进入详情/全屏时的初始画面档）",
+        ZOOM_LABELS, zoomPref,
+        onDismiss = { dlg = "" }) { i -> zoomPref = i; store.zoomPref = i }
 
     // 弹窗压缩（用户 2026-11-05：标题降字号+拉宽+行高收紧，手机一屏看全）
     val dlgWide = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)

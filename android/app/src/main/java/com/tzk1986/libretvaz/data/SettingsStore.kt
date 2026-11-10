@@ -81,6 +81,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_SHOW_SOURCE, true)
         set(value) = prefs.edit().putBoolean(KEY_SHOW_SOURCE, value).apply()
 
+    /** TVBox 对标 C4（2026-11-10）：画面缩放全局档 0=比例适配/1=满屏裁切/2=拉伸充满（详情预览+全屏窗初始态；比例钮仍 FIT↔ZOOM 二档循环，档 2 仅初始呈现） */
+    var zoomPref: Int
+        get() = prefs.getInt(KEY_ZOOM_PREF, 0).coerceIn(0, 2)
+        set(value) = prefs.edit().putInt(KEY_ZOOM_PREF, value.coerceIn(0, 2)).apply()
+
     /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
     var tabsJson: String
         get() = prefs.getString(KEY_TABS, "").orEmpty()
@@ -162,6 +167,7 @@ class SettingsStore(context: Context) {
         private const val KEY_CACHE_TIER = "cache_tier"
         private const val KEY_TABS = "tabs"
         private const val KEY_SHOW_SOURCE = "show_source"
+        private const val KEY_ZOOM_PREF = "zoom_pref"
         private const val KEY_AGG_MODE = "agg_mode"
     }
 }

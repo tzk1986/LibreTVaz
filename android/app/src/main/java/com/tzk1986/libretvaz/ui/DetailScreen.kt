@@ -304,7 +304,8 @@ fun DetailScreen(
     // TVBox 式动作行状态（2026-11-03 定稿清单：拖拽进度/重播/单集循环/倍速/画面比例/重置）
     var fsPos by remember { mutableLongStateOf(0L) }
     var fsDur by remember { mutableLongStateOf(0L) }
-    var zoomMode by remember { mutableStateOf(false) }
+    // TVBox 对标 C4（2026-11-10）：初始态跟随全局档 zoom_pref（1=满屏为 true；2=拉伸时钮显「适配」态）
+    var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
     var repeatOne by remember { mutableStateOf(false) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
     // 用户 2026-11-04：TVBox 复刻三件套状态——选集面板 / 顶部分辨率·码率 / 拖拽跟手临时位（-1=未拖）
@@ -1020,6 +1021,8 @@ fun DetailScreen(
                                         pvRef.value = this
                                         this.player = player
                                         useController = false
+                                        // TVBox 对标 C4：预览窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
+                                        resizeMode = zoomResizeMode(settings.zoomPref)
                                         // view 级焦点窗（旧包 20261106l 实证路线）：可焦+触摸模式可焦，
                                         // 入场循环 requestFocus 必中；焦点态→winFocused 画白描边
                                         isFocusable = true
@@ -1228,7 +1231,7 @@ fun DetailScreen(
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply {
                     this.player = player; useController = false
-                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    resizeMode = zoomResizeMode(settings.zoomPref) // TVBox 对标 C4：全屏窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
                     fsPv = this
                 } },
                 // 硬解/软解重建（用户 2026-11-10）：player 换实例须靠 update 重绑，否则全屏黑屏
