@@ -518,6 +518,8 @@ fun ZoneScreen(
                     onSrc = { // 点来源标=切到该源继续查同类（筛选保留，用户 2026-11-04）
                         selUrl = it.sourceUrl; settings.zoneSrc = it.sourceUrl; showSrc = false
                     },
+                    // TVBox 对标 C2（2026-11-10）：来源标=源名展示，受「数据源显示」开关控制（关闭时切源快捷入口随之隐藏）
+                    showSource = settings.showSourceName,
                 )
             }
             // 错误/空态兜底（加载态由墙尾哨兵呈现，空间全让海报墙——点播 2026-11-03 定稿）
@@ -595,7 +597,7 @@ private fun SrcRow(selected: Boolean, name: String, badge: String?, onClick: () 
 }
 
 @Composable
-private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () -> Unit, onSrc: () -> Unit) {
+private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () -> Unit, onSrc: () -> Unit, showSource: Boolean = true) {
     // 用户 2026-11-09 #133：与 PosterCard 同款遥控焦点=白描边+40%红罩层
     var zpFocused by remember { mutableStateOf(false) }
     Column(modifier = Modifier.onFocusEvent { zpFocused = it.isFocused }.clickable(onClick = onClick)) {
@@ -652,7 +654,7 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
                 )
             }
             // 来源标（用户 2026-11-04）：聚合下每部可辨出处；点标=切到该源继续查当前分类/筛选
-            Text(
+            if (showSource) Text(
                 text = item.sourceName,
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,

@@ -339,7 +339,8 @@ fun CollectScreen(
                     gridItems(shown, key = { "${it.sourceUrl}|${it.vodId}" }, contentType = { "poster" }) { it ->
                         PosterCard(
                             item = it, onClick = { onPick(it) },
-                            siteLabel = if (tabIdx == null) it.sourceName else null,
+                            // TVBox 对标 C2（2026-11-10）：源名前缀受「数据源显示」开关控制
+                            siteLabel = if (tabIdx == null && settings.showSourceName) it.sourceName else null,
                             codeBadge = true,
                         )
                     }

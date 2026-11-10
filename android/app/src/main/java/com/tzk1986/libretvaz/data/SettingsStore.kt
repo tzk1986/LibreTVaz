@@ -76,6 +76,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_CACHE_TIER, 1).coerceIn(0, CacheTiers.TIERS.size - 1)
         set(value) = prefs.edit().putInt(KEY_CACHE_TIER, value.coerceIn(0, CacheTiers.TIERS.size - 1)).apply()
 
+    /** TVBox 对标 C2（2026-11-10）：海报卡是否显示源名前缀（搜搜/收藏/历史/资源口四墙统一；资源口来源标兼切源点标，关闭即隐） */
+    var showSourceName: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_SOURCE, true)
+        set(value) = prefs.edit().putBoolean(KEY_SHOW_SOURCE, value).apply()
+
     /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
     var tabsJson: String
         get() = prefs.getString(KEY_TABS, "").orEmpty()
@@ -156,6 +161,7 @@ class SettingsStore(context: Context) {
         private const val KEY_EP_FULL = "ep_full"
         private const val KEY_CACHE_TIER = "cache_tier"
         private const val KEY_TABS = "tabs"
+        private const val KEY_SHOW_SOURCE = "show_source"
         private const val KEY_AGG_MODE = "agg_mode"
     }
 }

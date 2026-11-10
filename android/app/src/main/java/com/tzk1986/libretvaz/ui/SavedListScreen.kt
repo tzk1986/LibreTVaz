@@ -21,6 +21,7 @@ import com.tzk1986.libretvaz.data.HistStore
 import com.tzk1986.libretvaz.data.KeepChk
 import com.tzk1986.libretvaz.data.KeepStore
 import com.tzk1986.libretvaz.data.SavedItem
+import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.VodSummary
 
 /**
@@ -37,6 +38,7 @@ private fun SavedWall(
     onRemove: (VodSummary) -> Unit,
     onClear: () -> Unit,
     updatedBadge: Boolean = false,
+    showSource: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var delMode by remember { mutableStateOf(false) }
@@ -66,7 +68,7 @@ private fun SavedWall(
                 Box {
                     PosterCard(item = s.vod, onClick = {
                         if (delMode) onRemove(s.vod) else onPick(s.vod)
-                    })
+                    }, siteLabel = if (showSource) s.vod.sourceName else null)
                     // 收藏「已更新」角标（web keep 的 updated 标记等价）：删除模式下让位给红✕
                     if (updatedBadge && s.updated && !delMode) Text(
                         text = "更新",
@@ -94,6 +96,7 @@ private fun SavedWall(
 @Composable
 fun KeepScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val showSource = remember { SettingsStore(context).showSourceName }
     val store = remember { KeepStore(context) }
     val repo = remember { CmsRepository() }
     var items by remember { mutableStateOf(store.list(zone)) }
@@ -110,6 +113,7 @@ fun KeepScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, 
         onRemove = { store.remove(it); items = store.list(zone) },
         onClear = { store.clear(zone); items = store.list(zone) },
         updatedBadge = true,
+        showSource = showSource,
         modifier = modifier,
     )
 }
@@ -118,6 +122,7 @@ fun KeepScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, 
 @Composable
 fun HistScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val showSource = remember { SettingsStore(context).showSourceName }
     val store = remember { HistStore(context) }
     var items by remember { mutableStateOf(store.list(zone)) }
     SavedWall(
@@ -128,6 +133,7 @@ fun HistScreen(zone: Boolean, onBack: () -> Unit, onPick: (VodSummary) -> Unit, 
         onPick = onPick,
         onRemove = { store.remove(it); items = store.list(zone) },
         onClear = { store.clear(zone); items = store.list(zone) },
+        showSource = showSource,
         modifier = modifier,
     )
 }
