@@ -86,6 +86,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_ZOOM_PREF, 0).coerceIn(0, 2)
         set(value) = prefs.edit().putInt(KEY_ZOOM_PREF, value.coerceIn(0, 2)).apply()
 
+    /** TVBox 对标 C1（2026-11-10）：窗口预览——关=进详情不自动起播（窗显海报+常驻播放钮，点播放/窗OK=起播并进全屏）；开=现行即进即预览 */
+    var winPreview: Boolean
+        get() = prefs.getBoolean(KEY_WIN_PREVIEW, true)
+        set(value) = prefs.edit().putBoolean(KEY_WIN_PREVIEW, value).apply()
+
     /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
     var tabsJson: String
         get() = prefs.getString(KEY_TABS, "").orEmpty()
@@ -168,6 +173,7 @@ class SettingsStore(context: Context) {
         private const val KEY_TABS = "tabs"
         private const val KEY_SHOW_SOURCE = "show_source"
         private const val KEY_ZOOM_PREF = "zoom_pref"
+        private const val KEY_WIN_PREVIEW = "win_preview"
         private const val KEY_AGG_MODE = "agg_mode"
     }
 }

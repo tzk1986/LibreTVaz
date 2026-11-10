@@ -61,6 +61,7 @@ fun SettingsScreen(
     var histMax by remember { mutableStateOf(store.histMax) }
     var cacheTier by remember { mutableStateOf(store.cacheTier) }
     var zoomPref by remember { mutableStateOf(store.zoomPref) }
+    var winPreview by remember { mutableStateOf(store.winPreview) }
     var lineSpeed by remember { mutableStateOf(store.lineSpeed) }
     var autoBestLine by remember { mutableStateOf(store.autoBestLine) }
     var fuzzy by remember { mutableStateOf(store.fuzzy) }
@@ -100,6 +101,8 @@ fun SettingsScreen(
             item { SettingCard("扫码自动导入", onOff(qrAuto)) { qrAuto = !qrAuto; store.qrAuto = qrAuto } }
             // TVBox 对标 C2（2026-11-10）：四墙海报卡源名前缀统一开关
             item { SettingCard("数据源显示", onOff(showSource)) { showSource = !showSource; store.showSourceName = showSource } }
+            // TVBox 对标 C1（2026-11-10）：关=进详情窗不起播（海报+常驻播放钮），点播放/窗OK=起播并进全屏
+            item { SettingCard("窗口预览", onOff(winPreview)) { winPreview = !winPreview; store.winPreview = winPreview } }
             item { SettingCard("搜索线程（首批并发源数）", "$threads") { dlg = "threads" } }
             item { SettingCard("历史记录条数", "$histMax 条") { dlg = "histmax" } }
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }

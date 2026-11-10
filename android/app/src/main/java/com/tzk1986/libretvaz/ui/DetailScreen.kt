@@ -294,6 +294,11 @@ fun DetailScreen(
     var buffering by remember { mutableStateOf(true) }
     var errorHint by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(true) }
+    // TVBox 对标 C1（2026-11-10）：窗口预览关=进详情 paint 不 load，窗显海报+常驻播放钮；
+    // pendSec/pendProg 存 paint 算好的续播位，点播放/窗OK 才起播（render 链一行不改、仅时机后移）
+    var noPreview by remember { mutableStateOf(false) }
+    var pendSec by remember { mutableLongStateOf(0L) }
+    var pendProg by remember { mutableStateOf(false) }
     var kept by remember { mutableStateOf(keepSt.contains(item)) }
     var changing by remember { mutableStateOf(false) } // auto 换源链路进行中标记
     // 用户 2026-11-05：换源与搜关联合并为单弹窗单钮，定名「快搜」——chDlg 即入口，框内默认换源海报网格+关联词，点词转全源搜
@@ -357,6 +362,7 @@ fun DetailScreen(
         val u = linkOf(l, e) ?: return
         errorHint = null
         buffering = true
+        noPreview = false // 任何真实 load 即撤海报待播态（C1）
         player.setMediaItem(MediaItem.fromUri(u), startPosMs)
         player.prepare()
         // 下一集预取+带宽余量闸（用户 2026-11-06 批准；实机复测发现慢线预取抢当前播放带宽反噬换集速度）：
@@ -525,6 +531,8 @@ fun DetailScreen(
     val healthySnap = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     fun playingHealthy() = player.playbackState == Player.STATE_READY && player.currentPosition > 0
     fun tagFor(i: Int): PerfCore.SpeedTag? {
+        // C1 待播态不显任何速度读数（含历史缓存回灌）——未起播即无 Mbps（方案 T-B1 验收）
+        if (noPreview) return null
         val k = speeds?.getOrNull(i) ?: return null
         // 用户 2026-11-05 批准偏离 web：节目码率已知且余量达标时「慢/不可用」放宽为「可能卡顿」
         var t = PerfCore.lineSpeedTagSoft(k, LineSpeed.cachedBps(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))?.getOrNull(i)) ?: return null
@@ -575,6 +583,17 @@ fun DetailScreen(
             playAt(best, eIdx, ms)
         }
     }
+
+    // TVBox 对标 C1（2026-11-10）：预览待播态点播放/窗OK=补 paint 后起的整段 render 链再进全屏
+    // （声明须在 probeSpeeds 之后——Compose 局部 fun 按语句序可见）
+    fun startPending() {
+        if (!noPreview) return
+        val e = curEp; val sec = pendSec; val prog = pendProg
+        playAt(line, e, sec * 1000)
+        probeSpeeds(e)
+        if (prog && (e > 0 || sec >= 5)) toast("继续播放 第${e + 1}集 ${fmtHms(sec)}")
+    }
+    fun winActivate() { startPending(); enterFs() }
 
     // ===== 换集/换线（web goEp/flagRow.onclick 等价；边界=置灰样式+点击 toast） =====
     fun goEp(step: Int) {
@@ -638,6 +657,11 @@ fun DetailScreen(
         line = l; curEp = e
         tried = setOf(l)
         speeds = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, e))
+        if (!settings.winPreview) {
+            // C1：起播链整体后移到用户点播放/窗OK（startPending），线/集/续播位照常先算好
+            pendSec = sec; pendProg = fromProg; noPreview = true
+            return
+        }
         playAt(l, e, sec * 1000)
         probeSpeeds(e)
         when {
@@ -1041,7 +1065,7 @@ fun DetailScreen(
                                 .background(Color.Black)
                                 // 焦点载体=PlayerView（view 级，见上 Ruling）；Box 只做触摸点击=进全屏，
                                 // 不再挂 Compose 焦点节点（probe5 实锤本节点在焦点系统里不可达）
-                                .pointerInput(Unit) { detectTapGestures(onTap = { enterFs() }) }
+                                .pointerInput(Unit) { detectTapGestures(onTap = { winActivate() }) }
                                 .then(if (winFocused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke) else Modifier),
                         ) {
                             AndroidView(
@@ -1063,7 +1087,7 @@ fun DetailScreen(
                                             when (keyCode) {
                                                 // OK/Enter=进全屏（与蓝本窗上按 OK 语义一致）
                                                 android.view.KeyEvent.KEYCODE_ENTER,
-                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER -> { enterFs(); true }
+                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER -> { winActivate(); true }
                                                 // 方向键=交还 Compose 走焦（←→让位焦点系统，Ruling 2026-11-09：
                                                 // ±15s 仅保留在全屏层）
                                                 android.view.KeyEvent.KEYCODE_DPAD_UP -> true
@@ -1079,6 +1103,16 @@ fun DetailScreen(
                                 update = { if (it.player !== player) it.player = player },
                                 modifier = Modifier.fillMaxSize().padding(2.dp),
                             )
+                            // TVBox 对标 C1：预览关=窗不黑屏空转，海报盖住未起播的 PlayerView（起播即撤）
+                            if (noPreview) {
+                                (detail?.cover ?: itemS.pic)?.takeIf { it.isNotBlank() }?.let { cp ->
+                                    AsyncImage(
+                                        model = cp, contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.matchParentSize(),
+                                    )
+                                }
+                            }
                             if (winFocused) {
                                 // 遥控提示（用户需求：显示白框+提示方向键选按钮操作）
                                 Text(
@@ -1156,7 +1190,8 @@ fun DetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(tvu(10)),
                         ) {
                             val af = Modifier.focusRequester(actRowFr)
-                            if (!playing) TmBtn(modifier = af, onClick = { enterFs() }) { Text("播放", fontSize = tvSp(20)) }
+                            // C1：预览关时播放钮常驻；winActivate=待播则补起播链后进全屏（正常态等旧行为）
+                            if (!playing || noPreview) TmBtn(modifier = af, onClick = { winActivate() }) { Text("播放", fontSize = tvSp(20)) }
                             TmBtn(modifier = if (playing) af else Modifier, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
                             TmBtn(onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
                             TmBtn(onClick = {
