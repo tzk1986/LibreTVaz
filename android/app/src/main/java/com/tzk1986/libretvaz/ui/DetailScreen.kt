@@ -98,6 +98,14 @@ private fun fmtHms(sec: Long): String {
     return if (h > 0) "%02d:%02d:%02d".format(h, m, ss) else "%02d:%02d".format(m, ss)
 }
 
+/**
+ * TVBox 对标 C10（2026-11-10）：点播 PlayerView 两档构造。media3 1.11.1 无 setUseSurfaceView
+ * （javap 实锤，表面类型仅 XML attr surface_type 可定），TextureView 档走 res/layout/pv_texture.xml inflate。
+ */
+private fun pvFor(ctx: android.content.Context, texture: Boolean): PlayerView =
+    if (texture) android.view.LayoutInflater.from(ctx).inflate(R.layout.pv_texture, null) as PlayerView
+    else PlayerView(ctx)
+
 /** 详情按钮行钮（用户 2026-11-05 参考图边界核对：深色画面上黑底再浓也看不出边——参考图的药丸边界
  *  ＝白色半透底；用户 2026-11-05 终定白 20%（0x33FFFFFF）+白字（30% 黑一闪已废）；
  *  外框改 FilterChip 同款量纲——高度压低（32dp）两侧收紧（无图标 16dp 水平内边距），
@@ -1070,9 +1078,11 @@ fun DetailScreen(
                                 .pointerInput(Unit) { detectTapGestures(onTap = { winActivate() }) }
                                 .then(if (winFocused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke) else Modifier),
                         ) {
+                            // TVBox 对标 C10（2026-11-10）：渲染方式档变化时 key 触发整视图重建，进页即生效
+                            key(settings.textureView) {
                             AndroidView(
                                 factory = { ctx ->
-                                    PlayerView(ctx).apply {
+                                    pvFor(ctx, settings.textureView).apply {
                                         pvRef.value = this
                                         this.player = player
                                         useController = false
@@ -1105,6 +1115,7 @@ fun DetailScreen(
                                 update = { if (it.player !== player) it.player = player },
                                 modifier = Modifier.fillMaxSize().padding(2.dp),
                             )
+                            }
                             // TVBox 对标 C1：预览关=窗不黑屏空转，海报盖住未起播的 PlayerView（起播即撤）
                             if (noPreview) {
                                 (detail?.cover ?: itemS.pic)?.takeIf { it.isNotBlank() }?.let { cp ->
@@ -1294,8 +1305,10 @@ fun DetailScreen(
             }
         } else {
             // ===== 全屏层＝web fsBar 信息 + TVBox 式面板（2026-11-03 定稿：进度行+动作行；不适用钮隐藏） =====
+            // TVBox 对标 C10（2026-11-10）：渲染方式档变化时 key 触发整视图重建，进全屏即生效
+            key(settings.textureView) {
             AndroidView(
-                factory = { ctx -> PlayerView(ctx).apply {
+                factory = { ctx -> pvFor(ctx, settings.textureView).apply {
                     this.player = player; useController = false
                     resizeMode = zoomResizeMode(settings.zoomPref) // TVBox 对标 C4：全屏窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
                     fsPv = this
@@ -1304,6 +1317,7 @@ fun DetailScreen(
                 update = { if (it.player !== player) it.player = player },
                 modifier = Modifier.fillMaxSize(),
             )
+            }
             // ===== TVBox 手机版样式复刻（用户 2026-11-04 参考图）：左上标题/分辨率·右上码率·右中当前大时间+剩余·红细线进度·底部图标动作行；跟手拖拽+遥控焦点均可用 =====
             val fsTitle = (detail?.title?.ifBlank { null } ?: itemS.name) + "：第${curEp + 1}集"
             val shownMs = if (fsDragPos >= 0) fsDragPos else fsPos

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TVBox 对标 C10（2026-11-10）：TextureView 渲染档专用构造。
+     media3 1.11.1 PlayerView 无 setUseSurfaceView API（javap 实锤），表面类型仅能经 XML attr surface_type 指定 -->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view" />

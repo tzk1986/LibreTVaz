@@ -91,6 +91,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_WIN_PREVIEW, true)
         set(value) = prefs.edit().putBoolean(KEY_WIN_PREVIEW, value).apply()
 
+    /** TVBox 对标 C10（2026-11-10）：点播渲染方式档——false=SurfaceView（默认，现行打洞合成）/true=TextureView（纹理合成，可截屏/投屏兼容好）；仅点播预览窗+全屏，直播不动 */
+    var textureView: Boolean
+        get() = prefs.getBoolean(KEY_RENDER_TEXTURE, false)
+        set(value) = prefs.edit().putBoolean(KEY_RENDER_TEXTURE, value).apply()
+
     /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
     var tabsJson: String
         get() = prefs.getString(KEY_TABS, "").orEmpty()
@@ -174,6 +179,7 @@ class SettingsStore(context: Context) {
         private const val KEY_SHOW_SOURCE = "show_source"
         private const val KEY_ZOOM_PREF = "zoom_pref"
         private const val KEY_WIN_PREVIEW = "win_preview"
+        private const val KEY_RENDER_TEXTURE = "render_texture"
         private const val KEY_AGG_MODE = "agg_mode"
     }
 }

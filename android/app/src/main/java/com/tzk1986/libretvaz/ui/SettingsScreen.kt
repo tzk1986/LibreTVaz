@@ -62,6 +62,7 @@ fun SettingsScreen(
     var cacheTier by remember { mutableStateOf(store.cacheTier) }
     var zoomPref by remember { mutableStateOf(store.zoomPref) }
     var winPreview by remember { mutableStateOf(store.winPreview) }
+    var renderTex by remember { mutableStateOf(store.textureView) }
     var lineSpeed by remember { mutableStateOf(store.lineSpeed) }
     var autoBestLine by remember { mutableStateOf(store.autoBestLine) }
     var fuzzy by remember { mutableStateOf(store.fuzzy) }
@@ -108,6 +109,8 @@ fun SettingsScreen(
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }
             // TVBox 对标 C4（2026-11-10）：画面缩放全局档，详情预览+全屏窗初始态（比例钮循环不受档 2 约束）
             item { SettingCard("画面缩放", ZOOM_LABELS[zoomPref]) { dlg = "zoom" } }
+            // TVBox 对标 C10（2026-11-10）：点播渲染方式两档直切（SurfaceView 默认/TextureView 纹理合成）；仅点播预览窗+全屏，直播不动
+            item { SettingCard("渲染方式", if (renderTex) "TextureView" else "SurfaceView") { renderTex = !renderTex; store.textureView = renderTex } }
             item { SettingCard("清理缓存", purgeMsg) {
                 // B11 扩磁盘：CMS 分片文件全删 + 视频 SimpleCache 释放重建，报回收体积（web cache_purge 等价）
                 // 用户 2026-11-05：整段 runCatching 兜底——原先未捕获异常直冲 rememberCoroutineScope
