@@ -11,8 +11,10 @@ import java.net.URL
  * 公开克隆读不到文件=空列表，本文件所有逻辑整体静默跳过，功能不报错。
  */
 object Zone {
-    /** 站单扩充后升此版本号触发补种（对齐 web 'v4'） */
-    const val SEED_VER = "v4"
+    /** 站单扩充后升此版本号触发补种（对齐 web 'v4'；2026-11-10 xlsx 18+ 专项三关实测升 v5：
+     *  CK资源/乐播 主机已在站单免重；91麻豆 PC 同款请求头三关全过但 app 端 OkHttp 通道被 Cloudflare 指纹拦截（墙空），
+     *  按「有效≠能在本项目使用」撤下；黑料拉流挂、成人71 不可达未收。净新增 0 站，v5 仅作补种闸门留痕 */
+    const val SEED_VER = "v5"
 
     /** 分类名关键词判专区（对齐 web isAdultType，导入时源名命中即直接归专区池） */
     val ADULT_KEYWORDS = listOf(
