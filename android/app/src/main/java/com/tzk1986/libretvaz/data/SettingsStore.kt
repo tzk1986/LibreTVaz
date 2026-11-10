@@ -96,6 +96,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_RENDER_TEXTURE, false)
         set(value) = prefs.edit().putBoolean(KEY_RENDER_TEXTURE, value).apply()
 
+    /** TVBox 对标 F2+C6（2026-11-10）：播放器引擎档 0=ExoPlayer（默认，全功能链）/1=系统 MediaPlayer（轻量壳，降级显之）；仅点播，直播不动 */
+    var playerEngine: Int
+        get() = prefs.getInt(KEY_PLAYER_ENGINE, 0).coerceIn(0, 1)
+        set(value) = prefs.edit().putInt(KEY_PLAYER_ENGINE, value.coerceIn(0, 1)).apply()
+
     /** 对齐 web fongmi_tabs：功能行 [{nav,show}] JSON，顺序即优先级；空=默认序 */
     var tabsJson: String
         get() = prefs.getString(KEY_TABS, "").orEmpty()
@@ -180,6 +185,7 @@ class SettingsStore(context: Context) {
         private const val KEY_ZOOM_PREF = "zoom_pref"
         private const val KEY_WIN_PREVIEW = "win_preview"
         private const val KEY_RENDER_TEXTURE = "render_texture"
+        private const val KEY_PLAYER_ENGINE = "player_engine"
         private const val KEY_AGG_MODE = "agg_mode"
     }
 }

@@ -65,9 +65,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import com.tzk1986.libretvaz.R
 import com.tzk1986.libretvaz.data.*
@@ -353,8 +350,11 @@ fun DetailScreen(
     var locked by remember { mutableStateOf(false) }   // TVBox 锁屏：锁定后屏蔽全部触屏/遥控交互，仅解锁钮与返回可用
     // 用户 2026-11-10 复刻 TVBox 按钮行「硬/软」：codec 选择定死在 renderer 创建期（1.11.1 javap 实锤
     // MediaCodecSelector.DEFAULT/PREFER_SOFTWARE），切换=重建播放器（remember key）+ 原位续播
+    // TVBox 对标 F2+C6（2026-11-10）：播放器引擎两档——0=Exo 默认全链/1=系统 MediaPlayer 轻量壳；
+    // 进页读档、动作行「Exo/系统」胶囊当场切（settings 持久化，重建续位复用 hwResume 模板）
+    var engineX by remember { mutableIntStateOf(settings.playerEngine) }
     var hwDecode by remember { mutableStateOf(true) }
-    var hwResume by remember { mutableStateOf<Pair<Long, Boolean>?>(null) } // (位置ms, 切换前是否在播)，LaunchedEffect(hwDecode) 消费
+    var hwResume by remember { mutableStateOf<Pair<Long, Boolean>?>(null) } // (位置ms, 切换前是否在播)，LaunchedEffect(hwDecode, engineX) 消费
     var fsEndTxt by remember { mutableStateOf("") }   // 右下时钟区「预计结束」HH:MM:SS（1s 循环随 fsClock 更新）
     var fsDragPos by remember { mutableLongStateOf(-1L) }
     val focusReq = remember { FocusRequester() }
@@ -364,7 +364,10 @@ fun DetailScreen(
         }
     }
 
-    val player = remember(hwDecode) { buildPlayer(context, hwDecode = hwDecode) }
+    // TVBox 对标 F2+C6：引擎两档工厂——系统档=SysCtl 壳（无 Exo 独有能力，UI 降级显）；Exo 档透传行为逐 API 等价旧链
+    val player: PlayCtl = remember(hwDecode, engineX) {
+        if (engineX == 1) SysCtl(context) else ExoCtl(buildPlayer(context, hwDecode = hwDecode))
+    }
     fun lines(): List<PlayLine> = detail?.lines ?: emptyList()
     fun toast(s: String) = Toast.makeText(context, s, Toast.LENGTH_SHORT).show()
     fun linkOf(l: Int, e: Int): String? = lines().getOrNull(l)?.list?.getOrNull(e)?.link
@@ -373,15 +376,15 @@ fun DetailScreen(
         errorHint = null
         buffering = true
         noPreview = false // 任何真实 load 即撤海报待播态（C1）
-        player.setMediaItem(MediaItem.fromUri(u), startPosMs)
-        player.prepare()
+        player.load(u, startPosMs)
         // 下一集预取+带宽余量闸（用户 2026-11-06 批准；实机复测发现慢线预取抢当前播放带宽反噬换集速度）：
-        // 仅当当前线实测吞吐 ≥ 2×节目码率（A4）才预取；未测/判死/码率未知一律跳过，绝不与播放抢流
+        // 仅当当前线实测吞吐 ≥ 2×节目码率（A4）才预取；未测/判死/码率未知一律跳过，绝不与播放抢流。
+        // T-C1：预取走 Exo 的 VideoCache 本地代理，系统档不命中该缓存=无收益，跳过
         linkOf(l, e + 1)?.let { next ->
             val lk = LineSpeed.key(itemS.sourceKey, itemS.vodId, e)
             val kbps = LineSpeed.cached(lk)?.getOrNull(l)
             val bps = LineSpeed.cachedBps(lk)?.getOrNull(l)
-            if (kbps != null && kbps > 0 && bps != null && bps > 0 && kbps * 1024 >= 2 * bps) {
+            if (player.exo != null && kbps != null && kbps > 0 && bps != null && bps > 0 && kbps * 1024 >= 2 * bps) {
                 VodPreload.preload(context, next)
             }
         }
@@ -411,7 +414,7 @@ fun DetailScreen(
         val now = System.currentTimeMillis()
         if (now - lastToggleAt < 400) return
         lastToggleAt = now
-        player.playWhenReady = !player.playWhenReady
+        player.playing = !player.playing
     }
     // TVBox 复刻（用户 2026-11-09）：全屏 ←→=长按连续快进预览（松手才真 seek）+ 居中时间胶囊；
     // slideTick 心跳：每步进 ++，胶囊显 1s 尾巴后自隐（updateSeekUI 消息 1000/1001 等价）
@@ -427,14 +430,14 @@ fun DetailScreen(
     fun seekBy(deltaSec: Long) {
         val dur = player.duration
         if (dur <= 0) { toast("快进/快退暂不可用（流未就绪）"); return }
-        val pos = (player.currentPosition / 1000 + deltaSec).coerceIn(0, (dur / 1000) - 1)
+        val pos = (player.position / 1000 + deltaSec).coerceIn(0, (dur / 1000) - 1)
         player.seekTo(pos * 1000)
         toast((if (deltaSec < 0) "« 15s " else "15s » ") + fmtHms(pos) + " / " + fmtHms(dur / 1000))
     }
 
     // ===== 进度持久化（web fongmi_prog：5s 节流/pause 即写/ended 清/孤儿随写清理） =====
     fun writeProg(sec: Long, durSec: Long) {
-        if (player.playbackState == Player.STATE_ENDED) return
+        if (player.state == SysCore.ST_END) return
         val g = lines().getOrNull(line) ?: return
         val p = Prog(line, g.flag, curEp, sec, durSec, System.currentTimeMillis())
         prog.save(itemS.vodId, itemS.sourceKey, p, ProgStore.aliveKeys(context))
@@ -452,7 +455,7 @@ fun DetailScreen(
     fun doubleSeek(dir: Int) {
         val dur = player.duration
         if (dur <= 0) { toast("快进/快退暂不可用（流未就绪）"); return }
-        val t = (player.currentPosition + dir * 15_000L).coerceIn(0L, (dur - 1000L).coerceAtLeast(0L))
+        val t = (player.position + dir * 15_000L).coerceIn(0L, (dur - 1000L).coerceAtLeast(0L))
         player.seekTo(t)
         slideFinal = t; slideDirFinal = dir; slideTick++
     }
@@ -465,26 +468,36 @@ fun DetailScreen(
     // 重建后的 DisposableEffect(player)/LaunchedEffect(player…) 自动换绑，本 effect 负责原位续播
     fun toggleHwDecode() {
         if (buffering) { toast("缓冲中，稍后再试"); return }
-        hwResume = player.currentPosition to player.playWhenReady
+        hwResume = player.position to player.playing
         hwDecode = !hwDecode
         toast(if (hwDecode) "已切硬解" else "已切软解")
     }
-    LaunchedEffect(hwDecode) {
+    LaunchedEffect(hwDecode, engineX) {
         val r = hwResume ?: return@LaunchedEffect // 首次组帧 hwResume=null 自然跳过
         hwResume = null
         playAt(line, curEp, r.first)
-        player.playWhenReady = r.second
+        player.playing = r.second
+    }
+    // TVBox 对标 F2+C6：动作行「Exo/系统」胶囊——切换=重建 player（remember key）+原位续播，复用 hwResume 模板
+    fun toggleEngine() {
+        if (buffering) { toast("缓冲中，稍后再试"); return }
+        hwResume = player.position to player.playing
+        engineX = if (engineX == 1) 0 else 1
+        settings.playerEngine = engineX
+        toast(if (engineX == 1) "已切系统播放器（音轨/软硬解/码率项降级）" else "已切 Exo 播放器")
     }
     // 用户 2026-11-10 复刻 TVBox「音轨」钮：跨音频 group 展平轮切（media3 1.11 新 API：
     // currentTracks.groups + overrides[TrackGroup] + TrackSelectionOverride(TrackGroup, index)）
     fun toggleAudioTrack() {
-        val groups = player.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSupported }
+        // T-C1：音轨切换为 Exo 独有能力，系统档按钮已置灰；防御兜底=不操作
+        val ex = player.exo ?: return
+        val groups = ex.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSupported }
         val flat = groups.flatMap { gr -> (0 until gr.length).filter { gr.isTrackSupported(it) }.map { idx -> gr to idx } }
         if (flat.size <= 1) {
             toast(if (flat.isEmpty()) "暂无可用音轨" else "该流只有 1 条音轨，无轨可切")
             return
         }
-        val overrides = player.trackSelectionParameters.overrides
+        val overrides = ex.trackSelectionParameters.overrides
         var cur = -1
         flat.forEachIndexed { k, pair ->
             if (cur >= 0) return@forEachIndexed
@@ -493,7 +506,7 @@ fun DetailScreen(
             else if (pair.first.isTrackSelected(pair.second)) cur = k
         }
         val (gr, i) = flat[(cur + 1).mod(flat.size)]
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+        ex.trackSelectionParameters = ex.trackSelectionParameters.buildUpon()
             .setOverrideForType(androidx.media3.common.TrackSelectionOverride(gr.mediaTrackGroup, i))
             .build()
         val f = gr.getTrackFormat(i)
@@ -531,7 +544,7 @@ fun DetailScreen(
             }
             changing = false
             if (hits.isEmpty()) { toast("其它源未找到「$title」"); return@launch }
-            openWith(hits[0], ResumeCtx(line, curEp, player.currentPosition / 1000))
+            openWith(hits[0], ResumeCtx(line, curEp, player.position / 1000))
         }
     }
 
@@ -539,7 +552,7 @@ fun DetailScreen(
     // 崩溃修复（2026-11-04）：LineSpeed.measure 的 playingHealthy 回调跑在 IO 协程，而 ExoPlayer 仅主线程可读
     // （FATAL: Player is accessed on the wrong thread）。IO 侧改读主线程 1s 循环维护的快照。
     val healthySnap = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
-    fun playingHealthy() = player.playbackState == Player.STATE_READY && player.currentPosition > 0
+    fun playingHealthy() = player.state == SysCore.ST_READY && player.position > 0
     fun tagFor(i: Int): PerfCore.SpeedTag? {
         // C1 待播态不显任何速度读数（含历史缓存回灌）——未起播即无 Mbps（方案 T-B1 验收）
         if (noPreview) return null
@@ -587,7 +600,7 @@ fun DetailScreen(
             if (best < 0 || best == line) { maybeAllBadAutoSrc(finalSp); return@launch }
             if (best >= lines().size) return@launch
             val eIdx = epIdx.coerceAtMost(lines()[best].list.size - 1)
-            val ms = player.currentPosition
+            val ms = player.position
             line = best; curEp = eIdx; tried = setOf(best)
             toast("已切换到最快线路「${lines()[best].flag}」")
             playAt(best, eIdx, ms)
@@ -680,17 +693,17 @@ fun DetailScreen(
         }
     }
 
-    // ===== 播放器监听（注册一次；回调引用 delegate state，语义同旧播放页） =====
+    // ===== 播放器监听（T-C1 改走 PlayCtl.Cb 归一回调，Exo/系统两档同一链；注册一次，语义同旧） =====
     val listener = remember(player) {
-        object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
+        object : PlayCtl.Cb {
+            override fun onStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_BUFFERING -> buffering = true
-                    Player.STATE_READY -> buffering = false
-                    Player.STATE_ENDED -> {
+                    SysCore.ST_BUF -> buffering = true
+                    SysCore.ST_READY -> buffering = false
+                    SysCore.ST_END -> {
                         buffering = false
                         prog.clear(itemS.vodId, itemS.sourceKey)
-                        if (repeatOne) { player.seekTo(0); player.playWhenReady = true; return } // 单集循环：重播本集不连播
+                        if (repeatOne) { player.seekTo(0); player.playing = true; return } // 单集循环：重播本集不连播
                         val g = lines().getOrNull(line) ?: return
                         when {
                             curEp + 1 >= g.list.size -> toast("已播完全部剧集")
@@ -702,22 +715,22 @@ fun DetailScreen(
                 }
             }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
+            override fun onIsPlaying(isPlaying: Boolean) {
                 playing = isPlaying
-                if (!isPlaying && player.playbackState != Player.STATE_ENDED && player.currentPosition >= 5000) {
-                    writeProg(player.currentPosition / 1000, (player.duration / 1000).coerceAtLeast(0))
+                if (!isPlaying && player.state != SysCore.ST_END && player.position >= 5000) {
+                    writeProg(player.position / 1000, (player.duration / 1000).coerceAtLeast(0))
                 }
             }
 
-            override fun onPlayerError(error: PlaybackException) {
+            override fun onError(code: String, detail: String) {
                 buffering = false
-                if (!error.errorCodeName.startsWith("ERROR_CODE_IO") && !error.errorCodeName.contains("TIMEOUT")) {
+                if (!code.startsWith("ERROR_CODE_IO") && !code.contains("TIMEOUT")) {
                     com.tzk1986.libretvaz.data.ErrLog.add(
-                        "play", "点播 ${error.errorCodeName}: ${error.message} src=${player.currentMediaItem?.localConfiguration?.uri}"
+                        "play", "点播 $code: $detail src=${player.currentUri}"
                     )
                 }
                 if (!settings.autoLine) {
-                    errorHint = "播放失败（${error.errorCodeName}），请换线路或换源"
+                    errorHint = "播放失败（$code），请换线路或换源"
                     return
                 }
                 val cand = Playback.pickNextLine(lines(), line, curEp, tried, speeds)
@@ -771,8 +784,8 @@ fun DetailScreen(
         var last = 0L
         while (true) {
             delay(1000)
-            fsPos = player.currentPosition; fsDur = player.duration.coerceAtLeast(0L)
-            fsBuf = player.bufferedPosition.coerceAtLeast(0L)
+            fsPos = player.position; fsDur = player.duration.coerceAtLeast(0L)
+            fsBuf = player.buffered.coerceAtLeast(0L)
             // 用户 2026-11-10 实拍图：右下大时钟带秒 HH:MM:SS，并推算「影片结束」时刻=当前+剩余
             run {
                 val c = java.util.Calendar.getInstance()
@@ -781,10 +794,9 @@ fun DetailScreen(
                 e.timeInMillis += (fsDur - fsPos).coerceAtLeast(0L)
                 fsEndTxt = fmtClockHms(e.get(java.util.Calendar.HOUR_OF_DAY), e.get(java.util.Calendar.MINUTE), e.get(java.util.Calendar.SECOND))
             }
-            healthySnap.set(player.playbackState == Player.STATE_READY && player.currentPosition > 0)
+            healthySnap.set(player.state == SysCore.ST_READY && player.position > 0)
             // TVBox 参考样式顶栏数据：分辨率 + 实时码率（1s 与进度同频）
-            val ex = player as? androidx.media3.exoplayer.ExoPlayer
-            val vf = ex?.videoFormat
+            val vf = player.exo?.videoFormat
             if (vf != null) {
                 fsResTxt = "${vf.width} x ${vf.height}"
                 fsQualityTxt = qualityLabel(vf.height)
@@ -793,20 +805,27 @@ fun DetailScreen(
                     vf.bitrate > 0 -> "%.0f Kbps".format(vf.bitrate / 1e3)
                     else -> ""
                 }
+            } else if (player.exo == null) {
+                // T-C1 系统档：分辨率/清晰度读壳上 video size；码率无实时源=显「—」不伪造（方案 §10-R5）
+                if (player.videoW > 0) {
+                    fsResTxt = "${player.videoW} x ${player.videoH}"
+                    fsQualityTxt = qualityLabel(player.videoH)
+                }
+                fsBit = "—"
             }
-            if (!player.isPlaying || player.duration <= 0 || player.currentPosition < 5000) continue
+            if (!player.isPlaying || player.duration <= 0 || player.position < 5000) continue
             val n = System.currentTimeMillis()
-            if (n - last >= 5000) { last = n; writeProg(player.currentPosition / 1000, player.duration / 1000) }
+            if (n - last >= 5000) { last = n; writeProg(player.position / 1000, player.duration / 1000) }
         }
     }
 
     DisposableEffect(player) {
-        player.addListener(listener)
+        player.addCb(listener)
         onDispose {
-            if (player.currentPosition >= 5000 && player.duration > 0 && player.playbackState != Player.STATE_ENDED) {
-                writeProg(player.currentPosition / 1000, player.duration / 1000)
+            if (player.position >= 5000 && player.duration > 0 && player.state != SysCore.ST_END) {
+                writeProg(player.position / 1000, player.duration / 1000)
             }
-            player.removeListener(listener); player.release()
+            player.removeCb(listener); player.release()
         }
     }
     // 分层返回（用户 2026-11-06 两档定稿）：面板→关面板→控件亮则只隐控件→再按才退全屏→回墙
@@ -819,9 +838,10 @@ fun DetailScreen(
             else -> onBack()
         }
     }
-    // TVBox 对标 F1：倍速参数跟随 player——重建（硬软解切换）时 playbackParameters 丢，effect 兜底重放
+    // TVBox 对标 F1：倍速参数跟随 player——重建（硬软解/引擎切换）时速率丢，effect 兜底重放
+    // （T-C1 改走 ctl.setSpeed：系统档=setPlaybackParams+播放中自动暂停回起，见 SysCore.speedPlan）
     LaunchedEffect(player, speedX) {
-        player.playbackParameters = androidx.media3.common.PlaybackParameters(speedX)
+        player.setSpeed(speedX)
     }
     LaunchedEffect(fs, fsSeq, fsBar, speedPanel) {
         // 面板打开暂停自隐（方案 §T-A3-3：选档不误收控件）
@@ -911,7 +931,7 @@ fun DetailScreen(
                 val ok = slide.step(
                     System.currentTimeMillis(),
                     if (ev.key == Key.DirectionRight) 1 else -1,
-                    player.currentPosition, player.duration,
+                    player.position, player.duration,
                 )
                 if (ok) slideTick++ else toast("快进/快退暂不可用（流未就绪）")
                 true
@@ -1026,7 +1046,7 @@ fun DetailScreen(
             // onFocusChange 驱动 winFocused 画白描边；方向键按下即 blur+FocusManager.moveFocus 交还
             // Compose 走焦，OK/Enter=进全屏。
             var winFocused by remember { mutableStateOf(false) }
-            val pvRef = remember { mutableStateOf<androidx.media3.ui.PlayerView?>(null) }
+            val pvRef = remember { mutableStateOf<android.view.View?>(null) } // 焦点载体窗视图（PlayerView 或系统档 SurfaceView）
             val winFocusMgr = LocalFocusManager.current
             // 窗上按方向键：先交还 view 焦点，再隔帧让 Compose 按方向走焦（同帧内 moveFocus
             // 会因焦点仍在本 View 而被忽略——焦点回调同帧抢焦同款坑）
@@ -1078,13 +1098,40 @@ fun DetailScreen(
                                 .pointerInput(Unit) { detectTapGestures(onTap = { winActivate() }) }
                                 .then(if (winFocused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke) else Modifier),
                         ) {
+                            // TVBox 对标 F2+C6：系统档=SurfaceView letterbox 窗，焦点载体同款 view 级配置；
+                            // 缩放初始走 zoomPref（拉伸档系统壳无变形能力=近似 FIT 语义，由比例钮走 FIT↔ZOOM）
+                            if (engineX == 1) {
+                                SysPlayerView(
+                                    ctl = player as SysCtl,
+                                    fill = settings.zoomPref == 1,
+                                    modifier = Modifier.fillMaxSize().padding(2.dp),
+                                    configure = { sv ->
+                                        pvRef.value = sv
+                                        sv.isFocusable = true
+                                        sv.isFocusableInTouchMode = true
+                                        sv.onFocusChangeListener = View.OnFocusChangeListener { _, has -> winFocused = has }
+                                        sv.setOnKeyListener { _, keyCode, ev ->
+                                            if (ev.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                                            when (keyCode) {
+                                                android.view.KeyEvent.KEYCODE_ENTER,
+                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER -> { winActivate(); true }
+                                                android.view.KeyEvent.KEYCODE_DPAD_UP -> true
+                                                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> blurWin(line1Fr, FocusDirection.Down)
+                                                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                                                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> blurWin(actRowFr, FocusDirection.Right)
+                                                else -> false
+                                            }
+                                        }
+                                    },
+                                )
+                            } else
                             // TVBox 对标 C10（2026-11-10）：渲染方式档变化时 key 触发整视图重建，进页即生效
                             key(settings.textureView) {
                             AndroidView(
                                 factory = { ctx ->
                                     pvFor(ctx, settings.textureView).apply {
                                         pvRef.value = this
-                                        this.player = player
+                                        this.player = player.exo // Exo 分支恒有实例（engineX==0）
                                         useController = false
                                         // TVBox 对标 C4：预览窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
                                         resizeMode = zoomResizeMode(settings.zoomPref)
@@ -1111,8 +1158,8 @@ fun DetailScreen(
                                         }
                                     }
                                 },
-                                // 硬解/软解重建（用户 2026-11-10）：factory 只首建，player 换实例须靠 update 重绑
-                                update = { if (it.player !== player) it.player = player },
+                                // 硬解/软解/引擎重建：factory 只首建，player 换实例须靠 update 重绑
+                                update = { if (it.player !== player.exo) it.player = player.exo },
                                 modifier = Modifier.fillMaxSize().padding(2.dp),
                             )
                             }
@@ -1305,16 +1352,20 @@ fun DetailScreen(
             }
         } else {
             // ===== 全屏层＝web fsBar 信息 + TVBox 式面板（2026-11-03 定稿：进度行+动作行；不适用钮隐藏） =====
+            // TVBox 对标 F2+C6：系统档 SurfaceView 窗——尺寸随 zoomMode 钮重算（fill=满屏裁切），黑底 letterbox
+            if (engineX == 1) {
+                SysPlayerView(ctl = player as SysCtl, fill = zoomMode, modifier = Modifier.fillMaxSize())
+            } else
             // TVBox 对标 C10（2026-11-10）：渲染方式档变化时 key 触发整视图重建，进全屏即生效
             key(settings.textureView) {
             AndroidView(
                 factory = { ctx -> pvFor(ctx, settings.textureView).apply {
-                    this.player = player; useController = false
+                    this.player = player.exo; useController = false // Exo 分支恒有实例（engineX==0）
                     resizeMode = zoomResizeMode(settings.zoomPref) // TVBox 对标 C4：全屏窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
                     fsPv = this
                 } },
-                // 硬解/软解重建（用户 2026-11-10）：player 换实例须靠 update 重绑，否则全屏黑屏
-                update = { if (it.player !== player) it.player = player },
+                // 硬解/软解/引擎重建：player 换实例须靠 update 重绑，否则全屏黑屏
+                update = { if (it.player !== player.exo) it.player = player.exo },
                 modifier = Modifier.fillMaxSize(),
             )
             }
@@ -1474,10 +1525,12 @@ fun DetailScreen(
                         }
                         FsAct("比例", if (zoomMode) "画面满屏裁切" else "画面比例适配", active = zoomMode, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
                         FsAct("↺", "重播", res = R.drawable.tvb_v_replay, onFocused = rowFoc) { replayHere() }
-                        // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）
-                        FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", onFocused = rowFoc) { toggleHwDecode() }
-                        // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）
-                        FsAct("音轨", "切换音轨", res = R.drawable.tvb_v_audio, onFocused = rowFoc) { toggleAudioTrack() }
+                        // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）；T-C1 系统档无 codec 选择=置灰
+                        FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", off = engineX == 1, onFocused = rowFoc) { toggleHwDecode() }
+                        // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）；T-C1 系统档不支持音轨=置灰
+                        FsAct("音轨", "切换音轨", res = R.drawable.tvb_v_audio, off = engineX == 1, onFocused = rowFoc) { toggleAudioTrack() }
+                        // TVBox 对标 F2+C6：播放器引擎胶囊钮（Exo=全功能/系统=轻量壳，切换续位重播，见 toggleEngine）
+                        FsAct(if (engineX == 1) "系统" else "Exo", if (engineX == 1) "当前系统播放器，点击切回 Exo" else "当前 Exo 播放器，点击切系统播放器", onFocused = rowFoc) { toggleEngine() }
                     }
                 }
             }
@@ -1497,7 +1550,7 @@ fun DetailScreen(
                 Box(
                     modifier = Modifier.align(Alignment.Center).size(64.dp).clip(CircleShape)
                         .background(TvColors.Overlay)
-                        .clickable { player.playWhenReady = true; pokeFs() },
+                        .clickable { player.playing = true; pokeFs() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(painterResource(R.drawable.tvb_v_play), null, tint = TvColors.Red,
@@ -1620,7 +1673,7 @@ fun DetailScreen(
         onDismiss = { chDlg = false },
         onPick = { sum ->
             chDlg = false
-            openWith(sum, ResumeCtx(line, curEp, player.currentPosition / 1000))
+            openWith(sum, ResumeCtx(line, curEp, player.position / 1000))
         },
     )
 

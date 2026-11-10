@@ -69,6 +69,8 @@ fun SettingsScreen(
     var zoomPref by remember { mutableStateOf(store.zoomPref) }
     var winPreview by remember { mutableStateOf(store.winPreview) }
     var renderTex by remember { mutableStateOf(store.textureView) }
+    // TVBox 对标 F2+C6（2026-11-10）：播放器引擎两档（0=Exo 默认全链/1=系统 MediaPlayer 轻量壳）；仅点播，进详情页生效
+    var engine by remember { mutableIntStateOf(store.playerEngine) }
     var lineSpeed by remember { mutableStateOf(store.lineSpeed) }
     var autoBestLine by remember { mutableStateOf(store.autoBestLine) }
     var fuzzy by remember { mutableStateOf(store.fuzzy) }
@@ -153,6 +155,8 @@ fun SettingsScreen(
             item { SettingCard("画面缩放", ZOOM_LABELS[zoomPref]) { dlg = "zoom" } }
             // TVBox 对标 C10（2026-11-10）：点播渲染方式两档直切（SurfaceView 默认/TextureView 纹理合成）；仅点播预览窗+全屏，直播不动
             item { SettingCard("渲染方式", if (renderTex) "TextureView" else "SurfaceView") { renderTex = !renderTex; store.textureView = renderTex } }
+            // TVBox 对标 F2+C6（2026-11-10）：点播播放器引擎两档；详情页动作行亦有「Exo/系统」胶囊可当场切换
+            item { SettingCard("播放器", if (engine == 1) "系统播放器" else "ExoPlayer") { engine = if (engine == 1) 0 else 1; store.playerEngine = engine } }
             item { SettingCard("清理缓存", purgeMsg) {
                 // B11 扩磁盘：CMS 分片文件全删 + 视频 SimpleCache 释放重建，报回收体积（web cache_purge 等价）
                 // 用户 2026-11-05：整段 runCatching 兜底——原先未捕获异常直冲 rememberCoroutineScope
