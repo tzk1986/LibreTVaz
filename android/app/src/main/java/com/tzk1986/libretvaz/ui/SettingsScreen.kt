@@ -1,6 +1,9 @@
 package com.tzk1986.libretvaz.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -35,6 +38,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 设置页网格（web SETTING_DEFS/LAB_DEFS/TAB_META 等价）：每设置一卡「标签+值」，
@@ -77,6 +83,42 @@ fun SettingsScreen(
     var testing by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<StatusResult?>(null) }
     var proxyMsg by remember { mutableStateOf<String?>(null) }
+    // TVBox 对标 C13（2026-11-10）：配置 JSON 备份/还原（web exportData/importData 等价，SAF 文件选择器）
+    var backupMsg by remember { mutableStateOf("导出六个配置库") }
+    var restoreMsg by remember { mutableStateOf("选备份文件覆盖") }
+    var pendingRestore by remember { mutableStateOf<Pair<Map<String, Map<String, Backup.Entry>>, Int>?>(null) }
+    val backupLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    val snap = prefsSnapshot(context)
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(Backup.pack(snap).toByteArray(Charsets.UTF_8))
+                    } ?: error("无法打开目标文件")
+                    snap.values.sumOf { it.size }
+                }
+            }
+            r.fold(
+                { n -> backupMsg = "已备份 $n 项"; Toast.makeText(context, "备份完成（$n 项）", Toast.LENGTH_SHORT).show() },
+                { e -> ErrLog.add("backup", e); backupMsg = "备份失败：${e.message ?: e.javaClass.simpleName}" },
+            )
+        }
+    }
+    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                runCatching {
+                    val txt = context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: error("无法打开所选文件")
+                    Backup.unpack(txt) ?: error("不是有效的备份文件")
+                }
+            }
+            r.fold(
+                { info -> pendingRestore = info; dlg = "restore" }, // 先弹确认再落盘
+                { e -> ErrLog.add("backup", e); Toast.makeText(context, "还原失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_SHORT).show() },
+            )
+        }
+    }
     var tabOrder by remember { mutableStateOf(loadTabOrder(store)) }
     val urlFocus = remember { FocusRequester() }
     val proxyFocus = remember { FocusRequester() }
@@ -149,6 +191,14 @@ fun SettingsScreen(
             }/6 开）") { dlg = "lab" } }
             item { SettingCard("服务器地址", store.serverUrl.ifBlank { "未配置（直连模式）" }) { dlg = "server" } }
             item { SettingCard("网络代理", if (store.proxyUrl.isBlank()) "直连" else store.proxyUrl) { dlg = "proxy" } }
+            // TVBox 对标 C13：备份=CreateDocument 写 JSON；还原=OpenDocument 选文件→unpack 校验→确认对话框→整库覆盖+重启
+            item { SettingCard("立即备份", backupMsg) {
+                backupLauncher.launch("libretvaz-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.getDefault()).format(Date())}.json")
+            } }
+            item { SettingCard("还原数据", restoreMsg) {
+                // 文件管理器上报的 JSON MIME 各机不一，放开过滤，由 unpack 内容校验兜底
+                restoreLauncher.launch(arrayOf("*/*"))
+            } }
         }
     }
 
@@ -349,6 +399,59 @@ fun SettingsScreen(
             }
         },
     )
+
+    // C13 还原确认：展示备份概览，确认=逐库整库覆盖（仅覆盖备份中出现的库）→重启生效（各 Store 持内存快照）
+    if (dlg == "restore") pendingRestore?.let { (libs, skipped) ->
+        AlertDialog(
+            onDismissRequest = { dlg = ""; pendingRestore = null },
+            properties = dlgWide,
+            modifier = Modifier.width(tmDialogW()),
+            confirmButton = {
+                TmBtn(onClick = {
+                    scope.launch {
+                        val err = runCatching {
+                            withContext(Dispatchers.IO) {
+                                for ((lib, entries) in libs) {
+                                    val ed = context.getSharedPreferences(lib, android.content.Context.MODE_PRIVATE).edit().clear()
+                                    for ((k, e) in entries) when (e.t) {
+                                        's' -> ed.putString(k, e.v as String)
+                                        'b' -> ed.putBoolean(k, e.v as Boolean)
+                                        'i' -> ed.putInt(k, e.v as Int)
+                                        'l' -> ed.putLong(k, e.v as Long)
+                                        'f' -> ed.putFloat(k, e.v as Float)
+                                    }
+                                    ed.apply()
+                                }
+                            }
+                            val li = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                                ?: error("无法获取启动 Intent")
+                            li.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            context.startActivity(li)
+                            (context as? android.app.Activity)?.finish()
+                        }.exceptionOrNull()
+                        if (err != null && err !is kotlinx.coroutines.CancellationException) {
+                            ErrLog.add("backup", err)
+                            Toast.makeText(context, "还原失败：${err.message ?: err.javaClass.simpleName}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) { Text("覆盖还原") }
+            },
+            dismissButton = { TmBtn(onClick = { dlg = ""; pendingRestore = null }) { Text("取消") } },
+            title = { Text("还原数据备份", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("将用备份整库覆盖当前配置（仅覆盖备份中出现的库），还原后应用立即重启",
+                        style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "含 ${libs.size} 库 ${libs.values.sumOf { it.size }} 项" +
+                            if (skipped > 0) " · 跳过未知类型 $skipped 项" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                }
+            },
+        )
+    }
 }
 
 private fun onOff(b: Boolean): String = if (b) "开" else "关"
@@ -478,3 +581,9 @@ private fun saveTabsJson(order: List<Pair<String, Boolean>>): String {
     order.forEach { (nav, show) -> arr.put(JSONObject().put("nav", nav).put("show", if (show) 1 else 0)) }
     return arr.toString()
 }
+
+/** C13 备份对象=六个配置库；health/vocab/lspeed 属可再生的运行时缓存，不列入备份 */
+private val BACKUP_LIBS = listOf("libretvaz", "libretvaz_sources", "libretvaz_keep", "libretvaz_hist", "libretvaz_prog", "libretvaz_live")
+
+private fun prefsSnapshot(context: android.content.Context): Map<String, Map<String, Any?>> =
+    BACKUP_LIBS.associateWith { context.getSharedPreferences(it, android.content.Context.MODE_PRIVATE).all.mapValues { (_, v) -> v } }
