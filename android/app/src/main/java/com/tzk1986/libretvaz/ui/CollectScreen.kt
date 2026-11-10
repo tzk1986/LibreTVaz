@@ -2,6 +2,8 @@ package com.tzk1986.libretvaz.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -356,9 +358,13 @@ private fun YearSortBtn(order: YearOrder, onClick: () -> Unit) {
         YearOrder.ASC -> "▲" to "年份↑ 最早在前"
         YearOrder.NONE -> "≡" to "默认顺序"
     }
+    // 用户 2026-11-09 #133：遥控焦点=白描边+40%红底（全 app 统一）
+    var sortF by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Row(
-        modifier = Modifier.clip(RoundedCornerShape(8.dp))
-            .background(if (order == YearOrder.NONE) Color(0x33FFFFFF) else Color(0x66FFFFFF))
+        modifier = Modifier.onFocusEvent { sortF = it.isFocused }
+            .then(if (sortF) Modifier.border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (sortF) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else if (order == YearOrder.NONE) Color(0x33FFFFFF) else Color(0x66FFFFFF))
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -372,11 +378,15 @@ private fun YearSortBtn(order: YearOrder, onClick: () -> Unit) {
 /** 左源栏行：选中高亮胶囊，整行可点，遥控上下连续移焦（用户 2026-11-03 两栏布局） */
 @Composable
 private fun SourceColRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    // 用户 2026-11-09 #133：左源栏行同获焦点白框；选中底色撤 secondaryContainer 紫改红 40%（TVBox 统一）
+    var rowF by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .onFocusEvent { rowF = it.isFocused }
+            .then(if (rowF) Modifier.border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .background(if (rowF || selected) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 9.dp),
     ) {
@@ -385,7 +395,7 @@ private fun SourceColRow(label: String, selected: Boolean, onClick: () -> Unit) 
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer
+            color = if (selected) Color.White
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
         )
     }

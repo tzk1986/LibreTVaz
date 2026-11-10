@@ -52,7 +52,9 @@ import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.VodSummary
 import com.tzk1986.libretvaz.data.VodType
 import com.tzk1986.libretvaz.data.VodFilters
+import androidx.compose.foundation.border
 import com.tzk1986.libretvaz.data.CmsParser
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -737,16 +739,27 @@ fun BrowseScreen(
         if (aggMode) {
             // 聚合墙分类标签（web AGG_CATS：最新+固定四大类，不依赖单源分类树）
             val aggIdx = aggCat
+            // TVBox 复刻（用户 2026-11-09 需求 b）：进墙页焦点直达当前选中 tab 而非「最新」；
+            // 触屏模式 requestFocus 自然失败无副作用；仿 panelFocus 有限重试（LazyRow 进场+恢复焦点时序）
+            val tabFrs = remember { List(Agg.AGG_CATS.size + 1) { FocusRequester() } }
+            LaunchedEffect(Unit) {
+                for (i in 0 until 8) {
+                    delay(150)
+                    val ok = runCatching { tabFrs[(aggCat + 1).coerceAtLeast(0)].requestFocus() }.getOrDefault(false)
+                    if (ok) break
+                }
+            }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     // 切「最新」只收起面板；预设值保留（再点分类 tab 显上次选中，用户 2026-11-05）
                     WallChip(selected = aggCat == -1, onClick = {
                         if (aggCat != -1) { aggCat = -1; showFilters = false }
-                    }, label = "最新")
+                    }, label = "最新", fr = tabFrs[0])
                 }
                 items(Agg.AGG_CATS) { c ->
                     val i = Agg.AGG_CATS.indexOf(c)
                     WallChip(
+                        fr = tabFrs[i + 1],
                         selected = aggIdx == i,
                         onClick = {
                             // 用户 2026-11-05 底部面板：首点=只切类不开面板；再点当前 tab=弹面板+焦点入面板，BACK 收起；切类不清筛选值
@@ -999,12 +1012,23 @@ internal fun CompactChips(content: @Composable () -> Unit) {
 /** 镂空透明海报墙 chip（用户 2026-11-04 参考图：吸顶行不留任何底带，海报墙全透；
  * 未选中=透明+描边镂空，选中=primaryContainer 实心；去默认 leading 勾位贴参考图） */
 @Composable
-internal fun WallChip(selected: Boolean, onClick: () -> Unit, label: String, labelColor: Color = Color.Unspecified) {
+internal fun WallChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    labelColor: Color = Color.Unspecified,
+    fr: FocusRequester? = null,
+) {
     // 未选中字加淡投影（用户 2026-11-04：镂空后文字压在亮海报上易失读，阴影兜底）
     val base = LocalTextStyle.current
+    // TVBox 复刻（用户 2026-11-09）：遥控焦点态=2dp 白描边+40% 白底（全 app 统一，同 TmChip）；
+    // fr=墙页 tab 焦点恢复位（进墙页直达当前选中 tab）
+    var focused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     FilterChip(
         selected = selected,
         onClick = onClick,
+        modifier = Modifier.onFocusEvent { focused = it.isFocused }
+            .then(if (fr != null) Modifier.focusRequester(fr) else Modifier),
         leadingIcon = {},
         label = {
             Text(
@@ -1017,15 +1041,16 @@ internal fun WallChip(selected: Boolean, onClick: () -> Unit, label: String, lab
                 ),
             )
         },
+        // M3 1.4.0 无 focusedContainerColor：焦点亮底折进 containerColor（TVBox focused=40% 白底）；
+        // 选中底/描边撤 M3 primaryContainer 紫，统一 TvColors 红（用户 2026-11-09 遗留清理）
         colors = FilterChipDefaults.filterChipColors(
-            containerColor = Color.Transparent,
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            containerColor = if (focused) Color(0x66FFFFFF) else Color.Transparent,
+            selectedContainerColor = TvColors.Red40,
             disabledContainerColor = Color.Transparent,
         ),
-        border = BorderStroke(
+        border = if (focused) BorderStroke(2.dp, Color.White) else BorderStroke(
             1.dp,
-            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
+            if (selected) TvColors.Red else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
         ),
     )
 }
@@ -1116,7 +1141,9 @@ internal fun NetClockPair() {
 
 @Composable
 internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null, codeBadge: Boolean = false) {
-    Column(modifier = Modifier.clickable(onClick = onClick)) {
+    // 用户 2026-11-09 #133：全 app 墙卡遥控焦点=白描边+40%红罩层（TVBox 同调，clickable 节点天然可焦）
+    var cardFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    Column(modifier = Modifier.onFocusEvent { cardFocused = it.isFocused }.clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1238,6 +1265,14 @@ internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String
                         modifier = Modifier.weight(1f, fill = false),
                     )
                 }
+            }
+            if (cardFocused) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(TvColors.Red40)
+                        .border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)),
+                )
             }
         }
     }

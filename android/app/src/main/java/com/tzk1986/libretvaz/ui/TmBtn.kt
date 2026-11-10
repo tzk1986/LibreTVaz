@@ -1,32 +1,40 @@
 package com.tzk1986.libretvaz.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.tzk1986.libretvaz.ui.theme.TvBtnKind
+import com.tzk1986.libretvaz.ui.theme.TvColors
+import com.tzk1986.libretvaz.ui.theme.tvBtnContainer
 
 /**
  * 全 app 统一动作按钮（用户 2026-11-05：按详情页样式走查统一）——
- * 黑底+白字+圆角长方形 8dp+紧凑内边距不浪费空间；selected=亮底深字（在播/当前页等）。
- * 用户 2026-11-05 追加：按钮大小与文字全 app 统一调小——内容默认 labelMedium 字号
- * （ProvideTextStyle 兜底，调用方显式 style 如翻页 tab 的 labelSmall 仍可覆盖）；
- * 底色由半透明灰改黑（用户 2026-11-05：「按钮底色统一改为黑色，不要用灰色」）；
- * 再调为半透黑 0x99（用户 2026-11-05 参考图核对：TVBox 按钮=半透明底+白字，显黑因背后画面是深色）。
- * 固定深色主题（theme/Theme.kt），白字对比前提成立。
+ * 焦点=40%红底+白描边，常态=深灰底白字（TVBox button_detail_all selector 实锤）。
+ * 用户 2026-11-09 装机像素实锤：M3 Button 的 48dp 最小触控盒把外层描边撑到底色外一圈
+ * （环 124px vs 底 73px）——改 Box 自绘：底/描边/点击同节点，描边严丝合缝贴按钮边界；
+ * clickable 节点天然可焦（BrowseScreen tabFrs/详情窗先例），遥控走焦不受影响。
  */
-/** 全 app 输入框统一高度＝TmBtn 按钮高度（用户 2026-11-05：所有输入框与按钮同高，
- *  M3 OutlinedTextField 默认 56dp 比按钮(48dp 触控高)一截，各处加 height(TmFieldHeight) 对齐） */
+/** 全 app 输入框统一高度＝TmBtn 按钮高度（用户 2026-11-05：所有输入框与按钮同高） */
 val TmFieldHeight = 48.dp
 
-/** 全 app 弹窗统一宽＝屏宽×0.7（用户 2026-11-05：所有弹出框照快搜同款，横屏按屏宽 70% 居中；
- *  必须配 DialogProperties(usePlatformDefaultWidth=false)，否则平台把宽钳到 ~400dp；
- *  dialog 窗口 gr=CENTER＋系统 insets 左右对称＝物理屏居中） */
+/** 全 app 弹窗统一宽＝屏宽×0.7（用户 2026-11-05；须配 usePlatformDefaultWidth=false） */
 @Composable
 fun tmDialogW(): androidx.compose.ui.unit.Dp =
     androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 0.7f
@@ -42,19 +50,26 @@ fun TmBtn(
     contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
     content: @Composable () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        contentPadding = contentPadding,
-        shape = RoundedCornerShape(8.dp),
-        // 用户 2026-11-05：全 app 按钮统一走播放详情页按钮样式（PillButton 同款）——
-        // 普通白20%、选中白40%、恒白字、无描边（原半透黑底+选中亮底深字已废）
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF),
-            contentColor = Color.White,
-            disabledContainerColor = Color(0x1AFFFFFF),
-            disabledContentColor = Color(0x8AFFFFFF),
-        ),
-    ) { ProvideTextStyle(MaterialTheme.typography.labelMedium) { content() } }
+    var focused by remember { mutableStateOf(false) }
+    val btnSrc = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by btnSrc.collectIsPressedAsState()
+    val shape = RoundedCornerShape(TvColors.RadiusDetail)
+    val container = if (!enabled) Color(0x1AFFFFFF)
+    else if (selected) TvColors.Red40 else tvBtnContainer(focused, pressed, TvBtnKind.Detail)
+    Box(
+        modifier = modifier
+            .onFocusEvent { focused = it.isFocused }
+            .background(container, shape)
+            .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, shape) else Modifier)
+            .clickable(interactionSource = btnSrc, enabled = enabled, onClick = onClick)
+            .padding(contentPadding),
+        contentAlignment = Alignment.Center,
+    ) {
+        ProvideTextStyle(MaterialTheme.typography.labelMedium) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides
+                    if (enabled) Color.White else Color(0x8AFFFFFF),
+            ) { content() }
+        }
+    }
 }

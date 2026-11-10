@@ -2,8 +2,13 @@ package com.tzk1986.libretvaz.ui
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -290,8 +295,15 @@ private fun ChannelRow(
     onClick: () -> Unit,
     onEpg: (() -> Unit)? = null,
 ) {
+    // 用户 2026-11-09 #133：整行遥控焦点=白描边+40%红底（TVBox 统一）
+    var rowF by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth()
+            .onFocusEvent { rowF = it.isFocused }
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .then(if (rowF) Modifier.border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, androidx.compose.foundation.shape.RoundedCornerShape(8.dp)) else Modifier)
+            .background(if (rowF) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

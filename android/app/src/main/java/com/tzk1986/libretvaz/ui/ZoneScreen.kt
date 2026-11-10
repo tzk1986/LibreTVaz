@@ -13,7 +13,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.border
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -85,14 +87,17 @@ fun ZoneScreen(
     var showSub by remember { mutableStateOf(false) } // 二级筛选行折叠（对齐首页 showFilters：再点当前一级=展开/收起，选中筛选即收起）
     var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
     var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
-    var wall by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
+    // 用户 2026-11-09 #130：返回重建首帧直接种回 keep 墙（同 browseKeep 走查 #11——若等 effect 播种，
+    // 空墙先量一次会把 gridState 起始滚动钳回 0）；key=selUrl（聚合=空串/单源=url）
+    var wall by remember { mutableStateOf(WallMem.zoneKeep.value?.takeIf { it.first == selUrl && it.second.isNotEmpty() }?.second ?: emptyList<VodSummary>()) }
     // 方案A 同构（用户 2026-11-06 资源口）：筛选态后台定向增补的条目池（zone:标签 分片并入，随墙重建清空）
     var zextra by remember { mutableStateOf<List<VodSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var wallSeq by remember { mutableIntStateOf(0) }
     var nonce by remember { mutableIntStateOf(0) } // 🔄刷新钮轮次 token：清本池分片后重跑墙
     var speedSeq by remember { mutableIntStateOf(0) }
-    var aggWin by remember { mutableIntStateOf(240) } // S4 窗口渲染：同点播墙，哨兵先本地展开零请求
+    // #130 同 BrowseScreen 终审 #2：返回重建按 keep 墙体量播种，防已展开的长墙被 240 截断回缩（滚动恢复须视图片段仍在）
+    var aggWin by remember { mutableIntStateOf(maxOf(240, WallMem.zoneKeep.value?.takeIf { it.first == selUrl }?.second?.size ?: 0)) }
     val tags = remember { mutableStateMapOf<String, PerfCore.SpeedTag>() } // 「源|id」→角标
     var poolCache by remember { mutableStateOf(store.vodSources().filter { it.isAdult }) }
     // B10 无限下拉（与点播聚合墙同引擎）：分片秒开+续轮增量+哨兵回焦连按
@@ -101,7 +106,19 @@ fun ZoneScreen(
     var aggLoadingMore by remember { mutableStateOf(false) }
     var sentinelFocused by remember { mutableStateOf(false) }
     val sentinelFr = remember { FocusRequester() }
-    val gridState = rememberLazyGridState()
+    // #130 滚动还原+回存（同 browseScroll 形制）：首帧用记忆 (index,offset)；
+    // 换 key 后首发=同一 gridState 旧墙滚动位瞬态值，跳过防污染新 key 恢复点（minor#6 同构）
+    val zScr0 = remember { WallMem.zoneScroll.value?.takeIf { it.first == selUrl }?.let { it.second to it.third } ?: (0 to 0) }
+    val gridState = rememberLazyGridState(zScr0.first, zScr0.second)
+    LaunchedEffect(selUrl) {
+        var first = true
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .collect {
+                if (first) { first = false; return@collect }
+                WallMem.zoneScroll.value = Triple(selUrl, it.first, it.second)
+                delay(250) // 简易节流：延迟期间滚动中间态被 conflated 丢弃
+            }
+    }
 
     fun aggTtl() = CacheTiers.TIERS[settings.cacheTier].agg
 
@@ -188,13 +205,16 @@ fun ZoneScreen(
         val my = wallSeq + 1
         wallSeq = my
         tags.clear()
+        // #130：key 命中=返回重建（wall 已在 remember 初值播种），恢复原墙不清空——
+        // 🔄清槽/换源/池变更自然走干净首屏；drawn/firstDrawn 播种后本轮 mergeFrom 走增量分支只补新片名
+        val keepHit = WallMem.zoneKeep.value?.takeIf { it.first == selUrl && it.second.isNotEmpty() }?.second
         val pool = zonePoolNow()
         val ttl = aggTtl()
-        wall = emptyList(); zextra = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
+        wall = keepHit ?: emptyList(); zextra = emptyList(); aggPage = 1; aggMore = false; aggLoadingMore = false
         if (pool.isEmpty()) { loading = false; return@LaunchedEffect }
-        loading = true
-        val drawn = HashSet<String>()
-        var firstDrawn = false
+        loading = keepHit == null
+        val drawn = if (keepHit != null) HashSet(keepHit.map { Agg.nameKey(it) }) else HashSet()
+        var firstDrawn = keepHit != null
         fun mergeFrom(): Boolean {
             val merged = Agg.mergeShards(pool, null)
             if (merged.isEmpty()) return false
@@ -207,6 +227,7 @@ fun ZoneScreen(
             // 专区墙片名+提取番号入专区词库（用户 2026-11-04 番号搜索：编号也进简拼提示候选）；终审 #4：mergeFrom 在 Main，派生移后台
             scope.launch(Dispatchers.Default) { VocabPools.get(context).addWords(merged.map { it.name } + merged.mapNotNull { CmsParser.codeRaw(it.name) }, true) }
             aggMore = true
+            WallMem.zoneKeep.value = selUrl to wall // #130：wall 每次变更后同步回存
             return true
         }
         mergeFrom()
@@ -344,6 +365,7 @@ fun ZoneScreen(
                         if (added.isNotEmpty()) {
                             wall = wall + added
                             launch(Dispatchers.Default) { VocabPools.get(context).addWords(added.map { it.name } + added.mapNotNull { CmsParser.codeRaw(it.name) }, true) } // 终审 #4：词库派生移出 Main
+                            WallMem.zoneKeep.value = selUrl to wall // #130：续轮追加同样回存
                         }
                     }
                     if (done.incrementAndGet() == pool.size) {
@@ -376,6 +398,7 @@ fun ZoneScreen(
     /** 🔄 刷新钮（web zoneRefresh 等价）：只清本池源的聚合分片，当前墙立即重拉 */
     fun refreshZone() {
         Agg.purgePoolShards(zonePoolNow().map { it.url })
+        WallMem.zoneKeep.value = null; WallMem.zoneScroll.value = null // #130：刷新=唯一整体重置口，连墙记忆+滚动一并清（nonce 不入 key，否则清不了旧墙）
         Toast.makeText(context, "已清资源口缓存，重新拉取中…", Toast.LENGTH_SHORT).show()
         nonce++
     }
@@ -424,6 +447,16 @@ fun ZoneScreen(
             }
             return@Column
         }
+        // TVBox 复刻（用户 2026-11-09 需求 b）：进资源口焦点直达当前选中一级 tab 而非「最新」；
+        // 触屏模式 requestFocus 自然失败无副作用；有限重试同 Browse panelFocus 模式
+        val catFrs = remember { List(Zone.ZONE_CATS.size + 1) { FocusRequester() } }
+        LaunchedEffect(Unit) {
+            for (i in 0 until 8) {
+                delay(150)
+                val ok = runCatching { catFrs[(cat + 1).coerceAtLeast(0)].requestFocus() }.getOrDefault(false)
+                if (ok) break
+            }
+        }
         LazyVerticalGrid(
             state = gridState,
             columns = GridCells.Adaptive(minSize = 120.dp),
@@ -448,6 +481,7 @@ fun ZoneScreen(
                                     selected = cat == -1,
                                     onClick = { if (cat == -1) showSub = !showSub else { cat = -1; showSub = false } },
                                     label = "最新",
+                                    fr = catFrs[0],
                                 )
                             }
                             itemsIndexed(Zone.ZONE_CATS) { i, c ->
@@ -455,6 +489,7 @@ fun ZoneScreen(
                                     selected = cat == i,
                                     onClick = { if (cat == i) showSub = !showSub else { cat = i; showSub = false } },
                                     label = c.key,
+                                    fr = catFrs[i + 1],
                                 )
                             }
                         }
@@ -561,7 +596,9 @@ private fun SrcRow(selected: Boolean, name: String, badge: String?, onClick: () 
 
 @Composable
 private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () -> Unit, onSrc: () -> Unit) {
-    Column(modifier = Modifier.clickable(onClick = onClick)) {
+    // 用户 2026-11-09 #133：与 PosterCard 同款遥控焦点=白描边+40%红罩层
+    var zpFocused by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.onFocusEvent { zpFocused = it.isFocused }.clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -632,6 +669,14 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
                     .background(Color.Black.copy(alpha = 0.55f))
                     .padding(horizontal = 5.dp, vertical = 2.dp),
             )
+            if (zpFocused) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(com.tzk1986.libretvaz.ui.theme.TvColors.Red40)
+                        .border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)),
+                )
+            }
         }
         Text(
             text = item.name,

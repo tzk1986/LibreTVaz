@@ -18,6 +18,9 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -34,13 +37,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -50,16 +58,24 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import com.tzk1986.libretvaz.R
 import com.tzk1986.libretvaz.data.*
 import com.tzk1986.libretvaz.data.perf.LineSpeed
 import com.tzk1986.libretvaz.data.perf.PerfCore
+import com.tzk1986.libretvaz.ui.theme.TvBtnKind
+import com.tzk1986.libretvaz.ui.theme.TvColors
+import com.tzk1986.libretvaz.ui.theme.tvBtnContainer
+import com.tzk1986.libretvaz.ui.theme.tvEpTextColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -91,36 +107,40 @@ private fun PillButton(
     selected: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        // 用户 2026-11-06：requiredHeight(32) 撤 M3 48dp 最小触控盒——像素实测它比 32dp 视觉 pill
-        // 上下各多 21px 空隙，致行距(54px)远大于列距(16px)；钉死后上下/左右间距同参数即视觉一致
-        modifier = modifier.requiredHeight(32.dp),
-        leadingIcon = {},
-        // 用户 2026-11-06：选中态（线路/分页tab/集数三类）在文字下方加红色下划线醒目提醒，
-        // 长度=文字的 8 成（比文字略短）；drawBehind 零布局增高，不破行内等高规范
-        label = {
-            Column(
-                // 用户 2026-11-06：红线不占布局（文字保持按钮内垂直居中），定位置=距文字底缘 5px
-                modifier = if (selected) Modifier.drawBehind {
-                    val y = size.height + 3.2.dp.toPx()
-                    drawLine(Color(0xFFE53935), Offset(size.width * 0.1f, y), Offset(size.width * 0.9f, y), 3.dp.toPx(), cap = StrokeCap.Round)
-                } else Modifier,
-            ) { ProvideTextStyle(MaterialTheme.typography.labelMedium) { content() } }
-        },
-        colors = FilterChipDefaults.filterChipColors(
-            // 用户 2026-11-05：选中红框已撤——在播集改「略亮白底」区分（普通白20%，选中白40%，均无框）
-            containerColor = if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF),
-            labelColor = Color.White,
-            disabledContainerColor = Color(0x1AFFFFFF),
-            disabledLabelColor = Color(0x8AFFFFFF),
-        ),
-        border = androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent),
-    )
+    // TVBox 复刻：焦点=白描边+40%红底、按下=同40%红、常态深灰；选中不改底色（指示=文字下红划线）。
+    // 用户 2026-11-09 装机像素实证 FilterChip 底/描边分层（描边在 48dp 触控盒、底色内容尺寸）
+    // 描边必比按钮大一圈——与 TmBtn 同方案改 Box 同节点自绘；requiredHeight(32) 保行内等高规范
+    var focused by remember { mutableStateOf(false) }
+    val pillSrc = remember { MutableInteractionSource() }
+    val pillPressed by pillSrc.collectIsPressedAsState()
+    val pillShape = RoundedCornerShape(50)
+    Box(
+        modifier = modifier
+            .requiredHeight(32.dp)
+            .onFocusEvent { focused = it.isFocused }
+            .background(tvBtnContainer(focused, pillPressed, TvBtnKind.Detail), pillShape)
+            .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, pillShape) else Modifier)
+            .clickable(interactionSource = pillSrc, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        // 选中红下划线（用户 2026-11-06）：不占布局、置文字底缘 5px
+        Column(
+            modifier = if (selected) Modifier.drawBehind {
+                val y = size.height + 3.2.dp.toPx()
+                drawLine(TvColors.Red, Offset(size.width * 0.1f, y), Offset(size.width * 0.9f, y), 3.dp.toPx(), cap = StrokeCap.Round)
+            } else Modifier,
+        ) {
+            ProvideTextStyle(MaterialTheme.typography.labelMedium) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides Color.White,
+                ) { content() }
+            }
+        }
+    }
 }
 
-/** 全屏动作行图标钮（TVBox 复刻）：off=半透明禁用，active=绿色高亮（循环/倍速/选集开启态）；
+/** 全屏动作行图标钮（TVBox 复刻）：off=半透明禁用，active=主题红高亮（循环/倍速/选集开启态）；
  *  图标统一追加 U+FE0E 强制文字字形，防止 ⏸/ 等被系统 emoji 字体渲染成橙色色块（用户 2026-11-04 反馈配色不一致） */
 @Composable
 private fun FsAct(
@@ -129,24 +149,76 @@ private fun FsAct(
     off: Boolean = false,
     active: Boolean = false,
     tint: Color? = null,
+    res: Int = 0,
+    modifier: Modifier = Modifier,
+    onFocused: (Boolean) -> Unit = {},
     onClick: () -> Unit,
 ) {
+    // TVBox 复刻（用户 2026-11-09）：焦点态=白描边+40%红底；按下=同40%红无框（button_dialog_vod selector 双分支）
+    var focused by remember { mutableStateOf(false) }
+    val actSrc = remember { MutableInteractionSource() }
+    val actPressed by actSrc.collectIsPressedAsState()
     TextButton(
         onClick = onClick,
         enabled = !off,
+        interactionSource = actSrc,
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-        modifier = Modifier.semantics { contentDescription = desc },
+        // M3 1.4.0 无 focusedContainerColor：焦点亮底折进 containerColor
+        colors = ButtonDefaults.textButtonColors(
+            // TVBox 复刻：焦点/按下→40%红底，未激活全屏透明（button_dialog_vod）
+            containerColor = tvBtnContainer(focused, actPressed, TvBtnKind.Fs),
+        ),
+        modifier = modifier.semantics { contentDescription = desc }
+            .onFocusEvent { focused = it.isFocused; onFocused(it.isFocused) }
+            .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(TvColors.RadiusFs)) else Modifier),
     ) {
-        Text(
-            icon + "︎",
-            fontSize = 22.sp,
-            color = when {
-                off -> Color(0x66FFFFFF)
-                tint != null -> tint
-                active -> Color(0xFF8BC34A)
-                else -> Color.White
-            },
-        )
+        // 用户 2026-11-09 #134：res≠0 用 TVBox 解码矢量图标（vs_30 大小），文字钮保留给跳过/倍速等文本胶囊
+        val fg = when {
+            off -> Color(0x66FFFFFF)
+            tint != null -> tint
+            active -> TvColors.Red
+            else -> Color.White
+        }
+        if (res != 0) {
+            Icon(
+                painter = androidx.compose.ui.res.painterResource(res),
+                contentDescription = desc,
+                tint = fg,
+                modifier = Modifier.size(tvu(34)),
+            )
+        } else {
+            Text(icon + "︎", fontSize = 22.sp, color = fg)
+        }
+    }
+}
+
+
+/** 选集网格 cell（TVBox item_series 精准复刻）：常态 SeriesBg 45% 深灰、圆角 vs_10、高 vs_50、ts_20；
+ *  焦点/按下→40%红（focused 另白描边）；当前集=主题红字（EpisodeAdapter selected），无下划线
+ *  （红下划线仅源/分组 flag chip） */
+@Composable
+private fun EpCell(
+    current: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    // 用户 2026-11-09：改 Box 同节点自绘（Button 48dp 触控盒致描边比底色大一圈，同 TmBtn）
+    var focused by remember { mutableStateOf(false) }
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val shape = RoundedCornerShape(tvu(10))
+    Box(
+        modifier = modifier
+            .height(tvu(50))
+            .onFocusEvent { focused = it.isFocused }
+            .background(tvBtnContainer(focused, pressed, TvBtnKind.Series), shape)
+            .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, shape) else Modifier)
+            .clickable(interactionSource = src, onClick = onClick)
+            .padding(horizontal = tvu(10)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = tvSp(20), color = tvEpTextColor(current))
     }
 }
 
@@ -201,7 +273,6 @@ fun DetailScreen(
     // TVBox 式动作行状态（2026-11-03 定稿清单：拖拽进度/重播/单集循环/倍速/画面比例/重置）
     var fsPos by remember { mutableLongStateOf(0L) }
     var fsDur by remember { mutableLongStateOf(0L) }
-    var speedX by remember { mutableFloatStateOf(1f) }
     var zoomMode by remember { mutableStateOf(false) }
     var repeatOne by remember { mutableStateOf(false) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
@@ -211,9 +282,29 @@ fun DetailScreen(
     var fsFocusEp by remember { mutableIntStateOf(0) }
     val fsGrid = rememberLazyGridState()
     // 用户 2026-11-04：非全屏播放窗可聚焦，遥控 OK=进全屏；选集点选后焦点自动回窗口
-    val videoFsReq = remember { FocusRequester() }
+    // （2026-11-09 probe6：窗焦点载体改 view 级 PlayerView，见 !fs 块内 Ruling）
+    // TVBox showBottom 落焦语义（用户 2026-11-09 需求 d）：呼出控件=焦点进动作行首个钮；
+    // 焦点若锚在满屏根节点，←→ 焦点搜索无右邻=按钮行无法移焦
+    val fsActFr = remember { FocusRequester() }
+    // OK 双消费修复的补丁（用户 2026-11-10 走查实证两轮）：触屏 poke 呼出时钮焦点必空（Compose touch mode
+    // 拒焦，requestFocus 6连false 实锤；且 adb 不翻 View.isInTouchMode，用它判据在模拟器恒放行落空）。
+    // 判据=钮行引用计数：钮含焦+1、失焦−1，>0 才放行交钮；计数=0 时 OK 在 fsKeyMod 单次切播放。
+    val fsRowFocusN = remember { mutableIntStateOf(0) }
     var fsResTxt by remember { mutableStateOf("") }
+    var fsQualityTxt by remember { mutableStateOf("") }
     var fsBit by remember { mutableStateOf("") }
+    var fsBuf by remember { mutableLongStateOf(0L) }          // TVBox 次缓冲进度（bufferedPosition）
+    var fsClock by remember { mutableStateOf("") }            // 底栏右上时钟 HH:MM
+    var avZone by remember { mutableStateOf(EdgeZone.Volume) }   // 竖拖半区（左亮度/右音量）
+    var avLevel by remember { mutableFloatStateOf(0f) }
+    var avVisible by remember { mutableStateOf(false) }
+    var avJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var locked by remember { mutableStateOf(false) }   // TVBox 锁屏：锁定后屏蔽全部触屏/遥控交互，仅解锁钮与返回可用
+    // 用户 2026-11-10 复刻 TVBox 按钮行「硬/软」：codec 选择定死在 renderer 创建期（1.11.1 javap 实锤
+    // MediaCodecSelector.DEFAULT/PREFER_SOFTWARE），切换=重建播放器（remember key）+ 原位续播
+    var hwDecode by remember { mutableStateOf(true) }
+    var hwResume by remember { mutableStateOf<Pair<Long, Boolean>?>(null) } // (位置ms, 切换前是否在播)，LaunchedEffect(hwDecode) 消费
+    var fsEndTxt by remember { mutableStateOf("") }   // 右下时钟区「预计结束」HH:MM:SS（1s 循环随 fsClock 更新）
     var fsDragPos by remember { mutableLongStateOf(-1L) }
     val focusReq = remember { FocusRequester() }
     val insetCtrl = remember {
@@ -222,7 +313,7 @@ fun DetailScreen(
         }
     }
 
-    val player = remember { buildPlayer(context) }
+    val player = remember(hwDecode) { buildPlayer(context, hwDecode = hwDecode) }
     fun lines(): List<PlayLine> = detail?.lines ?: emptyList()
     fun toast(s: String) = Toast.makeText(context, s, Toast.LENGTH_SHORT).show()
     fun linkOf(l: Int, e: Int): String? = lines().getOrNull(l)?.list?.getOrNull(e)?.link
@@ -257,15 +348,33 @@ fun DetailScreen(
         insetCtrl?.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
     }
     fun pokeFs() { fsBar = true; fsSeq++ }
-    // 用户 2026-11-06 走查 #13：快进/快退提示改 FS 底栏内覆盖层文本（1.5s 自隐；系统 Toast 会压浮层且遥控连按堆积）
-    var seekHint by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(seekHint) { if (seekHint != null) { delay(1500); seekHint = null } }
+    // OK 双发互消止损（用户 2026-11-10 走查实证）：初始焦点自动落播放钮描边，触屏 poke 后按 OK，
+    // 放行路径交钮 onClick 与 fsKeyMod 兜底各 toggle 一次=净零（gg1/gg3 实锤 playing→playing）。
+    // 统一走此去抖 toggle：400ms 内重复请求只生效一次，各入口（按键/单击/大钮/右图标）共用。
+    var lastToggleAt by remember { mutableLongStateOf(0L) }
+    fun togglePlayFs() {
+        val now = System.currentTimeMillis()
+        if (now - lastToggleAt < 400) return
+        lastToggleAt = now
+        player.playWhenReady = !player.playWhenReady
+    }
+    // TVBox 复刻（用户 2026-11-09）：全屏 ←→=长按连续快进预览（松手才真 seek）+ 居中时间胶囊；
+    // slideTick 心跳：每步进 ++，胶囊显 1s 尾巴后自隐（updateSeekUI 消息 1000/1001 等价）
+    val slide = remember { SlideSeek() }
+    var slideTick by remember { mutableIntStateOf(0) }
+    var slideShow by remember { mutableStateOf(false) }
+    var slideFinal by remember { mutableLongStateOf(0L) }  // 松手提交后胶囊仍显示的目标位
+    var slideDirFinal by remember { mutableIntStateOf(1) }
+    LaunchedEffect(slideTick) {
+        if (slideTick > 0) { slideShow = true; delay(1000); slideShow = false }
+    }
+    // 窗口模式 ±15s 步进（全屏改走 SlideSeek）：toast 反馈
     fun seekBy(deltaSec: Long) {
         val dur = player.duration
         if (dur <= 0) { toast("快进/快退暂不可用（流未就绪）"); return }
         val pos = (player.currentPosition / 1000 + deltaSec).coerceIn(0, (dur / 1000) - 1)
         player.seekTo(pos * 1000)
-        seekHint = (if (deltaSec < 0) "« 15s " else "15s » ") + fmtHms(pos) + " / " + fmtHms(dur / 1000)
+        toast((if (deltaSec < 0) "« 15s " else "15s » ") + fmtHms(pos) + " / " + fmtHms(dur / 1000))
     }
 
     // ===== 进度持久化（web fongmi_prog：5s 节流/pause 即写/ended 清/孤儿随写清理） =====
@@ -276,25 +385,65 @@ fun DetailScreen(
         prog.save(itemS.vodId, itemS.sourceKey, p, ProgStore.aliveKeys(context))
     }
 
-    // ===== TVBox 式动作行（定稿清单；解析/引擎/解码/轨道/弹幕/版本/章节/OP-ED 本场景不适用→隐藏） =====
+    // ===== TVBox 式动作行（用户 2026-11-10 实拍图裁决：仅 7 钮；倍速/跳过/重置/循环/选集/退出撤 UI，逻辑各归其位） =====
     fun replayHere() { errorHint = null; playAt(line, curEp); toast("重新播放本集") }
-    fun setSpeed(v: Float) { speedX = v; player.setPlaybackSpeed(v) }
-    fun cycleSpeed() {
-        val steps = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f)
-        val next = steps[(steps.indexOf(speedX) + 1).let { if (it < 0) 0 else it } % steps.size]
-        setSpeed(next); toast("倍速 ×${next}")
-    }
     fun toggleScale() {
         zoomMode = !zoomMode
         fsPv?.resizeMode = if (zoomMode) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         toast(if (zoomMode) "画面：满屏裁切" else "画面：比例适配")
     }
-    fun resetView() {
-        setSpeed(1f)
-        zoomMode = false
-        fsPv?.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-        toast("已重置倍速与画面")
+    // 双击三分区左右=±15s：seekTo 后借 slideFinal/slideTick 复用居中时间胶囊反馈（同长按快进样式）
+    fun doubleSeek(dir: Int) {
+        val dur = player.duration
+        if (dur <= 0) { toast("快进/快退暂不可用（流未就绪）"); return }
+        val t = (player.currentPosition + dir * 15_000L).coerceIn(0L, (dur - 1000L).coerceAtLeast(0L))
+        player.seekTo(t)
+        slideFinal = t; slideDirFinal = dir; slideTick++
+    }
+    // TVBox 锁屏复刻：锁定收起全部浮层；解锁恢复控件呼出
+    fun toggleLock() {
+        locked = !locked
+        if (locked) { fsBar = false; fsEpPanel = false } else pokeFs()
+    }
+    // 用户 2026-11-10 复刻 TVBox「硬解/软解」钮：先记续位再翻转 hwDecode；player 随 remember key 重建，
+    // 重建后的 DisposableEffect(player)/LaunchedEffect(player…) 自动换绑，本 effect 负责原位续播
+    fun toggleHwDecode() {
+        if (buffering) { toast("缓冲中，稍后再试"); return }
+        hwResume = player.currentPosition to player.playWhenReady
+        hwDecode = !hwDecode
+        toast(if (hwDecode) "已切硬解" else "已切软解")
+    }
+    LaunchedEffect(hwDecode) {
+        val r = hwResume ?: return@LaunchedEffect // 首次组帧 hwResume=null 自然跳过
+        hwResume = null
+        playAt(line, curEp, r.first)
+        player.playWhenReady = r.second
+    }
+    // 用户 2026-11-10 复刻 TVBox「音轨」钮：跨音频 group 展平轮切（media3 1.11 新 API：
+    // currentTracks.groups + overrides[TrackGroup] + TrackSelectionOverride(TrackGroup, index)）
+    fun toggleAudioTrack() {
+        val groups = player.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSupported }
+        val flat = groups.flatMap { gr -> (0 until gr.length).filter { gr.isTrackSupported(it) }.map { idx -> gr to idx } }
+        if (flat.size <= 1) {
+            toast(if (flat.isEmpty()) "暂无可用音轨" else "该流只有 1 条音轨，无轨可切")
+            return
+        }
+        val overrides = player.trackSelectionParameters.overrides
+        var cur = -1
+        flat.forEachIndexed { k, pair ->
+            if (cur >= 0) return@forEachIndexed
+            val ov = overrides[pair.first.mediaTrackGroup]
+            if (ov != null) { if (pair.second in ov.trackIndices) cur = k }
+            else if (pair.first.isTrackSelected(pair.second)) cur = k
+        }
+        val (gr, i) = flat[(cur + 1).mod(flat.size)]
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setOverrideForType(androidx.media3.common.TrackSelectionOverride(gr.mediaTrackGroup, i))
+            .build()
+        val f = gr.getTrackFormat(i)
+        val lbl = f.label?.takeIf { it.isNotEmpty() } ?: f.language?.takeIf { it.isNotEmpty() }
+        toast("已切音轨 " + (lbl ?: "${i + 1}/${flat.size}"))
     }
 
     // ===== 换源（用户 2026-11-03：手动换源改弹框＝FindSourceDialog matchBest；此函数仅剩 autoSrc 链路：全源找同名直切首个） =====
@@ -550,12 +699,22 @@ fun DetailScreen(
         while (true) {
             delay(1000)
             fsPos = player.currentPosition; fsDur = player.duration.coerceAtLeast(0L)
+            fsBuf = player.bufferedPosition.coerceAtLeast(0L)
+            // 用户 2026-11-10 实拍图：右下大时钟带秒 HH:MM:SS，并推算「影片结束」时刻=当前+剩余
+            run {
+                val c = java.util.Calendar.getInstance()
+                fsClock = fmtClockHms(c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE), c.get(java.util.Calendar.SECOND))
+                val e = java.util.Calendar.getInstance()
+                e.timeInMillis += (fsDur - fsPos).coerceAtLeast(0L)
+                fsEndTxt = fmtClockHms(e.get(java.util.Calendar.HOUR_OF_DAY), e.get(java.util.Calendar.MINUTE), e.get(java.util.Calendar.SECOND))
+            }
             healthySnap.set(player.playbackState == Player.STATE_READY && player.currentPosition > 0)
             // TVBox 参考样式顶栏数据：分辨率 + 实时码率（1s 与进度同频）
             val ex = player as? androidx.media3.exoplayer.ExoPlayer
             val vf = ex?.videoFormat
             if (vf != null) {
                 fsResTxt = "${vf.width} x ${vf.height}"
+                fsQualityTxt = qualityLabel(vf.height)
                 fsBit = when {
                     vf.bitrate >= 1_000_000 -> "%.2f Mbps".format(vf.bitrate / 1e6)
                     vf.bitrate > 0 -> "%.0f Kbps".format(vf.bitrate / 1e3)
@@ -592,7 +751,14 @@ fun DetailScreen(
     LaunchedEffect(fs) { if (fs) runCatching { focusReq.requestFocus() } }
     // 两档返回走查（用户 2026-11-06）：控件 5s 自隐时焦点钮随 AnimatedVisibility 销毁、焦点落空，
     // DPAD 类键不再进 fsKeyMod（任意键唤出失效）→ 隐后把焦点重新锚回根
-    LaunchedEffect(fs, fsBar) { if (fs && !fsBar) runCatching { focusReq.requestFocus() } }
+    LaunchedEffect(fs, fsBar) {
+        if (fs && !fsBar) { runCatching { focusReq.requestFocus() }; fsRowFocusN.intValue = 0 }
+        // 呼出控件后焦点落动作行首个钮（fadeIn 进场有延迟，有限重试；触屏模式 requestFocus 失败无副作用）
+        if (fs && fsBar) for (i in 0 until 6) {
+            delay(120)
+            if (runCatching { fsActFr.requestFocus() }.getOrDefault(false)) break
+        }
+    }
 
     val g = lines().getOrNull(line)
     val total = g?.list?.size ?: 0
@@ -601,15 +767,33 @@ fun DetailScreen(
         (detail?.typeName ?: itemS.typeName), detail?.year?.ifBlank { null } ?: itemS.year,
         detail?.area?.ifBlank { null } ?: itemS.area,
     ).joinToString(" / ")
-    val descFull = detail?.desc?.replace(Regex("<[^>]+>"), " ")?.trim()?.takeIf { it.isNotEmpty() }
+    val descFull = detail?.desc?.replace(Regex("<[^>]+>"), " ")?.replace("&nbsp;", " ")?.trim()?.takeIf { it.isNotEmpty() }
     var showDesc by remember { mutableStateOf(false) } // 用户 2026-11-03：简介全文弹窗
 
-    // 遥控按键：全屏内任意键唤回浮层；←→=±15s seek（带位置 toast）、Enter/Space=暂停（web 键位规范）
+    // 遥控按键（TVBox 复刻，用户 2026-11-09）：控件可见=方向键全走焦点系统（←→在按钮行移焦，
+    // 进度行不可聚焦＝需求 d）；控件隐藏=←→连发步进预览（首步±10s、≥500ms 加速、松手真 seek）、
+    // ↑↓/其余键唤回控件；Enter/Center/Media=播放暂停；Back=两档返回不点亮控件
     val fsKeyMod = Modifier.onPreviewKeyEvent { ev ->
-        if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         if (!fs) return@onPreviewKeyEvent false
+        // 锁定态：吞掉除退出外全部键（解锁靠左中常驻解锁钮点按，用户 2026-11-10 版式）
+        if (locked && ev.key != Key.Escape && ev.key != Key.Back) return@onPreviewKeyEvent true
+        val horiz = ev.key == Key.DirectionLeft || ev.key == Key.DirectionRight
+        if (ev.type == KeyEventType.KeyUp) {
+            // 滑动松手：一次性 seek 到预览位并续播（tvSlideStop 语义）
+            if (horiz && slide.active && !fsEpPanel) {
+                slideFinal = slide.simPos; slideDirFinal = slide.dir
+                player.seekTo(slide.simPos)
+                player.playWhenReady = true
+                slide.stop(); slideTick++
+                return@onPreviewKeyEvent true
+            }
+            return@onPreviewKeyEvent false
+        }
+        if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         // 两档返回（用户 2026-11-06）：Back 不呼出控件，否则返回瞬间 fsBar 被点亮、永远退不了全屏
-        if (ev.key != Key.Back) pokeFs()
+        // 控件隐藏时的 ←→ 也不点亮控件（TVBox：滑动只出时间胶囊，底栏保持收起）
+        val slideStep = horiz && !fsBar && !fsEpPanel && ev.key != Key.Back
+        if (ev.key != Key.Back && !slideStep) pokeFs()
         // 选集看板打开时方向键=网格走焦（2 列：左右±1/上下±2），OK=选中即播并收看板，Esc/Back=收（用户 2026-11-04 遥控要求）
         if (fsEpPanel) {
             val nEp = lines().getOrNull(line)?.list?.size ?: 0
@@ -625,211 +809,369 @@ fun DetailScreen(
                 else -> false
             }
         }
-        when (ev.key) {
-            Key.DirectionLeft -> { seekBy(-15); true }
-            Key.DirectionRight -> { seekBy(15); true }
-            Key.Enter, Key.MediaPlayPause, Key.DirectionCenter -> { player.playWhenReady = !player.playWhenReady; true }
-            Key.Escape -> { exitFs(); true }
-            else -> false
+        when {
+            // 控件可见：←→ 交回焦点系统在按钮行间移动（需求 d：按钮行内左右=切钮）
+            slideStep -> {
+                val ok = slide.step(
+                    System.currentTimeMillis(),
+                    if (ev.key == Key.DirectionRight) 1 else -1,
+                    player.currentPosition, player.duration,
+                )
+                if (ok) slideTick++ else toast("快进/快退暂不可用（流未就绪）")
+                true
+            }
+            horiz -> false
+            else -> when (ev.key) {
+                // 遥控 OK 双消费修复（用户 2026-11-10 走查实证）：控件亮时若预览吞 DOWN（toggle#1），
+                // UP 仍会落到被焦钮上做 UP-only performClick（toggle#2）→ 播放钮净不暂停、别的钮还会误切播放态。
+                // 控件亮（焦点在钮行）=不截和，整键交钮自身；控件隐（焦点锚根）=此处单次切播放。媒体键不受焦点布局影响恒切。
+                Key.Enter, Key.MediaPlayPause, Key.DirectionCenter -> {
+                    if (ev.key != Key.MediaPlayPause && fsBar && fsRowFocusN.intValue > 0) false
+                    else { togglePlayFs(); true }
+                }
+                Key.Escape -> { exitFs(); true }
+                else -> false
+            }
         }
+    }
+
+    // TVBox 复刻（用户 2026-11-09）全屏左右半区竖调：右=STREAM_MUSIC 音量、左=window 亮度。
+    // 与根 detectTapGestures(pokeFs) 并列共存：竖拖有位移→tap 被取消；纯 tap 无位移→竖拖不触发。
+    val audio = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }
+    fun curLevel(z: EdgeZone): Float = when (z) {
+        EdgeZone.Volume -> {
+            val a = audio ?: return 0.5f
+            val mx = a.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+            if (mx > 0) a.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() / mx else 0.5f
+        }
+        EdgeZone.Brightness -> {
+            val b = (context as? android.app.Activity)?.window?.attributes?.screenBrightness ?: -1f
+            if (b < 0f || b > 1f) 0.5f else b
+        }
+    }
+    fun applyLevel(z: EdgeZone, l: Float) {
+        when (z) {
+            EdgeZone.Volume -> {
+                val a = audio ?: return
+                val mx = a.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                a.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (l * mx).toInt().coerceIn(0, mx), 0)
+            }
+            EdgeZone.Brightness -> {
+                val act = context as? android.app.Activity ?: return
+                val p = act.window.attributes
+                p.screenBrightness = l.coerceIn(0.01f, 1f)
+                act.window.attributes = p
+            }
+        }
+    }
+    fun hideAvLater() {
+        avJob?.cancel()
+        avJob = scope.launch { delay(500); avVisible = false }
     }
 
     BoxWithConstraints(
         modifier = modifier.fillMaxSize()
             .background(if (fs) Color.Black else MaterialTheme.colorScheme.background)
             .then(fsKeyMod)
-            // 焦点锚在根节点（纯 Compose 目标必成功）：fs 下遥控按键走 fsKeyMod；非 fs 不抢 PlayerView 焦点
-            .focusable()
+            // 需求 d（用户 2026-11-09 走查）：根节点仅在「全屏+控件隐藏」时可聚焦——此刻无子可聚焦钮，
+            // 方向键落根走 fsKeyMod 滑位（需求 c）；控件可见时根 focusable=false，焦点让给按钮行，
+            // ←→ 在 FsAct 间移焦、进度 Canvas 非可聚焦永不被选中。可聚焦父节点不会向下遍历子钮，
+            // 故必须让根「隐时聚焦、显时让位」而非全程聚焦（全程聚焦=焦点卡根、需求 d 失效的根因）
+            .focusable(enabled = fs && !fsBar)
             .focusRequester(focusReq)
-            .pointerInput(fs) { if (fs) detectTapGestures { pokeFs() } },
+            // TVBox 复刻（用户 2026-11-09）单击=呼出控件、双击=三分区（左退15s/中切播放/右进15s）；
+            // detectTapGestures 自带单/双共存：有 onDoubleTap 时单击延后 ~300ms 判定，无双击才派发 onTap
+            .pointerInput(fs) {
+                if (fs) detectTapGestures(
+                    onTap = { if (!locked) pokeFs() },
+                    onDoubleTap = { off ->
+                        if (!locked) when (tapZone(off.x, size.width.toFloat())) {
+                            TapZone.Left -> doubleSeek(-1)
+                            TapZone.Center -> { togglePlayFs(); pokeFs() }
+                            TapZone.Right -> doubleSeek(1)
+                        }
+                    },
+                )
+            }
+            .pointerInput(fs, locked) {
+                if (!fs || locked) return@pointerInput
+                var z = EdgeZone.Volume
+                var start = 0f
+                var acc = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { off -> z = edgeZone(off.x, size.width.toFloat()); start = curLevel(z); acc = 0f; avZone = z; avLevel = start; avVisible = true },
+                    onVerticalDrag = { _, dY -> acc += dY; val nl = dragToLevel(acc, size.height.toFloat(), start); avLevel = nl; applyLevel(z, nl) },
+                    onDragEnd = { hideAvLater() },
+                    onDragCancel = { hideAvLater() },
+                )
+            },
     ) {
         if (!fs) {
             val wide = maxWidth > maxHeight
-            // 用户 2026-11-04 TVBox 对齐尺寸反推：右侧详情列高度钉死=视频窗高（按钮行不得超到窗口底部之下）；
-            // 选集分页 epPageSize 按视口剩余高度（总高-窗高-线路行-分页tab行）估算，保证翻页后视频窗仍在屏内免上翻
-            val viewW = maxWidth - 32.dp
-            // 用户 2026-11-05 终调：播放器缩至 35%（46%→40%→35 逐步要求再小），文字列 65%——
-            // 视频窗高度随 16:9 变矮，下半选集区（weight(1f) 剩余高度）多出更多行显示集数按钮
-            // 用户 2026-11-06 改口放大：横屏改高度锚定=屏高 55%，宽度按 16:9 反推（原宽锚 35%）；
-            // vidH 变高同时给右侧详情列更多余量，进一步压低按钮行溢出风险
-            val vidH = if (wide) maxHeight * 0.55f else ((viewW - 16.dp) * 0.35f) * 9f / 16f
-            val vidW = if (wide) vidH * 16f / 9f else viewW
-            // 集数钮列数不写死：随集名长度自适应（下方选集区按 epSub 计算，用户 2026-11-05）
-            // 用户 2026-11-05 照截图：页内装不下的在选集区内部上下滚，上半部分（视频/详情/线路/tab 行）位置不动
-            // 用户 2026-11-05 紧凑化：每页 20→40，配合播放器/文字缩号后一屏可见更多集数
+            // TVBox 精准复刻（用户 2026-11-09，activity_detail 实锤）：预览窗 vs_530 宽、高按 16:9
+            // （蓝本 vs_530×vs_300=实测 994×563px，与 16:9 差 0.6% 忽略）；整页背景=海报模糊+压暗
+            val winW = tvu(530)
             val epPageSize = 40
             var epPage by remember(line, itemS) { mutableStateOf(0) }
-            LaunchedEffect(curEp, epPageSize) { epPage = curEp / epPageSize } // 当前集换页跟读（连播翻页可见）
-            // 用户 2026-11-05：整页不再滚动（上半固定），滚动只发生在选集区内部
-            Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                // 顶行整体撤销（用户 2026-11-03：返回/快搜均并入详情按钮行，视频上方不再遮挡）
-                // vtop：视频窗 + 文字信息（web .vtop video + .txt）
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    AndroidView(
-                        factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                this.player = player
-                                useController = true
-                                controllerShowTimeoutMs = 5000
-                                findViewById<androidx.media3.ui.DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)?.setKeyTimeIncrement(15_000L)
-                            }
-                        },
-                        modifier = (if (wide) Modifier.width(vidW) else Modifier.fillMaxWidth())
-                            .aspectRatio(16f / 9f)
-                            .background(Color.Black)
-                            .focusable()
-                            .focusRequester(videoFsReq)
-                            .onPreviewKeyEvent { ev ->
-                                if (ev.type == KeyEventType.KeyDown &&
-                                    (ev.key == Key.Enter || ev.key == Key.DirectionCenter)
-                                ) { enterFs(); true } else false
-                            },
+            var epRev by remember { mutableStateOf(false) } // tvSort 倒序：仅展示序反转，真下标不变
+            LaunchedEffect(curEp, epPageSize, epRev, g) {
+                val n = g?.list?.size ?: 0
+                if (n > 0) { // 当前集换页跟读（连播翻页可见），倒序时按展示位换算
+                    val pos = if (epRev) n - 1 - curEp else curEp
+                    epPage = (pos / epPageSize).coerceAtLeast(0)
+                }
+            }
+            // 默认焦点=播放窗（用户实拍：遥控器进详情默认选中播放窗显示白框）。
+            // 装机实锤（2026-11-09 probe5）：本窗 Box 在 Compose 焦点系统里不可达——
+            // FocusRequester 恒 false（含 tm=false+view 焦点已落 ACV 时）、方向搜索 UP 从线路
+            // chip 跳过窗；clickable/focusable 两版皆同，唯一差异=内嵌 AndroidView(PlayerView)。
+            // 改走旧包已实证路线（20261106l：OK 键焦点上窗）：焦点载体=PlayerView 本身（view 级），
+            // isFocusableInTouchMode=true → requestFocus 触摸模式下也成功（模拟器/真机通吃）；
+            // onFocusChange 驱动 winFocused 画白描边；方向键按下即 blur+FocusManager.moveFocus 交还
+            // Compose 走焦，OK/Enter=进全屏。
+            var winFocused by remember { mutableStateOf(false) }
+            val pvRef = remember { mutableStateOf<androidx.media3.ui.PlayerView?>(null) }
+            val winFocusMgr = LocalFocusManager.current
+            // 窗上按方向键：先交还 view 焦点，再隔帧让 Compose 按方向走焦（同帧内 moveFocus
+            // 会因焦点仍在本 View 而被忽略——焦点回调同帧抢焦同款坑）
+            // 定向投递（用户 2026-11-09：窗 DOWN 应先落线路行，非集数——几何搜索在窗无
+            // Compose 焦点锚点时落点不随布局，改显式指定目标）：目标 fr 抢不到再退回方向搜索
+            val line1Fr = remember { FocusRequester() }
+            val actRowFr = remember { FocusRequester() }
+            val blurWin: (FocusRequester, FocusDirection) -> Boolean = { fr, fallback ->
+                pvRef.value?.clearFocus()
+                winFocused = false
+                scope.launch {
+                    withFrameNanos { }
+                    if (!runCatching { fr.requestFocus() }.getOrDefault(false)) {
+                        winFocusMgr.moveFocus(fallback)
+                    }
+                }
+                true
+            }
+            LaunchedEffect(Unit) {
+                repeat(20) {
+                    if (winFocused) return@LaunchedEffect
+                    pvRef.value?.requestFocus()
+                    delay(150)
+                }
+            }
+            Box(modifier = Modifier.fillMaxSize()) {
+                (detail?.cover ?: itemS.pic)?.let { pv ->
+                    AsyncImage(
+                        model = pv, contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().blur(tvu(60)), // minSdk<31 blur 无效=直出，靠压暗层保可读
                     )
-                    Column(
-                        // 用户 2026-11-04 反馈：列内滚动会把按钮行滚到窗口底裁切、被线路行遮挡
-                        // → 取消滚动，文本逐行限宽加省略号，按钮永远完整可见；全文走「📖 简介」弹窗
-                        modifier = if (wide) Modifier.weight(1f).height(vidH)
-                        else Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AdultTag(adultOf(itemS))
-                            // 用户 2026-11-05 照截图：标题保持大号（截图≈50px 特大），正文降一号换行多显
-                            Text(detail?.title?.ifBlank { null } ?: itemS.name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                            Text("· ${itemS.sourceName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 1)
-                        }
-                        if (metaLine.isNotBlank()) Text(metaLine, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        detail?.director?.ifBlank { null }?.let { Text("导演：$it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        detail?.actor?.ifBlank { null }?.let { Text("主演：${it.take(100)}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        // 用户 2026-11-05 终稿：简介吃列内剩余高度（weight），按钮行非权重最后测量——
-                        // 视频窗再缩简介先被压缩，按钮行永远完整可见（上一版整行移出列，用户要求放回详情列内）
-                        descFull?.let { d ->
-                            Box(modifier = if (wide) Modifier.weight(1f) else Modifier, contentAlignment = Alignment.TopStart) {
+                }
+                Box(Modifier.fillMaxSize().background(Color(0xB3000000))) // 压暗层（蓝本实拍模糊清晰可辨，70% 黑保文字对比度）
+                Column(modifier = Modifier.fillMaxSize().padding(horizontal = tvu(50), vertical = tvu(20)), verticalArrangement = Arrangement.spacedBy(tvu(10))) {
+                    // topLayout：左预览窗 + 右信息列（activity_detail 双栏）
+                    Row(horizontalArrangement = Arrangement.spacedBy(tvu(20))) {
+                        // TVBox 复刻（用户 2026-11-09 裁决①）：窗口模式关 Media3 内建控制器——
+                        // 视频窗=可聚焦预览块，OK/点按=进全屏，←→=±15s（此前 OK 被内建控制器吞掉的根因）；
+                        // 焦点态=透明底+2mm 白描边（button_detail_preview selector 实锤）
+                        // 白描边画在外层 Box：PlayerView 的 SurfaceView 在窗口最上层打洞，描边加在
+                        // AndroidView 层会被视频盖掉（装机走查实证）→ surface 内缩 2dp 露出边框
+                        Box(
+                            modifier = (if (wide) Modifier.width(winW) else Modifier.fillMaxWidth())
+                                .aspectRatio(16f / 9f)
+                                .background(Color.Black)
+                                // 焦点载体=PlayerView（view 级，见上 Ruling）；Box 只做触摸点击=进全屏，
+                                // 不再挂 Compose 焦点节点（probe5 实锤本节点在焦点系统里不可达）
+                                .pointerInput(Unit) { detectTapGestures(onTap = { enterFs() }) }
+                                .then(if (winFocused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke) else Modifier),
+                        ) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    PlayerView(ctx).apply {
+                                        pvRef.value = this
+                                        this.player = player
+                                        useController = false
+                                        // view 级焦点窗（旧包 20261106l 实证路线）：可焦+触摸模式可焦，
+                                        // 入场循环 requestFocus 必中；焦点态→winFocused 画白描边
+                                        isFocusable = true
+                                        isFocusableInTouchMode = true
+                                        descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                                        onFocusChangeListener = View.OnFocusChangeListener { _, has -> winFocused = has }
+                                        setOnKeyListener { _, keyCode, ev ->
+                                            if (ev.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                                            when (keyCode) {
+                                                // OK/Enter=进全屏（与蓝本窗上按 OK 语义一致）
+                                                android.view.KeyEvent.KEYCODE_ENTER,
+                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER -> { enterFs(); true }
+                                                // 方向键=交还 Compose 走焦（←→让位焦点系统，Ruling 2026-11-09：
+                                                // ±15s 仅保留在全屏层）
+                                                android.view.KeyEvent.KEYCODE_DPAD_UP -> true
+                                                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> blurWin(line1Fr, FocusDirection.Down)
+                                                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                                                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> blurWin(actRowFr, FocusDirection.Right)
+                                                else -> false
+                                            }
+                                        }
+                                    }
+                                },
+                                // 硬解/软解重建（用户 2026-11-10）：factory 只首建，player 换实例须靠 update 重绑
+                                update = { if (it.player !== player) it.player = player },
+                                modifier = Modifier.fillMaxSize().padding(2.dp),
+                            )
+                            if (winFocused) {
+                                // 遥控提示（用户需求：显示白框+提示方向键选按钮操作）
                                 Text(
-                                    d.take(300) + if (d.length > 300) "…" else "",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-                                    maxLines = 8, overflow = TextOverflow.Ellipsis,
+                                    "方向键选择按钮 · OK 进入全屏",
+                                    fontSize = tvSp(16),
+                                    color = Color.White.copy(alpha = 0.92f),
+                                    maxLines = 1,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = tvu(12))
+                                        .background(TvColors.Overlay, RoundedCornerShape(50))
+                                        .padding(horizontal = tvu(16), vertical = tvu(4)),
                                 )
                             }
-                        } ?: run { if (wide) Spacer(modifier = Modifier.weight(1f)) }
-                        // 用户 2026-11-06：片名/集数页面自明（标题在顶、当前集选集行高亮），「正在播放」属冗余；
-                        // 冗余行叠加错误双行使横屏定高列(vidH)溢出压掉按钮行 → 撤该行，仅缓冲时留提示
-                        if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        // 用户 2026-11-06：详情错误与播放失败合并为一行，保证失败态下按钮行完整可见
-                        listOfNotNull(errText, errorHint).joinToString("｜").takeIf { it.isNotEmpty() }?.let {
-                            Text(it, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        // 按钮行（用户 2026-11-05 定稿：放回详情列内末尾+横向可滑；列内简介 weight 吸收高度收缩，
-                        // 按钮行永远完整可见——视频窗再小也不丢按钮）
+                    // 右信息列（蓝本右列：标题 ts_30 bold→元信息 ts_18→演员/导演→简介 ts_16 maxLines4
+                    // 行距1.1→Spacer 吃余量→动作行；列高=窗高，全文走「简介」弹窗）
+                    Column(
+                        modifier = if (wide) Modifier.weight(1f).height(winW * 9f / 16f)
+                        else Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(tvu(4)),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(8))) {
+                            AdultTag(adultOf(itemS))
+                            Text(detail?.title?.ifBlank { null } ?: itemS.name, fontSize = tvSp(30), fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        }
+                        // 元信息行（tvSite|tvYear|tvArea|tvType ts_18 80%白；tvLang：CMS 详情解析无语言字段→略，见 ledger Ruling）
+                        Row(horizontalArrangement = Arrangement.spacedBy(tvu(10))) {
+                            listOfNotNull(
+                                itemS.sourceName,
+                                (detail?.year?.ifBlank { null } ?: itemS.year)?.ifBlank { null },
+                                (detail?.area?.ifBlank { null } ?: itemS.area)?.ifBlank { null },
+                                (detail?.typeName?.ifBlank { null } ?: itemS.typeName)?.ifBlank { null },
+                            ).filter { it.isNotBlank() }.forEach {
+                                Text(it, fontSize = tvSp(18), color = Color(0xCCFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        detail?.actor?.ifBlank { null }?.let { Text("主演：${it.take(100)}", fontSize = tvSp(16), color = Color(0xCCFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        detail?.director?.ifBlank { null }?.let { Text("导演：$it", fontSize = tvSp(16), color = Color(0xCCFFFFFF), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        descFull?.let { Text(it, fontSize = tvSp(16), color = Color(0xCCFFFFFF), maxLines = 4, lineHeight = tvSp(18), overflow = TextOverflow.Ellipsis) }
+                        if (wide) Spacer(modifier = Modifier.weight(1f))
+                        if (buffering) Text("缓冲中…", color = Color.Yellow, fontSize = tvSp(16), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        listOfNotNull(errText, errorHint).joinToString("｜").takeIf { it.isNotEmpty() }?.let {
+                            Text(it, color = Color(0xFFFF6B6B), fontSize = tvSp(16), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        // 动作行（Ruling④：播放(预览停摆才显)/快搜/倒序/测速/简介/收藏/🔗复制；
+                        // 「返回」撤——遥控 Back 分层返回、触屏走系统手势）
                         Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            // requiredHeight(tvu(40)=vs_40)：M3 Button 48dp 最小触控高会撑爆定高列
+                            // （列高=窗高 213dp），蓝本钮高即 vs_40；行内全体等高符合规范
+                            // 动作行↑=回播放窗（窗为 view 级焦点，Compose 方向搜索到不了，显式投递）
+                            modifier = Modifier.horizontalScroll(rememberScrollState()).requiredHeight(tvu(40))
+                                .onPreviewKeyEvent { ev ->
+                                    if (ev.type == KeyEventType.KeyDown && ev.key == Key.DirectionUp) {
+                                        pvRef.value?.requestFocus(); true
+                                    } else false
+                                },
+                            horizontalArrangement = Arrangement.spacedBy(tvu(10)),
                         ) {
-                            PillButton(onClick = onBack) { Text("返回", style = MaterialTheme.typography.labelMedium) }
-                            PillButton(onClick = { kept = keepSt.toggle(itemS) }) { Text(if (kept) "已收藏" else "收藏", style = MaterialTheme.typography.labelMedium) }
-                            PillButton(onClick = {
+                            val af = Modifier.focusRequester(actRowFr)
+                            if (!playing) TmBtn(modifier = af, onClick = { enterFs() }) { Text("播放", fontSize = tvSp(20)) }
+                            TmBtn(modifier = if (playing) af else Modifier, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
+                            TmBtn(onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
+                            TmBtn(onClick = {
                                 LineSpeed.delete(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))
                                 userPickedLine = false
                                 speeds = null
                                 probeSpeeds(curEp)
                                 toast("重新测速各线路…")
-                            }) { Text("测速", style = MaterialTheme.typography.labelMedium) }
-                            PillButton(onClick = { showDesc = true }) { Text("简介", style = MaterialTheme.typography.labelMedium) }
-                            // 用户 2026-11-05：换源/搜关联合并后定名「快搜」——点开即换源海报网格+关联词（点词切全源搜）
-                            PillButton(onClick = { chDlg = true }) { Text("快搜", style = MaterialTheme.typography.labelMedium) }
-                            // 用户 2026-11-03 定稿：非全屏不放上下集钮（遥控走选集行点选；全屏动作行内有 ⏮/⏭）
+                            }) { Text("测速", fontSize = tvSp(20)) }
+                            TmBtn(onClick = { showDesc = true }) { Text("简介", fontSize = tvSp(20)) }
+                            TmBtn(onClick = { kept = keepSt.toggle(itemS) }) { Text(if (kept) "★ 已收藏" else "☆ 收藏", fontSize = tvSp(20)) }
+                            // 复制直链钮已撤（用户 2026-11-09：不需要）
                         }
                     }
                 }
-                // 线路行（web flagRow：flag(集数)+测速标签第二行；单线判慢给 swapHint 出口）
-                // 行内换源结果组已撤（用户 2026-11-03：换源改弹框，同名命中+测速在框内逐源增量呈现）
+                // 线路行＝mGridViewFlag 源行（chip 底 #803d3d3d 圆角 vs_10、选中=红下划线、
+                // 焦点=40%红+白描边；分辨率/测速标签为 app 附加信息保留；单线判慢给换源出口）
                 val ls = lines()
                 if (ls.isNotEmpty()) {
-                    // 用户 2026-11-06：撤「线路(共 N 条)」前缀文字（条数集数 chip 名内已含），线路 chip 直接靠左
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        // 线路行↑=回播放窗（同上，显式投递；↓ 自然走焦进集数网格）
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                            .onPreviewKeyEvent { ev ->
+                                if (ev.type == KeyEventType.KeyDown && ev.key == Key.DirectionUp) {
+                                    pvRef.value?.requestFocus(); true
+                                } else false
+                            },
+                        horizontalArrangement = Arrangement.spacedBy(tvu(10)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                            ls.forEachIndexed { i, lg ->
-                                // 用户 2026-11-05 终改：线路药丸统一走详情按钮同款 chip（PillButton）——
-                                // 白20%/选中白40%、无框无红条；行内=源名+分辨率(绿)+·+测速状态词
-                                val sel = i == line
-                                val res = resOf(lg.flag)
-                                val nm = (res?.let { lg.flag.replace(it, "", ignoreCase = true) } ?: lg.flag)
-                                    .trim().trim('-', '_', ' ').ifEmpty { lg.flag }
-                                val tg = tagFor(i)
-                                PillButton(onClick = { if (!sel) switchLine(i) }, selected = sel) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    ) {
-                                        Text(
-                                            "$nm(${lg.list.size})",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = Color.White,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        )
-                                        if (res != null) Text(
-                                            res, style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFF81C784),
-                                        )
-                                        if (tg != null) {
-                                            Text("·", style = MaterialTheme.typography.labelSmall,
-                                                color = Color(0x99FFFFFF))
-                                            Text(tg.label, style = MaterialTheme.typography.labelSmall,
-                                                color = speedTagColor(tg.cls))
-                                        }
+                        ls.forEachIndexed { i, lg ->
+                            val sel = i == line
+                            val res = resOf(lg.flag)
+                            val nm = (res?.let { lg.flag.replace(it, "", ignoreCase = true) } ?: lg.flag)
+                                .trim().trim('-', '_', ' ').ifEmpty { lg.flag }
+                            val tg = tagFor(i)
+                            PillButton(
+                                onClick = { if (!sel) switchLine(i) },
+                                selected = sel,
+                                modifier = if (i == 0) Modifier.focusRequester(line1Fr) else Modifier,
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(tvu(6)),
+                                ) {
+                                    Text("$nm(${lg.list.size})", fontSize = tvSp(20), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (res != null) Text(res, fontSize = tvSp(14), color = Color(0xFF81C784))
+                                    if (tg != null) {
+                                        Text("·", fontSize = tvSp(14), color = Color(0x99FFFFFF))
+                                        Text(tg.label, fontSize = tvSp(14), color = speedTagColor(tg.cls))
                                     }
                                 }
                             }
-                            if (singleSlow) {
-                                PillButton(onClick = { chDlg = true }) { Text("⚡ 该源仅此1条线 · 换源", maxLines = 1, style = MaterialTheme.typography.labelMedium) } // 改开换源弹框（同名+测速直达）
-                            }
                         }
-                    // 用户 2026-11-05：线路与选集间加横线分隔
-                    HorizontalDivider(thickness = 1.dp, color = Color(0x33FFFFFF))
-                    // 选集行（web epRow：当前集 on + 续播位 prog 红点）
-                    // 用户 2026-11-04：集数超一页加 tab 分页，页大小=视口可容纳估算值，保证翻页后视频窗仍完整在屏内
+                        if (singleSlow) {
+                            PillButton(onClick = { chDlg = true }) { Text("⚡ 该源仅此1条线 · 换源", maxLines = 1, fontSize = tvSp(18)) }
+                        }
+                    }
+                    // 选集区＝mSeriesGroupView 分组行（分页 tab，同款 flag chip）+ mGridView 6 列等宽网格
                     val eps = g?.list ?: emptyList()
+                    val displayAll = epDisplayOrder(eps, epRev)
                     val showTabs = eps.size > epPageSize
                     val pageMax = ((eps.size - 1) / epPageSize).coerceAtLeast(0)
                     val curPage = if (showTabs) epPage.coerceIn(0, pageMax) else 0
                     val epStart = curPage * epPageSize
-                    val epSub = eps.subList(epStart, minOf(epStart + epPageSize, eps.size))
-                    // 用户 2026-11-05 终定：配色样式维持 chip，但宽度改弹性自适应（撤固定 epBtnW）——
-                    // chip 按集名全文撑宽、FlowRow 自动换行，任何集名都完整显示不截字
-                    // 用户 2026-11-05 照截图：选集区全宽（撤「选集」侧标签），
-                    // 占满视口剩余高度、内部上下滚，tab 行以上不动
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val epSub = displayAll.subList(epStart, minOf(epStart + epPageSize, displayAll.size))
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(tvu(6))) {
                         if (showTabs) {
                             val tabRange = { pg: Int -> "${pg * epPageSize + 1}-${minOf((pg + 1) * epPageSize, eps.size)}" }
-                            // 用户 2026-11-05：tab 统一走详情按钮同款 chip（白20%/当前页白40%、无框）
-                            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(tvu(10))) {
                                 (0..pageMax).forEach { pg ->
                                     PillButton(onClick = { epPage = pg }, selected = pg == curPage) {
-                                        Text(tabRange(pg), style = MaterialTheme.typography.labelSmall)
+                                        Text(tabRange(pg), fontSize = tvSp(18))
                                     }
                                 }
                             }
                         }
-                        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                            // 用户 2026-11-06：集数 chip 上下/左右统一 4dp（PillButton 已钉 32dp 高，
-                            // 无触控盒余量，同参数即视觉一致）
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                epSub.forEachIndexed { j, e ->
-                                    val i = epStart + j
-                                    // 用户 2026-11-05：去掉 web epRow 续播位红点徽标（明示不需要，有意偏离蓝本）
-                                    PillButton(
-                                        // 用户 2026-11-04：点选后焦点回播放窗，再按遥控 OK 即进全屏
-                                        onClick = { goEpTo(i); scope.launch { withFrameNanos { }; runCatching { videoFsReq.requestFocus() } } },
-                                        selected = i == curEp,
-                                    ) { Text(e.name, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
+                        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(tvu(10))) {
+                            // 6 列等宽（蓝本实测 6 列 331px≈等分）；缺格补位保持列对齐；区内自滚、上方不动
+                            epSub.chunked(6).forEach { rowCells ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(tvu(10))) {
+                                    rowCells.forEach { (realIdx, e) ->
+                                        EpCell(
+                                            current = realIdx == curEp,
+                                            label = e.name,
+                                            modifier = Modifier.weight(1f),
+                                            // 点选播该集并焦点回播放窗（实测 f 序列：网格 Enter 后回窗）
+                                            onClick = { goEpTo(realIdx); scope.launch { withFrameNanos { }; pvRef.value?.requestFocus() } },
+                                        )
+                                    }
+                                    repeat(6 - rowCells.size) { Spacer(Modifier.weight(1f)) }
                                 }
                             }
                         }
                     }
+                }
                 }
             }
         } else {
@@ -840,6 +1182,8 @@ fun DetailScreen(
                     resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                     fsPv = this
                 } },
+                // 硬解/软解重建（用户 2026-11-10）：player 换实例须靠 update 重绑，否则全屏黑屏
+                update = { if (it.player !== player) it.player = player },
                 modifier = Modifier.fillMaxSize(),
             )
             // ===== TVBox 手机版样式复刻（用户 2026-11-04 参考图）：左上标题/分辨率·右上码率·右中当前大时间+剩余·红细线进度·底部图标动作行；跟手拖拽+遥控焦点均可用 =====
@@ -848,22 +1192,77 @@ fun DetailScreen(
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopStart).padding(20.dp, 14.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.size(width = 4.dp, height = 22.dp).background(Color(0xFFE53935)))
+                        Box(Modifier.size(width = 4.dp, height = 22.dp).background(TvColors.Red))
                         Text(fsTitle, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                     }
-                    if (fsResTxt.isNotEmpty()) Text(fsResTxt, color = Color(0xCCFFFFFF), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 12.dp))
+                    // TVBox 复刻（用户 2026-11-09）次行「竖条+清晰度」：短红竖条 + qualityLabel(hPx)，其后跟淡色原始分辨率
+                    if (fsQualityTxt.isNotEmpty() || fsResTxt.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.size(width = 4.dp, height = 14.dp).background(TvColors.Red))
+                        Text(fsQualityTxt.ifEmpty { fsResTxt }, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                        if (fsQualityTxt.isNotEmpty()) Text(fsResTxt, color = Color(0x99FFFFFF), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(20.dp, 14.dp)) {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (fsBit.isNotEmpty()) Text(fsBit, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                     if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodySmall)
+                    // 用户 2026-11-10 实拍图：右上=暂停/播放状态标（点按=切播放）+「当前 / 总时长」
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(
+                            painterResource(if (playing) R.drawable.tvb_v_pause else R.drawable.tvb_v_play),
+                            null, tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                                .clickable { togglePlayFs(); pokeFs() },
+                        )
+                        Text(
+                            fmtHms(shownMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
+                            color = Color.White, style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
             }
+            // 用户 2026-11-10 实拍图版式：右中「<」=退出全屏回详情页（原 CenterEnd 大时间区迁至右下）
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.displaySmall)
-                    Text("影片结束 " + if (fsDur > 0) fmtHms((fsDur - shownMs).coerceAtLeast(0) / 1000) else "--:--:--", color = Color(0xBBFFFFFF), style = MaterialTheme.typography.bodyMedium)
+                Box(
+                    modifier = Modifier.clip(CircleShape).background(TvColors.Overlay)
+                        .clickable { exitFs() }
+                        .semantics { contentDescription = "退出全屏" }
+                        .padding(10.dp),
+                ) {
+                    Icon(painterResource(R.drawable.tvb_v_back), null, tint = Color.White, modifier = Modifier.size(26.dp))
+                }
+            }
+            // 用户 2026-11-10 实拍图版式：左中=锁定钮（移出按钮行）；锁定后收起控件，左中改常驻「解锁」钮
+            AnimatedVisibility(visible = fsBar && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) {
+                Box(
+                    modifier = Modifier.clip(CircleShape).background(TvColors.Overlay)
+                        .clickable { toggleLock() }
+                        .semantics { contentDescription = "锁定屏幕" }
+                        .padding(10.dp),
+                ) {
+                    Icon(painterResource(R.drawable.tvb_icon_lock), null, tint = Color.White, modifier = Modifier.size(26.dp))
+                }
+            }
+            if (fs && locked) {
+                Box(
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)
+                        .clip(CircleShape).background(TvColors.DetailBtn)
+                        .clickable { toggleLock() }
+                        .semantics { contentDescription = "解锁屏幕" }
+                        .padding(10.dp),
+                ) {
+                    Icon(painterResource(R.drawable.tvb_icon_unlock), null, tint = Color.White, modifier = Modifier.size(26.dp))
+                }
+            }
+            // 用户 2026-11-10 实拍图版式：右下（控件上方）=当前时间大时钟 + 影片剩余/结束时刻
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 118.dp)) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (fsClock.isNotEmpty()) Text(fsClock, color = Color.White, style = MaterialTheme.typography.displaySmall)
+                    if (fsDur > 0) Text(
+                        "剩余 " + fmtHms((fsDur - shownMs).coerceAtLeast(0L) / 1000) + " · 结束 " + fsEndTxt,
+                        color = Color(0xBBFFFFFF), style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
@@ -871,6 +1270,11 @@ fun DetailScreen(
                     modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 24.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
+                    // TVBox 复刻（用户 2026-11-09）底栏右上时钟（HH:MM，1s 快照刷新）
+                    Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        if (fsClock.isNotEmpty()) Text(fsClock, color = Color(0xCCFFFFFF), style = MaterialTheme.typography.bodySmall)
+                    }
                     // 进度行（参考图样式）：当前时间—红细线+圆点拇指—总时长；手指按住即拖（跟手预览、松手 seek）、单击定位；遥控 ←→ 仍走 ±15s（fsKeyMod）
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.bodySmall)
@@ -896,14 +1300,15 @@ fun DetailScreen(
                             Canvas(Modifier.matchParentSize()) {
                                 val half = size.height / 2f
                                 val f = if (fsDur > 0L) (shownMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
-                                drawLine(Color.White.copy(alpha = 0.35f), Offset(0f, half), Offset(size.width, half), 3.dp.toPx())
-                                drawLine(Color(0xFFE53935), Offset(0f, half), Offset(size.width * f, half), 5.dp.toPx())
-                                drawCircle(Color(0xFFE53935), 8.dp.toPx(), Offset(size.width * f, half))
+                                // TVBox 复刻（用户 2026-11-09）：轨道 40%白 → 次缓冲 深灰 → 已播 主题红 → 红圆拇指
+                                val bf = if (fsDur > 0L) (fsBuf.toFloat() / fsDur).coerceIn(f, 1f) else 0f
+                                drawLine(TvColors.Track, Offset(0f, half), Offset(size.width, half), 3.dp.toPx())
+                                drawLine(TvColors.Buffer, Offset(0f, half), Offset(size.width * bf, half), 3.dp.toPx())
+                                drawLine(TvColors.Red, Offset(0f, half), Offset(size.width * f, half), 5.dp.toPx())
+                                drawCircle(TvColors.Red, 8.dp.toPx(), Offset(size.width * f, half))
                             }
                         }
                         Text(if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
-                        // 走查 #13：±15s 提示与进度同行（1.5s 自隐）
-                        seekHint?.let { Text(it, color = Color(0xFFFFE082), style = MaterialTheme.typography.bodySmall, maxLines = 1) }
                     }
                     // 动作行（参考图图标行映射本 app 能力；「▤ 选集」=全屏任意选集，遥控十字键可逐钮聚焦）
                     Row(
@@ -911,24 +1316,100 @@ fun DetailScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        // 用户 2026-11-05：上下集高频钮前置到播放键之前并改文字形式；
-                        // 遥控 OK 直接触发播放/暂停（fsKeyMod Enter/DirectionCenter 已接，无需聚焦本钮）
-                        FsAct("上集", "上一集", off = curEp <= 0) { goEp(-1) }
-                        FsAct("下集", "下一集", off = total > 0 && curEp >= total - 1) { goEp(1) }
+                        // 用户 2026-11-10 实拍图裁决：按钮行只留 7 钮（上集/下集/播放/比例/重播/硬软解/音轨）。
+                        // 锁→左中、退出→右中、时钟→右下；跳过/循环/倍速/选集/重置钮撤下（逻辑与键盘路径保留）
+                        // OK 放行判据引用计数（用户 2026-11-10）：任一钮含焦即>0，钮间移焦 +1/−1 顺序无关
+                        val rowFoc: (Boolean) -> Unit = { d -> fsRowFocusN.intValue = (fsRowFocusN.intValue + (if (d) 1 else -1)).coerceAtLeast(0) }
+                        FsAct("上集", "上一集", off = curEp <= 0, res = R.drawable.tvb_v_prev, onFocused = rowFoc) { goEp(-1) }
+                        FsAct("下集", "下一集", off = total > 0 && curEp >= total - 1, res = R.drawable.tvb_v_next, onFocused = rowFoc) { goEp(1) }
                         // 用户 2026-11-04：暂停态显示红色播放键，其余统一白色字形
                         // U+23F8 在 Android emoji 字体下无视 VS15 恒渲橙色，改用文字双竖条 ❚❚
                         FsAct(if (playing) "❚❚" else "▶", if (playing) "暂停" else "播放",
-                            tint = if (playing) null else Color(0xFFE53935)) { player.playWhenReady = !player.playWhenReady }
-                        FsAct("↺", "重播") { replayHere() }
-                        FsAct("⟳", if (repeatOne) "循环开" else "循环关", active = repeatOne) {
-                            repeatOne = !repeatOne
-                            toast(if (repeatOne) "已开启单集循环" else "已关闭单集循环")
-                        }
-                        FsAct("⏩", "倍速×$speedX", active = speedX != 1f) { cycleSpeed() }
-                        FsAct("⛶", if (zoomMode) "满屏" else "适配") { toggleScale() }
-                        FsAct("⌂", "重置") { resetView() }
-                        FsAct("▤", "选集", active = fsEpPanel) { fsEpPanel = !fsEpPanel; pokeFs() }
-                        FsAct("✕", "退出全屏") { exitFs() }
+                            tint = if (playing) null else TvColors.Red,
+                            res = if (playing) R.drawable.tvb_v_pause else R.drawable.tvb_v_play,
+                            onFocused = rowFoc,
+                            modifier = Modifier.focusRequester(fsActFr)) { togglePlayFs() }
+                        FsAct("比例", if (zoomMode) "画面满屏裁切" else "画面比例适配", active = zoomMode, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
+                        FsAct("↺", "重播", res = R.drawable.tvb_v_replay, onFocused = rowFoc) { replayHere() }
+                        // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）
+                        FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", onFocused = rowFoc) { toggleHwDecode() }
+                        // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）
+                        FsAct("音轨", "切换音轨", res = R.drawable.tvb_v_audio, onFocused = rowFoc) { toggleAudioTrack() }
+                    }
+                }
+            }
+            // （用户 2026-11-10 版式裁决）倍速面板/右下解锁浮层撤下：锁/解锁改左中常驻，倍速无 UI 入口
+            // TVBox 音量/亮度竖向滑条（竖拖时显示，左半区贴左、右半区贴右；松手 500ms 自隐）
+            if (fs && avVisible) {
+                TvSliderBar(
+                    level = avLevel,
+                    modifier = Modifier
+                        .align(if (avZone == EdgeZone.Brightness) Alignment.CenterStart else Alignment.CenterEnd)
+                        .padding(horizontal = 24.dp),
+                )
+            }
+            // TVBox 复刻（用户 2026-11-09）暂停居中播放大钮：随控件条显隐，点按续播
+            // 修（用户 2026-11-10）：Text("▶") 字形光学偏左不在圆心，改矢量图标右移 2dp 光学居中
+            if (fs && !playing && fsBar && !locked && !buffering) {
+                Box(
+                    modifier = Modifier.align(Alignment.Center).size(64.dp).clip(CircleShape)
+                        .background(TvColors.Overlay)
+                        .clickable { player.playWhenReady = true; pokeFs() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(painterResource(R.drawable.tvb_v_play), null, tint = TvColors.Red,
+                        modifier = Modifier.size(30.dp).offset(x = 2.dp))
+                }
+            }
+            // 暂停浮层（控件隐去后居中）：时间 + 3dp 细线 + 图标，渐变胶囊底，点按续播
+            if (fs && !playing && !fsBar && !locked && !buffering) {   // !buffering：seek/换集缓冲窗口 playing=false 属常态，不误弹暂停 UI
+                Row(
+                    modifier = Modifier.align(Alignment.Center)
+                        .background(
+                            Brush.horizontalGradient(listOf(Color.Transparent, TvColors.Overlay, Color.Transparent)),
+                            RoundedCornerShape(18.dp),
+                        )
+                        .clickable { player.playWhenReady = true; pokeFs() }
+                        .padding(horizontal = 32.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    Box(Modifier.width(160.dp).height(3.dp).background(TvColors.Track, RoundedCornerShape(2.dp))) {
+                        val f = if (fsDur > 0) (shownMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
+                        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
+                    }
+                    // 修（用户 2026-11-10）：同居中大钮，▶ 字形换矢量图标光学居中
+                    Icon(painterResource(R.drawable.tvb_v_play), null, tint = TvColors.Red,
+                        modifier = Modifier.size(22.dp).offset(x = 1.dp))
+                }
+            }
+            // 快进/快退时间胶囊（TVBox tv_progress_container 复刻：方向图标+目标/总时间+3dp 细线；
+            // 独立于底栏显隐，松手 1s 后自隐——需求 c：只见时间控件不见进度条）
+            if (slideShow) {
+                val showMs = if (slide.active) slide.simPos else slideFinal
+                val d = if (slide.active) slide.dir else slideDirFinal
+                // TVBox slide_info 复刻：渐变圆角胶囊底 + ts_26 白字
+                Column(
+                    modifier = Modifier.align(Alignment.Center)
+                        .background(
+                            Brush.horizontalGradient(listOf(Color.Transparent, TvColors.Overlay, Color.Transparent)),
+                            RoundedCornerShape(16.dp),
+                        )
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(if (d < 0) "◀◀" else "▶▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            fmtHms(showMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
+                            color = Color.White, fontSize = 26.sp,
+                        )
+                    }
+                    Box(Modifier.width(220.dp).height(3.dp).background(Color.White.copy(alpha = 0.35f), RoundedCornerShape(2.dp))) {
+                        val f = if (fsDur > 0) (showMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
+                        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
                     }
                 }
             }
@@ -957,16 +1438,13 @@ fun DetailScreen(
                         itemsIndexed(epsFs) { i, e ->
                             Button(
                                 onClick = { goEpTo(i); fsEpPanel = false },
-                                modifier = if (i == fsFocusEp) Modifier.border(2.dp, Color(0xFFFFEB3B), RoundedCornerShape(8.dp)) else Modifier,
-                                shape = RoundedCornerShape(8.dp), // 用户 2026-11-05：形状与全 app 统一（板上配色保留）
+                                // TVBox 统一（用户 2026-11-09 遗留清理）：焦点=40%红底+白描边、当前集=红字（tvEpTextColor），撤旧黄框蓝底
+                                modifier = if (i == fsFocusEp) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier,
+                                shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = when {
-                                        i == curEp -> MaterialTheme.colorScheme.primary
-                                        i == fsFocusEp -> Color(0xFF1565C0)
-                                        else -> Color(0xFF3A3A3A)
-                                    },
-                                    contentColor = if (i == curEp) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                    containerColor = if (i == fsFocusEp) TvColors.Red40 else TvColors.SeriesBg,
+                                    contentColor = tvEpTextColor(i == curEp),
                                 ),
                             ) { Text(e.name, maxLines = 1, style = MaterialTheme.typography.labelSmall) }
                         }

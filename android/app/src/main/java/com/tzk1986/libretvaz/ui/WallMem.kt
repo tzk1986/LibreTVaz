@@ -25,6 +25,9 @@ object WallMem {
     // （minor#5 走查：browseDrawn 槽只写无读已删，seed 由 browseKeep 现算）
     val browseKeep = mutableStateOf<Pair<String, List<VodSummary>>?>(null)   // key→墙条目
     val browseScroll = mutableStateOf<Triple<String, Int, Int>?>(null)       // key→(index, offset)
+    // 用户 2026-11-09 #130：资源口墙同款（聚合/单源两 key；tab/筛选=zoneCat/zoneFlt 已进程级）
+    val zoneKeep = mutableStateOf<Pair<String, List<VodSummary>>?>(null)     // key(selUrl)→墙条目
+    val zoneScroll = mutableStateOf<Triple<String, Int, Int>?>(null)         // key→(index, offset)
     // 用户 2026-11-06：搜索结果墙同款（资源口/点播搜→点卡播放→返回不再整页重搜复位顶）；
     // 滚动用 map 分 tab 记忆（页内切源 Tab 不丢各自位置），快照单槽同 browseKeep 语义
     internal val collectKeep = mutableStateOf<Pair<String, CollectSnap>?>(null) // key(kw|zone|src)→结果快照

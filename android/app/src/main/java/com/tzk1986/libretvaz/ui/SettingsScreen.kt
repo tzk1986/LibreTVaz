@@ -20,6 +20,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusEvent
+import androidx.compose.foundation.border
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -338,9 +341,13 @@ private fun onOff(b: Boolean): String = if (b) "开" else "关"
  *  点击即切（开关项开↔关即时换值），行高压到快搜行级别一屏看全 */
 @Composable
 private fun SettingCard(label: String, value: String, onClick: () -> Unit) {
+    // 用户 2026-11-09 #133：遥控焦点=白描边+40%红底（透明描边占位防行高跳动，同全 app 规范）
+    var rowF by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-            .background(Color(0x33FFFFFF)).clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().onFocusEvent { rowF = it.isFocused }.clip(RoundedCornerShape(8.dp))
+            .then(if (rowF) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier)
+            .background(if (rowF) TvColors.Red40 else Color(0x33FFFFFF))
+            .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -416,11 +423,17 @@ private fun LabRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit)
 
 /** 弹窗内选项行统一卡底（PickerDialog/LabRow/导航栏行共用；间距由 LazyColumn spacedBy 给） */
 @Composable
-private fun Modifier.dlgRow(selected: Boolean = false, vPad: androidx.compose.ui.unit.Dp = DlgRowPV): Modifier = this
-    .fillMaxWidth()
-    .clip(RoundedCornerShape(8.dp))
-    .background(if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF))
-    .padding(DlgRowPH, vPad)
+private fun Modifier.dlgRow(selected: Boolean = false, vPad: androidx.compose.ui.unit.Dp = DlgRowPV): Modifier {
+    // 用户 2026-11-09 #133：弹窗内选项行同获遥控焦点白框+红底（每调用位独立 remember）
+    var rowF by remember { mutableStateOf(false) }
+    return this
+        .fillMaxWidth()
+        .onFocusEvent { rowF = it.isFocused }
+        .then(if (rowF) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier)
+        .clip(RoundedCornerShape(8.dp))
+        .background(if (rowF) TvColors.Red40 else if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF))
+        .padding(DlgRowPH, vPad)
+}
 
 private val DlgRowPH = 12.dp
 private val DlgRowPV = 6.dp

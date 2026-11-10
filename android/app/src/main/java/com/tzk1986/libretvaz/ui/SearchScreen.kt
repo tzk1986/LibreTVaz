@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tzk1986.libretvaz.data.*
 import com.tzk1986.libretvaz.data.perf.PerfCore
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import com.tzk1986.libretvaz.data.perf.VocabSeed
 import kotlinx.coroutines.launch
 
@@ -55,13 +57,17 @@ private fun WordChip(label: String, onClick: () -> Unit) {
 
 /** 首页 FuncCard 同款小钮（用户 2026-11-04：搜索页样式统一首页——圆角10+labelMedium，不再用大 Button；
  *  用户 2026-11-05 终改：随 FuncCard 同步白 20% 半透） */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeBtn(label: String, modifier: Modifier = Modifier, tight: Boolean = false, fill: Boolean = true, onClick: () -> Unit) {
+    // 用户 2026-11-09 #133：遥控焦点态=40%红底+白描边（TVBox 统一，与 TmBtn/TmChip 同调）
+    var btnFocused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
-        color = Color(0x33FFFFFF),
-        modifier = modifier,
+        color = if (btnFocused) TvColors.Red40 else Color(0x33FFFFFF),
+        border = if (btnFocused) androidx.compose.foundation.BorderStroke(TvColors.StrokeW, TvColors.FocusStroke) else null,
+        modifier = modifier.onFocusEvent { btnFocused = it.isFocused },
     ) {
         Box(
             modifier = (if (fill) Modifier.fillMaxWidth() else Modifier).padding(
@@ -247,8 +253,8 @@ fun SearchScreen(
                         modifier = Modifier.weight(1f)
                             .clip(RoundedCornerShape(10.dp))
                             .border(
-                                1.dp,
-                                if (tfFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                if (tfFocused) TvColors.StrokeW else 1.dp,
+                                if (tfFocused) TvColors.FocusStroke else MaterialTheme.colorScheme.outlineVariant,
                                 RoundedCornerShape(10.dp),
                             )
                             .padding(horizontal = 12.dp, vertical = 5.dp),

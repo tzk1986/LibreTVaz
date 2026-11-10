@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.tzk1986.libretvaz.data.CmsRepository
@@ -81,7 +82,7 @@ private fun SavedWall(
                     // 删除模式角标：红圆✕提示点击即删
                     if (delMode) Box(
                         modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp)
-                            .background(Color(0xFFE53935), CircleShape),
+                            .background(TvColors.Red, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
                 }

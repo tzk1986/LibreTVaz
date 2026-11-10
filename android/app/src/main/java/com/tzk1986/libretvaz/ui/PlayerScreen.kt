@@ -52,7 +52,7 @@ internal fun speedTagColor(cls: String): Color = when (cls) {
 }
 
 @OptIn(androidx.media3.common.util.UnstableApi::class)
-internal fun buildPlayer(context: android.content.Context, live: Boolean = false): ExoPlayer {
+internal fun buildPlayer(context: android.content.Context, live: Boolean = false, hwDecode: Boolean = true): ExoPlayer {
     // B17 OkHttp 播放数据源：HTTP/2 多路复用+大连接池（HLS 分片密集请求收益最大）。
     // 代理经 Http.applyGlobalProxy() 的 JVM 全局 ProxySelector 生效（OkHttp 默认走 ProxySelector.getDefault）
     // 重定向由 OkHttp 处理：followSslRedirects 默认 true（等价原跨协议放行）
@@ -69,7 +69,15 @@ internal fun buildPlayer(context: android.content.Context, live: Boolean = false
         )
         .build()
     // B11：前置 200MB LRU 盘缓存（HLS 分片/MP4 Range），回看/重播不白耗流量，也杜绝无限吃盘
+    // 用户 2026-11-10 复刻 TVBox 硬解/软解钮：codec 选择在 renderer 创建期定死，
+    // 软解=PREFER_SOFTWARE（1.11.1 javap 实锤的公开常量），切换=重建播放器续位重播
+    val rf = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+        .setMediaCodecSelector(
+            if (hwDecode) androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
+            else androidx.media3.exoplayer.mediacodec.MediaCodecSelector.PREFER_SOFTWARE
+        )
     return ExoPlayer.Builder(context)
+        .setRenderersFactory(rf)
         .setLoadControl(load)
         .setMediaSourceFactory(DefaultMediaSourceFactory(VideoCache.factory(context, dsf)))
         .build()
