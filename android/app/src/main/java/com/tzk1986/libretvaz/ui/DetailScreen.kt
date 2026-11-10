@@ -308,6 +308,10 @@ fun DetailScreen(
     var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
     var repeatOne by remember { mutableStateOf(false) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
+    // TVBox 对标 F1（2026-11-10）：倍速——speedX 跨换集/换线保留、退全屏复位 1.0（§8-R2）；speedPanel 弹层；speedFocus 面板走焦下标
+    var speedX by remember { mutableStateOf(1f) }
+    var speedPanel by remember { mutableStateOf(false) }
+    var speedFocus by remember { mutableIntStateOf(0) }
     // 用户 2026-11-04：TVBox 复刻三件套状态——选集面板 / 顶部分辨率·码率 / 拖拽跟手临时位（-1=未拖）
     var fsEpPanel by remember { mutableStateOf(false) }
     // 看板遥控焦点：自持下标（根节点已占 focusReq，不依赖 Compose 焦点系统；2 列网格，上下=±2）
@@ -375,6 +379,9 @@ fun DetailScreen(
     }
     fun exitFs() {
         fs = false
+        // TVBox 对标 F1 §8-R2：退全屏复位倍速，防误触残留
+        speedPanel = false
+        speedX = 1f
         // 修复（用户 2026-11-05：退全屏后状态栏永久压住顶部 tab）：全局策略状态栏常隐，
         // 这里只恢复导航栏；systemBars() 会把 hide 标志一并清掉导致状态栏再也回不去
         insetCtrl?.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
@@ -771,14 +778,20 @@ fun DetailScreen(
     // 分层返回（用户 2026-11-06 两档定稿）：面板→关面板→控件亮则只隐控件→再按才退全屏→回墙
     BackHandler {
         when {
+            fs && speedPanel -> speedPanel = false
             fs && fsEpPanel -> fsEpPanel = false
             fs && fsBar -> fsBar = false
             fs -> exitFs()
             else -> onBack()
         }
     }
-    LaunchedEffect(fs, fsSeq, fsBar) {
-        if (fs && fsBar) { delay(5000); fsBar = false } // web showFsBar 5s fade
+    // TVBox 对标 F1：倍速参数跟随 player——重建（硬软解切换）时 playbackParameters 丢，effect 兜底重放
+    LaunchedEffect(player, speedX) {
+        player.playbackParameters = androidx.media3.common.PlaybackParameters(speedX)
+    }
+    LaunchedEffect(fs, fsSeq, fsBar, speedPanel) {
+        // 面板打开暂停自隐（方案 §T-A3-3：选档不误收控件）
+        if (fs && fsBar && !speedPanel) { delay(5000); fsBar = false } // web showFsBar 5s fade
     }
     LaunchedEffect(fs) { if (fs) runCatching { focusReq.requestFocus() } }
     // 两档返回走查（用户 2026-11-06）：控件 5s 自隐时焦点钮随 AnimatedVisibility 销毁、焦点落空，
@@ -786,8 +799,13 @@ fun DetailScreen(
     LaunchedEffect(fs, fsBar) {
         if (fs && !fsBar) { runCatching { focusReq.requestFocus() }; fsRowFocusN.intValue = 0 }
         // 呼出控件后焦点落动作行首个钮（fadeIn 进场有延迟，有限重试；触屏模式 requestFocus 失败无副作用）
-        if (fs && fsBar) for (i in 0 until 6) {
+        // TVBox 对标 F1 修正：speedPanel 打开期间跳过重锚——胶囊 onClick 尾 pokeFs 键不变、
+        // 协程不重启，原 720ms 重试窗会 120ms 一次抢回焦点，吃掉遥控移焦到胶囊的按键（装机走查实锤）
+        if (fs && fsBar && !speedPanel) for (i in 0 until 6) {
             delay(120)
+            // 让路判据（T-A3 走查二次实锤 2026-11-10）：钮行已有焦点（用户移焦或已锚中）=弃权，
+            // 不再 120ms 抢回——原循环在模拟器慢渲染（fadeIn>窗）时吃掉用户 RIGHT 后落的抢锚
+            if (fsRowFocusN.intValue > 0) break
             if (runCatching { fsActFr.requestFocus() }.getOrDefault(false)) break
         }
     }
@@ -827,6 +845,17 @@ fun DetailScreen(
         // 控件隐藏时的 ←→ 也不点亮控件（TVBox：滑动只出时间胶囊，底栏保持收起）
         val slideStep = horiz && !fsBar && !fsEpPanel && ev.key != Key.Back
         if (ev.key != Key.Back && !slideStep) pokeFs()
+        // TVBox 对标 F1：倍速面板打开=单列上下走焦，OK/点按=选中并应用+收面板，Esc/Back=收
+        if (speedPanel) {
+            fun mvSp(d: Int) { speedFocus = (speedFocus + d).coerceIn(0, SPEED_OPTIONS.size - 1) }
+            return@onPreviewKeyEvent when (ev.key) {
+                Key.Escape, Key.Back -> { speedPanel = false; pokeFs(); true }
+                Key.DirectionUp, Key.DirectionLeft -> { mvSp(-1); true }
+                Key.DirectionDown, Key.DirectionRight -> { mvSp(1); true }
+                Key.Enter, Key.DirectionCenter -> { speedX = SPEED_OPTIONS[speedFocus]; speedPanel = false; pokeFs(); true }
+                else -> false
+            }
+        }
         // 选集看板打开时方向键=网格走焦（2 列：左右±1/上下±2），OK=选中即播并收看板，Esc/Back=收（用户 2026-11-04 遥控要求）
         if (fsEpPanel) {
             val nEp = lines().getOrNull(line)?.list?.size ?: 0
@@ -1383,6 +1412,15 @@ fun DetailScreen(
                             res = if (playing) R.drawable.tvb_v_pause else R.drawable.tvb_v_play,
                             onFocused = rowFoc,
                             modifier = Modifier.focusRequester(fsActFr)) { togglePlayFs() }
+                        // TVBox 对标 F1（2026-11-10 用户裁决：仅倍速一项放权恢复 UI）：文字胶囊，非 1.0 显 xN.N+红高亮
+                        FsAct(if (speedX == 1f) "倍速" else "x" + speedLabel(speedX), "播放倍速",
+                            active = speedX != 1f, onFocused = rowFoc) {
+                            speedPanel = !speedPanel
+                            if (speedPanel) {
+                                speedFocus = SPEED_OPTIONS.indexOfFirst { it == speedX }.coerceAtLeast(0)
+                                pokeFs()
+                            }
+                        }
                         FsAct("比例", if (zoomMode) "画面满屏裁切" else "画面比例适配", active = zoomMode, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
                         FsAct("↺", "重播", res = R.drawable.tvb_v_replay, onFocused = rowFoc) { replayHere() }
                         // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）
@@ -1494,6 +1532,28 @@ fun DetailScreen(
             LaunchedEffect(fsFocusEp) { // 仅当焦点跑出可视区才滚动，避免每按一次都整屏跳动
                 if (fsEpPanel && fsGrid.layoutInfo.visibleItemsInfo.none { it.index == fsFocusEp })
                     runCatching { fsGrid.scrollToItem(fsFocusEp) }
+            }
+            // TVBox 对标 F1（2026-11-10）：倍速面板=居中方正 chips 列，走焦=40%红底+白描边、当前值=红字；
+            // 打开期间控件暂停自隐（上方 LaunchedEffect speedPanel 条件）
+            AnimatedVisibility(visible = speedPanel && fs, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
+                Column(
+                    modifier = Modifier.clip(RoundedCornerShape(TvColors.RadiusFs)).background(TvColors.Overlay)
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    SPEED_OPTIONS.forEachIndexed { i, x ->
+                        TextButton(
+                            onClick = { speedX = x; speedPanel = false; pokeFs() },
+                            modifier = if (i == speedFocus) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier,
+                            contentPadding = PaddingValues(horizontal = 26.dp, vertical = 0.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (i == speedFocus) TvColors.Red40 else Color.Transparent,
+                                contentColor = if (x == speedX) TvColors.Red else Color.White,
+                            ),
+                        ) { Text(speedLabel(x), style = MaterialTheme.typography.labelMedium) }
+                    }
+                }
             }
         }
     }

@@ -14,6 +14,9 @@ fun qualityLabel(hPx: Int): String = when {
     else -> ""
 }
 
+/** TVBox 对标 F1（2026-11-10）：倍速面板七档（方案定稿，面板 chips 与走焦下标共用） */
+val SPEED_OPTIONS = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f)
+
 /** 倍速胶囊文案：两位小数后去尾零、恒留一位小数（1→"1.0"、1.25→"1.25"、0.5→"0.5"） */
 fun speedLabel(x: Float): String = "%.2f".format(x).trimEnd('0').let { if (it.endsWith(".")) it + "0" else it }
 

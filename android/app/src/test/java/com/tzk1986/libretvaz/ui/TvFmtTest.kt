@@ -24,6 +24,13 @@ class TvFmtTest {
     }
 
     @Test
+    fun `倍速面板选项为方案定稿七档`() {
+        // TVBox 对标 F1（2026-11-10）：面板 chips 集合钉死，胶囊文案=x+speedLabel
+        assertEquals(listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f), SPEED_OPTIONS.toList())
+        assertEquals("x1.5", "x" + speedLabel(1.5f))
+    }
+
+    @Test
     fun `speedLabel trims to needed decimals keeping one place`() {
         assertEquals("1.0", speedLabel(1f))
         assertEquals("0.5", speedLabel(0.5f))
