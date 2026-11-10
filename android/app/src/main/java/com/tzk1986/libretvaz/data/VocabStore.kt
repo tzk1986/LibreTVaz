@@ -30,17 +30,34 @@ class VocabStore(context: Context) {
     private var pendingVod: Runnable? = null
     private var pendingZone: Runnable? = null
 
+    // 用户 2026-11-06 走查 #8：防抖回调原在主线程同步编码 8000 词 JSONArray/JSONObject=掉帧源
+    // → 主线程只取一致性快照（PinIndex 持锁瞬时），编码+写盘移后台单线程
+    // 声明必须先于下方 init 种子块：属性与 init 按声明序执行，置后则 init 直调 persist 时 NPE（2026-11-10 装机崩溃实锤）
+    private val persistExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "vocab-persist").apply { isDaemon = true }
+    }
+
+    init {
+        // TVBox 对标 S1（2026-11-10）：首启一次性灌 40 条种子热榜进点播池（热搜冷启动不空白）；
+        // 闸门存词库自身 prefs，同版本幂等；用户清词后不回填（与内置源种闸门语义一致）
+        if (SeedHot.shouldSeed(prefs.getString(SeedHot.PREF_VER, "").orEmpty(), SeedHot.VER)) {
+            addWords(SeedHot.LIST, zone = false, w = SeedHot.BUMP)
+            persist(false) // 立即落盘：防 500ms 防抖窗内进程被杀致「闸门已写、词未存」丢种子
+            prefs.edit().putString(SeedHot.PREF_VER, SeedHot.VER).apply()
+        }
+    }
+
     fun index(zone: Boolean): PinIndex = if (zone) idxZone else idxVod
 
-    /** 片名入本池词库（+1 权重，含核心词派生），等价 web addWords */
-    fun addWords(names: List<String>, zone: Boolean) {
+    /** 片名入本池词库（默认 +1 权重，含核心词派生），等价 web addWords；种子灌入传高权重 */
+    fun addWords(names: List<String>, zone: Boolean, w: Long = 1) {
         if (names.isEmpty()) return
         val pi = index(zone)
         for (n in names) {
             if (n.isBlank()) continue
-            pi.add(n); pi.bump(n, 1)
+            pi.add(n); pi.bump(n, w)
             val c = PerfCore.coreName(n)
-            if (c.isNotEmpty() && c != n) { pi.add(c); pi.bump(c, 1) }
+            if (c.isNotEmpty() && c != n) { pi.add(c); pi.bump(c, w) }
         }
         persistSoon(zone)
     }
@@ -90,12 +107,6 @@ class VocabStore(context: Context) {
         if (zone) { pendingZone?.let { handler.removeCallbacks(it) }; pendingZone = r }
         else { pendingVod?.let { handler.removeCallbacks(it) }; pendingVod = r }
         handler.postDelayed(r, PERSIST_DEBOUNCE_MS)
-    }
-
-    // 用户 2026-11-06 走查 #8：防抖回调原在主线程同步编码 8000 词 JSONArray/JSONObject=掉帧源
-    // → 主线程只取一致性快照（PinIndex 持锁瞬时），编码+写盘移后台单线程
-    private val persistExec = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "vocab-persist").apply { isDaemon = true }
     }
 
     private fun persist(zone: Boolean) {
