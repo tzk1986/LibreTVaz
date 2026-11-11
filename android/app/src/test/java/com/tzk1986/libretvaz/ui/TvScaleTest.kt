@@ -37,4 +37,18 @@ class TvScaleTest {
         assertEquals(420f, tvMinSide(1440f), 0.001f)
         assertEquals(420f, tvMinSide(2160f), 0.001f)
     }
+
+    // 投影画布映射（用户 2026-11-11 定稿）：大屏按「手机横屏画布宽 914dp」整体等比
+    // 放大（占屏比例=手机、物理尺寸随屏增大、远看可读），手机/竖屏 scale≥系统值不缩
+    @Test
+    fun `phone scale passes through`() {
+        assertEquals(2.625f, tvCanvasScale(2400, 2.625f), 0.001f)
+        assertEquals(2.625f, tvCanvasScale(1080, 2.625f), 0.001f) // 竖屏不缩
+    }
+
+    @Test
+    fun `4k projector scales to phone canvas`() {
+        assertEquals(4.2013f, tvCanvasScale(3840, 1f), 0.01f)
+        assertEquals(2.1007f, tvCanvasScale(1920, 1.5f), 0.01f)
+    }
 }

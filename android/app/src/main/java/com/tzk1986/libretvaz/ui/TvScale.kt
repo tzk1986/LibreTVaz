@@ -17,6 +17,12 @@ fun tvDp(mm: Float, minSideDp: Float): Float = minSideDp * mm / 576f
  *  （N1S 实装机按钮超大）；封顶 420dp=手机横屏实测档，大屏复刻手机比例、6 钮全显 */
 fun tvMinSide(minSideDp: Float): Float = minSideDp.coerceAtMost(420f)
 
+/** 投影画布映射（用户 2026-11-11 定稿）：大屏整幅 UI 按「手机横屏画布宽 914dp」等比
+ *  放大——占屏比例=手机（6 钮全显），物理尺寸随屏增大远看可读；
+ *  coerceAtLeast=手机/竖屏绝不缩小 */
+fun tvCanvasScale(widthPx: Int, density: Float): Float =
+    (widthPx / 914f).coerceAtLeast(density)
+
 @Composable
 fun tvu(mm: Int): Dp {
     val c = LocalConfiguration.current

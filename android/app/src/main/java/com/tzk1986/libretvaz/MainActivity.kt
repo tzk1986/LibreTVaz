@@ -104,9 +104,16 @@ class MainActivity : ComponentActivity() {
                 // 全局字号钳制 ≤1.15（用户 2026-11-04 定稿，参考 Compose 社区 LocalDensity 覆盖方案）：
                 // 手机系统大字号会把 sp 撑爆固定列高度（13T 键盘被裁实测），投影/TV/手机比例统一可控
                 val dens = androidx.compose.ui.platform.LocalDensity.current
+                // 投影画布映射（用户 2026-11-11 N1S 定稿）：4K 低密度投影短边 dp 巨大，
+                // 整幅 UI 按手机横屏画布宽(914dp)等比放大——占屏比例=手机、物理尺寸随屏
+                // 放大远看可读；手机/竖屏 coerceAtLeast 原 density 不缩（纯函数 tvCanvasScale 单测）
+                val scale = com.tzk1986.libretvaz.ui.tvCanvasScale(
+                    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+                        .toFloat().let { (it * dens.density).toInt() }, dens.density,
+                )
                 androidx.compose.runtime.CompositionLocalProvider(
                     androidx.compose.ui.platform.LocalDensity provides
-                        androidx.compose.ui.unit.Density(dens.density, dens.fontScale.coerceAtMost(1.15f)),
+                        androidx.compose.ui.unit.Density(scale, dens.fontScale.coerceAtMost(1.15f)),
                 ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Browse) }
