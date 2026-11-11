@@ -92,15 +92,15 @@ object Zone {
         return list
     }
 
-    /** 首次/升版本进资源口补种预置站（版本号闸门；用户删过不再重复加回；「恢复预置」清标记重种） */
+    /** 首次/升版本进资源口补种预置站（版本号闸门；用户删过不再重复加回；「恢复预置」清标记重种；
+     * E44（审计 2026-11-11 #44）：闸门改「加源成功后再写」——空站单不烧闸门，私有包装入后进资源口即补种 */
     fun seedIfAbsent(context: Context, store: SourceStore) {
         val settings = SettingsStore(context)
-        if (settings.zoneSeedVer == SEED_VER) return
-        settings.zoneSeedVer = SEED_VER
         val preset = loadPreset(context)
-        if (preset.isEmpty()) return
+        if (SeedGate.plan(settings.zoneSeedVer, SEED_VER, preset.size) != SeedGate.Action.SEED_AND_STAMP) return
         val have = store.vodSources().map { PerfCore.norm(it.url) }.toHashSet()
         preset.filter { PerfCore.norm(it.url) !in have }.forEach { store.addVod(it) }
+        settings.zoneSeedVer = SEED_VER
     }
 
     /**
