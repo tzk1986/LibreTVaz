@@ -388,7 +388,12 @@ fun ZoneScreen(
 
     // 客户端过滤（零重拉）：wall=latest 全池+zextra 定向增补（片名并集兜底去重），shown=一级分类∩二级筛选；窗口渲染作用于过滤结果
     val shown = remember { derivedStateOf { Zone.filterPool(Agg.dedupByName(wall + zextra), cat, flt) } }
-    LaunchedEffect(cat, flt) { aggWin = 240 }
+    // C32（审计 2026-11-11）：首轮组合=返回重建播种时刻，无条件置 240 会盖掉上面
+    // maxOf(240, keep) 种子→已展开长墙被截断回缩（同 BrowseScreen 终审#2 病根）；跳过首轮，仅后续切类/筛选复位窗口
+    var winResetArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(cat, flt) {
+        if (winResetArmed) aggWin = 240 else winResetArmed = true
+    }
     val expandable = shown.value.size > aggWin
     val view = if (expandable) shown.value.take(aggWin) else shown.value
     fun aggMoreOrExpand() { if (expandable) aggWin += 240 else aggLoadMore() }
