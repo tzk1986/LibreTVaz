@@ -28,21 +28,23 @@ object BuiltinSources {
         parsePreset(context.assets.open("builtin_sources.json").use { it.readBytes().toString(Charsets.UTF_8) })
     }.getOrDefault(emptyList())
 
-    /** 补缺式添加（norm 去重，同 web drawSrcMgr 添加内置源）；返回新增数 */
+    /** 补缺式添加（norm 去重，同 web drawSrcMgr 添加内置源）；D40 批量化=单次全表重写；返回实加数 */
     fun addMissing(context: Context, store: SourceStore): Int {
         val have = store.vodSources().map { PerfCore.norm(it.url) }.toHashSet()
-        val add = loadPreset(context).filter { PerfCore.norm(it.url) !in have }
-        add.forEach { store.addVod(it) }
-        return add.size
+        return store.addVodAll(loadPreset(context).filter { PerfCore.norm(it.url) !in have }).also {
+            if (it > 0) store.alignZone()
+        }
     }
 
-    /** E44（审计 2026-11-11 #44）：闸门「加源成功后再写」——空站单（无源版）不烧闸门，私有包装入后下次冷启补种 */
+    /** E44（审计 2026-11-11 #44）：闸门「加源成功后再写」——空站单（无源版）不烧闸门，私有包装入后下次冷启补种。
+     *  D40：逐源 addVod（N 次全量 decode+encode+apply）改 addVodAll 单次重写，首启冷启主线程开销 O(n²)→O(n)；
+     *  归池不在此处做——调用方（MainActivity）下一句即 alignZone，避免双跑 */
     fun seedIfAbsent(context: Context, store: SourceStore) {
         val settings = SettingsStore(context)
         val preset = loadPreset(context)
         if (SeedGate.plan(settings.builtinSeedVer, SEED_VER, preset.size) != SeedGate.Action.SEED_AND_STAMP) return
         val have = store.vodSources().map { PerfCore.norm(it.url) }.toHashSet()
-        preset.filter { PerfCore.norm(it.url) !in have }.forEach { store.addVod(it) }
+        store.addVodAll(preset.filter { PerfCore.norm(it.url) !in have })
         settings.builtinSeedVer = SEED_VER
     }
 
@@ -62,6 +64,6 @@ object BuiltinSources {
         if (settings.liveSeedVer == LIVE_SEED_VER) return
         settings.liveSeedVer = LIVE_SEED_VER
         val have = store.liveSources().map { PerfCore.norm(it.url) }.toHashSet()
-        LIST_LIVE.filter { PerfCore.norm(it.url) !in have }.forEach { store.addLive(it) }
+        store.addLiveAll(LIST_LIVE.filter { PerfCore.norm(it.url) !in have }) // D40：同点播批量化
     }
 }

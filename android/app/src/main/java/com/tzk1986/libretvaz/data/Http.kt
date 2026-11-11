@@ -103,17 +103,37 @@ object Http {
         throw IllegalStateException("重定向次数过多")
     }
 
+    /**
+     * D41（审计 2026-11-11）：带上限流读——超大/恶意响应不再整串入内存（OOM 面）。
+     * Content-Length 先验 + 实读二验（chunked 无长度也拦得住）。超限抛错由调用方按拉取失败处理。
+     */
+    private fun readCapped(resp: Response, maxBytes: Long): ByteArray {
+        val body = resp.body ?: return ByteArray(0)
+        val declared = body.contentLength()
+        if (declared > maxBytes) throw IllegalStateException("响应过大(${declared / 1048576 + 1}MB>上限${maxBytes / 1048576}MB)")
+        val src = body.source()
+        val buf = okio.Buffer()
+        var total = 0L
+        while (true) {
+            val read = src.read(buf, minOf(8192L, maxBytes + 1 - total))
+            if (read == -1L) break
+            total += read
+            if (total > maxBytes) throw IllegalStateException("响应超过${maxBytes / 1048576}MB上限")
+        }
+        return buf.readByteArray()
+    }
+
     /** 阻塞式二进制 GET（XMLTV .gz 等需先按魔数判压缩，不能预先按文本读）。OkHttp 透明解压 gzip：Epg 两态均可处理 */
-    fun getBytes(url: String, timeoutMs: Int = 15000): ByteArray =
-        execute(url, timeoutMs, mapOf("User-Agent" to CHROME_UA)) { it.body?.bytes() ?: ByteArray(0) }
+    fun getBytes(url: String, timeoutMs: Int = 15000, maxBytes: Long = 32L * 1048576): ByteArray =
+        execute(url, timeoutMs, mapOf("User-Agent" to CHROME_UA)) { readCapped(it, maxBytes) }
 
     /** 阻塞式 GET，调用方需在 IO 线程使用 */
-    fun get(url: String, extraHeaders: Map<String, String> = emptyMap(), timeoutMs: Int = 8000): String {
+    fun get(url: String, extraHeaders: Map<String, String> = emptyMap(), timeoutMs: Int = 8000, maxBytes: Long = 16L * 1048576): String {
         val headers = LinkedHashMap<String, String>()
         headers["User-Agent"] = CHROME_UA
         headers["Accept"] = "application/json, */*"
         headers.putAll(extraHeaders)
         // 恒按 UTF-8 解码，与原 bufferedReader(Charsets.UTF_8) 语义逐字一致（不看 Content-Type charset）
-        return execute(url, timeoutMs, headers) { String(it.body?.bytes() ?: ByteArray(0), Charsets.UTF_8) }
+        return execute(url, timeoutMs, headers) { String(readCapped(it, maxBytes), Charsets.UTF_8) }
     }
 }

@@ -238,13 +238,19 @@ fun CollectScreen(
             }
     }
 
-    val allItems = if (tabIdx != null) bySite[tabIdx] ?: emptyList()
-    else seq.flatMap { bySite[it] ?: emptyList() }
+    // D35（审计 2026-11-11）：flatMap 全量拼接+排序原每次重组全量重算（大墙掉帧）→ remember；
+    // bySite 是 snapshotStateMap（实例恒变内容不触发 key），随行的 sitesSig 内容签名作失效键
+    val allItems = remember(seq, bySite, sitesSig, tabIdx) {
+        if (tabIdx != null) bySite[tabIdx] ?: emptyList()
+        else seq.flatMap { bySite[it] ?: emptyList() }
+    }
     // 用户 2026-11-06：排序仅影响展示序，空态/chip 判断仍用原始 allItems
-    val shown = when (yearSort) {
-        YearOrder.DESC -> Agg.yearDesc(allItems)
-        YearOrder.ASC -> Agg.yearAsc(allItems)
-        YearOrder.NONE -> allItems
+    val shown = remember(allItems, yearSort) {
+        when (yearSort) {
+            YearOrder.DESC -> Agg.yearDesc(allItems)
+            YearOrder.ASC -> Agg.yearAsc(allItems)
+            YearOrder.NONE -> allItems
+        }
     }
     val allDone = total > 0 && done >= total
     // 用户 2026-11-06 走查 #8：联想词索引遍历（8000 词 suggest/fuzzy/truncateByQuery）原在组合期同步跑

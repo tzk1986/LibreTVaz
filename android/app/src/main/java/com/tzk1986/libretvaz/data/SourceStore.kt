@@ -63,6 +63,39 @@ class SourceStore(context: Context) {
         }
     }
 
+    /** D40（审计 2026-11-11）：批量入库=单次全表重写（原种子逐源 addVod=N 次 decode+encode+apply 全量重写，首启主线程 O(n²)）；
+     *  逐项校验与 addVod/addLive 同口径（normalize+http 闸+norm 去重+专区归池+封顶），返回实加数 */
+    fun addVodAll(sources: List<VodSource>): Int {
+        var added = 0
+        mutateVod { list ->
+            for (s in sources) {
+                val url = normalizeVodUrl(s.url)
+                if (!isHttp(url) || list.size >= MAX_VOD || list.any { PerfCore.norm(it.url) == PerfCore.norm(url) }) continue
+                val adult = s.isAdult || Zone.isAdultType(s.name)
+                list.add(s.copy(name = s.name.ifBlank { hostname(url) }, url = url, isAdult = adult))
+                added++
+            }
+            true
+        }
+        return added
+    }
+
+    fun addLiveAll(sources: List<LiveSource>): Int {
+        var added = 0
+        mutateLive { list ->
+            for (s in sources) {
+                val url = s.url.trim()
+                if ((!isHttp(url) && !url.startsWith("asset://")) || list.size >= MAX_LIVE ||
+                    list.any { PerfCore.norm(it.url) == PerfCore.norm(url) }
+                ) continue
+                list.add(s.copy(name = s.name.ifBlank { hostname(url) }, url = url))
+                added++
+            }
+            true
+        }
+        return added
+    }
+
     private fun isHttp(url: String): Boolean =
         url.startsWith("http://") || url.startsWith("https://")
 

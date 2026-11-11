@@ -15,6 +15,25 @@ object Epg {
     private const val TTL = 5 * 60_000L
     private val cache = MemCache<PerfCore.EpgIndex>(8)
 
+    // D41（审计 2026-11-11）：gzip 解压带上限（解压炸弹防护——小压缩流可炸出 GB 级内存）
+    private const val MAX_XMLTV_BYTES = 64L * 1048576
+
+    private fun gunzipCapped(bytes: ByteArray): ByteArray {
+        GZIPInputStream(ByteArrayInputStream(bytes)).use { g ->
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            var total = 0L
+            while (true) {
+                val n = g.read(buf)
+                if (n == -1) break
+                total += n
+                if (total > MAX_XMLTV_BYTES) throw IllegalStateException("EPG 解压超 ${MAX_XMLTV_BYTES / 1048576}MB 上限")
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
+    }
+
     suspend fun load(url: String?): PerfCore.EpgIndex? {
         val u = url?.takeIf { it.isNotBlank() } ?: return null
         cache.get(u, TTL)?.let { return it }
@@ -22,7 +41,7 @@ object Epg {
             val idx = runCatching {
                 val bytes = Http.getBytes(u)
                 val text = if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte())
-                    String(GZIPInputStream(ByteArrayInputStream(bytes)).readBytes(), Charsets.UTF_8)
+                    String(gunzipCapped(bytes), Charsets.UTF_8)
                 else String(bytes, Charsets.UTF_8)
                 PerfCore.parseXmltv(text)
             }.getOrNull()

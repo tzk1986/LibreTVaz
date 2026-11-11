@@ -193,7 +193,8 @@ fun SearchScreen(
     // 右列单入口词流：空=热榜，有输入=关联词（suggest→fuzzy→截断置顶带标）
     val q = query.trim().lowercase()
     val pi = vocab.index(zone)
-    val rightWords: List<Pair<String, Boolean>> = remember(q, pi.size(), zone) {
+    // D37（审计 2026-11-11）：key 由 pi.size() 换 vocab.version——同长度增删换词也触发重算（size 作 key 会漏）
+    val rightWords: List<Pair<String, Boolean>> = remember(q, vocab.version(zone), zone) {
         if (q.isEmpty()) pi.top(40).map { it to false }
         else {
             val alphaNum = Regex("^[a-z0-9]+$").matches(q)

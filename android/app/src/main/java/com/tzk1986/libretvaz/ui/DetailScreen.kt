@@ -511,7 +511,10 @@ fun DetailScreen(
         if (player.state == SysCore.ST_END) return
         val g = lines().getOrNull(line) ?: return
         val p = Prog(line, g.flag, curEp, sec, durSec, System.currentTimeMillis())
-        prog.save(itemS.vodId, itemS.sourceKey, p, ProgStore.aliveKeys(context))
+        // D38（审计 2026-11-11）：aliveKeys 全量 parse 历史+收藏双池+blob 读改写，原每 5s 在主线程跑=掉帧；
+        // 挪 IO 线程，apply 异步落盘语义不变；ProgStore.LOCK 串行化防与 pruneOrphans 并发丢更新
+        val vodId = itemS.vodId; val sourceKey = itemS.sourceKey
+        scope.launch(Dispatchers.IO) { prog.save(vodId, sourceKey, p, ProgStore.aliveKeys(context)) }
     }
 
     // ===== TVBox 式动作行（用户 2026-11-10 实拍图裁决：仅 7 钮；倍速/跳过/重置/循环/选集/退出撤 UI，逻辑各归其位） =====

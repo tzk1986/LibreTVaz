@@ -22,7 +22,7 @@ class ProgStore(context: Context) {
             }
         }.getOrNull()
 
-    fun save(vodId: String, sourceKey: String, p: Prog, alive: Set<String>) {
+    fun save(vodId: String, sourceKey: String, p: Prog, alive: Set<String>) = synchronized(LOCK) {
         val o = all()
         o.put(key(vodId, sourceKey), JSONObject().put("line", p.line).put("flag", p.flag).put("ep", p.ep).put("sec", p.sec).put("dur", p.dur).put("ts", p.ts))
         val now = p.ts
@@ -37,7 +37,7 @@ class ProgStore(context: Context) {
     fun clear(vodId: String, sourceKey: String) = removeKeys(setOf(key(vodId, sourceKey)))
 
     /** 删除/清空历史、收藏后调用：两池均脱离或超 30 天的 prog 一并清掉（web alive 语义等价） */
-    fun pruneOrphans(context: Context) {
+    fun pruneOrphans(context: Context) = synchronized(LOCK) {
         val alive = aliveKeys(context)
         val now = System.currentTimeMillis()
         val o = all()
@@ -52,7 +52,7 @@ class ProgStore(context: Context) {
     }
 
     /** 删除/清空历史、收藏连带清续播位（web prog 孤儿清理的显式版） */
-    fun removeKeys(keys: Set<String>) {
+    fun removeKeys(keys: Set<String>) = synchronized(LOCK) {
         val o = all()
         var dirty = false
         keys.forEach { if (o.has(it)) { o.remove(it); dirty = true } }
@@ -60,6 +60,10 @@ class ProgStore(context: Context) {
     }
 
     companion object {
+        // D38（审计 2026-11-11）：prog 为单 blob 读-改-写，KeepStore 各处 new ProgStore 做 pruneOrphans
+        // 与详情页 save 可并发（且 save 已挪 IO 线程）→ 进程级锁串行化全部写路径，防丢更新
+        private val LOCK = Any()
+
         private const val PREF = "libretvaz_prog"
         private const val KEY = "prog"
         private const val ORPHAN_MS = 30L * 24 * 3600_000

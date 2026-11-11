@@ -52,6 +52,13 @@ class VocabStore(context: Context) {
 
     fun index(zone: Boolean): PinIndex = if (zone) idxZone else idxVod
 
+    // D37（审计 2026-11-11）：词内容版本计数——UI 以 version 作 remember key，增删换词即使条数不变也刷新
+    // （旧 remember key=pi.size()：同长度换词不触发重算，热榜/关联词陈旧）
+    @Volatile private var verVod = 0L
+    @Volatile private var verZone = 0L
+    fun version(zone: Boolean): Long = if (zone) verZone else verVod
+    private fun bumpVersion(zone: Boolean) { if (zone) verZone++ else verVod++ }
+
     /** 片名入本池词库（默认 +1 权重，含核心词派生），等价 web addWords；种子灌入传高权重 */
     fun addWords(names: List<String>, zone: Boolean, w: Long = 1) {
         if (names.isEmpty()) return
@@ -62,6 +69,7 @@ class VocabStore(context: Context) {
             val c = PerfCore.coreName(n)
             if (c.isNotEmpty() && c != n) { pi.add(c); pi.bump(c, w) }
         }
+        bumpVersion(zone)
         persistSoon(zone)
     }
 
@@ -69,6 +77,7 @@ class VocabStore(context: Context) {
     fun bump(name: String?, k: Long, zone: Boolean) {
         if (name.isNullOrEmpty()) return
         index(zone).bump(name, k)
+        bumpVersion(zone)
         persistSoon(zone)
     }
 
