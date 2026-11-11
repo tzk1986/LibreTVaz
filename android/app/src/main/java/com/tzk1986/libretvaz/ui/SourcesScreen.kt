@@ -203,32 +203,32 @@ fun SourcesScreen(
             }) { Text("＋ 直播源") }
         }
 
-        // 三分组（web 等价）：点播·常规 / 专区·仅资源口可见（非空才显示）/ 直播；下标保持全表序与 removeVodAt 对齐
-        val indexed = vodList.mapIndexed { i, s -> i to s }
-        val normals = indexed.filter { !it.second.isAdult }
-        val zoneRows = indexed.filter { it.second.isAdult }
+        // 三分组（web 等价）：点播·常规 / 专区·仅资源口可见（非空才显示）/ 直播
+        // P0-2：删除按 URL 捕获源身份（旧闭包吃渲染下标，并发缩表后 removeAt 越界崩）；未命中=已被并发移除，静默
+        val normals = vodList.filter { !it.isAdult }
+        val zoneRows = vodList.filter { it.isAdult }
         // 源条数有限（内置+订阅合并数十条），整页随外层 Column 滚动，不做列表回收
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("点播源 · 常规（${normals.size}）", style = MaterialTheme.typography.titleMedium)
             if (normals.isEmpty()) {
                 Text("无点播源", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
             } else {
-                normals.forEach { (index, s) ->
-                    SourceRow(s.name, s.url, s.isAdult, hb(s.url)) { store.removeVodAt(index); refresh() }
+                normals.forEach { s ->
+                    SourceRow(s.name, s.url, s.isAdult, hb(s.url)) { store.removeVodByUrl(s.url); refresh() }
                 }
             }
             if (zoneRows.isNotEmpty()) {
                 Text("专区源 · 仅资源口可见（${zoneRows.size}）", style = MaterialTheme.typography.titleMedium)
-                zoneRows.forEach { (index, s) ->
-                    SourceRow(s.name, s.url, s.isAdult, hb(s.url)) { store.removeVodAt(index); refresh() }
+                zoneRows.forEach { s ->
+                    SourceRow(s.name, s.url, s.isAdult, hb(s.url)) { store.removeVodByUrl(s.url); refresh() }
                 }
             }
             Text("直播源（${liveList.size}）", style = MaterialTheme.typography.titleMedium)
             if (liveList.isEmpty()) {
                 Text("无直播源", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
             } else {
-                liveList.mapIndexed { i, s -> i to s }.forEach { (index, s) ->
-                    SourceRow(s.name, s.url) { store.removeLiveAt(index); refresh() }
+                liveList.forEach { s ->
+                    SourceRow(s.name, s.url) { store.removeLiveByUrl(s.url); refresh() }
                 }
             }
         }

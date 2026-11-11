@@ -404,6 +404,9 @@ fun DetailScreen(
         // TVBox 对标 F1 §8-R2：退全屏复位倍速，防误触残留
         speedPanel = false
         speedX = 1f
+        // 审计 2026-11-11 P0-4：退全屏必解「锁屏」——locked 的解锁钮只在全屏层且方向键被吞，
+        // 残留 locked 会让再进全屏时遥控彻底锁死（只能杀进程），Back 逃生口后立即复位是唯一可靠兜底
+        locked = false
         // 修复（用户 2026-11-05：退全屏后状态栏永久压住顶部 tab）：全局策略状态栏常隐，
         // 这里只恢复导航栏；systemBars() 会把 hide 标志一并清掉导致状态栏再也回不去
         insetCtrl?.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())

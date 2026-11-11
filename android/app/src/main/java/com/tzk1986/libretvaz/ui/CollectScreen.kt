@@ -131,10 +131,13 @@ fun CollectScreen(
             // 用户 2026-11-06 走查 #4：取源表+番号全分片扫描+SWR 分片回灌（磁盘读+JSON 解码）下 IO；
             // 上屏（appendTab 写状态）回 Main 执行，波次派发不变
             val (items, codeHits, swrHits) = withContext(Dispatchers.IO) {
-                val all = store.vodSources().mapIndexed { si, s -> si to s }
+                val vodAll = store.vodSources()
+                val all = vodAll.mapIndexed { si, s -> si to s }
                 // 死源过滤仅在自动维护开启时生效（web collectSources 同款：关掉维护就全源照搜）
                 var its = all.filter { it.second.isAdult == zone && !(settings.autoMaintain && health.isDead(it.second.url)) }
-                its = PerfCore.orderSources(its, settings.siteIdx, { it.first }, { health.of(it.second.url)?.ms })
+                // P0-1 坐标统一：siteIdx=点播池下标，排优先须换算为全表下标（专区池无当前源=-1 不排）
+                val curFull = if (zone) -1 else SiteIdx.poolToFull(vodAll, settings.siteIdx)
+                its = PerfCore.orderSources(its, curFull, { it.first }, { health.of(it.second.url)?.ms })
                 if (srcSel != null && its.any { it.first == srcSel.si })
                     its = its.filter { it.first == srcSel.si } // 指定源生效；源已删则回退聚合
                 if (its.isEmpty()) return@withContext Triple(its, emptyList<Pair<Int, List<VodSummary>>>(), emptyList())

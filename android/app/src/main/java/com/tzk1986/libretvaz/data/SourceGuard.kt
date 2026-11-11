@@ -53,14 +53,15 @@ object SourceGuard {
             pruneDeadSources(store, context)
             refreshSubsIfStale(store, settings, context)
             liveCheck(store, settings, context)
-            val vod = store.vodSources()
-            if (vod.isEmpty()) return
-            var idx = settings.siteIdx.coerceIn(0, (vod.size - 1).coerceAtLeast(0))
-            var s = vod.getOrNull(idx)
+            // P0-1 坐标统一：siteIdx=点播池（vodPool 非专区）下标，守护全链按池定位/写回
+            val pool = store.vodPool()
+            if (pool.isEmpty()) return
+            var idx = settings.siteIdx.coerceIn(0, pool.size - 1)
+            var s = pool.getOrNull(idx)
             val h = s?.let { health.of(it.url) }
             if (s != null && (h == null || !h.ok || System.currentTimeMillis() - h.ts > HealthStore.RECHECK_MS))
                 health.probeOne(repo, s)
-            s = store.vodSources().getOrNull(idx)
+            s = store.vodPool().getOrNull(idx)
             if (s != null && health.isDead(s.url)) {
                 var best = pickBestSource(store, health)
                 if (best < 0) {
@@ -69,7 +70,7 @@ object SourceGuard {
                 }
                 if (best >= 0) {
                     settings.siteIdx = best
-                    val name = store.vodSources().getOrNull(best)?.name
+                    val name = store.vodPool().getOrNull(best)?.name
                     note("当前源已失效，自动切换到「$name」（翻页或重进后生效）")
                 } else note("所有点播源均不可用：请检查网络，或在源管理重新导入")
             }
@@ -84,7 +85,8 @@ object SourceGuard {
         if (removed > 0) {
             store.replaceVod(keep)
             val settings = SettingsStore(context)
-            if (settings.siteIdx >= keep.size) settings.siteIdx = 0
+            // P0-1：钳位按池尺寸（siteIdx=池下标；旧代码按全量会漏钳缩小的池）
+            if (settings.siteIdx >= keep.count { !it.isAdult }) settings.siteIdx = 0
             note("已清理 $removed 个连续失效满 7 天的源（翻页或重进后生效）")
         }
     }
@@ -133,9 +135,10 @@ object SourceGuard {
     }
 
     /** 最快健康非专区源下标（web pickBestSource 等价），无则 -1 */
+    /** 池下标（P0-1：siteIdx 坐标系=vodPool，本函数返回序与池一致，可直接写回 settings.siteIdx） */
     private fun pickBestSource(store: SourceStore, health: HealthStore): Int {
-        val ranked = store.vodSources().withIndex()
-            .filter { (_, s) -> !s.isAdult && health.of(s.url)?.ok == true && (health.of(s.url)?.fails ?: 0) < HealthStore.DEAD_FAILS }
+        val ranked = store.vodPool().withIndex()
+            .filter { (_, s) -> health.of(s.url)?.ok == true && (health.of(s.url)?.fails ?: 0) < HealthStore.DEAD_FAILS }
             .sortedBy { health.of(it.value.url)?.ms ?: Long.MAX_VALUE }
         return ranked.firstOrNull()?.index ?: -1
     }

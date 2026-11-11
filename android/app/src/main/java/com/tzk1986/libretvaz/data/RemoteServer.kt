@@ -12,10 +12,15 @@ import java.util.ArrayDeque
  * RemoteServer 为迷你 HTTP/1.0（GET only），手机扫码开内置 H5 页 → /send 入队 → 电视端收件派发。
  */
 
-/** /send 查询解析：m∈{search,sub}（缺省 search），t URL 解码后非空；非法返回 null */
-fun parseSendQuery(q: String): Pair<String, String>? {
+/**
+ * /send 查询解析：m∈{search,sub}（缺省 search），t URL 解码后非空；
+ * 审计 2026-11-11 P0-3：必须带与本次会话 token 一致的 k——token 只随扫码下发的
+ * 二维码/H5 页传播，同网段盲设备拿不到，杜绝任意设备注入搜索词/换订阅。非法返回 null
+ */
+fun parseSendQuery(q: String, token: String): Pair<String, String>? {
     var mode = "search"
     var text: String? = null
+    var key: String? = null
     for (kv in q.split('&')) {
         val i = kv.indexOf('=')
         if (i < 0) continue
@@ -24,11 +29,26 @@ fun parseSendQuery(q: String): Pair<String, String>? {
         when (k) {
             "m" -> mode = v
             "t" -> if (v.isNotEmpty()) text = v
+            "k" -> key = v
         }
     }
+    if (key != token) return null
     if (mode != "search" && mode != "sub") return null
     val t = text ?: return null
     return mode to t
+}
+
+/** 读 HTTP 请求首行：遇 \n 截断返回（去尾部 \r）；超过 max 字节未见换行或提前断流返回 null
+ *  （审计 P0-3 半开连接/灌流 DoS 防护：不再让 readLine 无限阻塞/无限增长） */
+fun readRequestLine(input: java.io.InputStream, max: Int = 8192): String? {
+    val buf = StringBuilder()
+    while (buf.length <= max) {
+        val b = runCatching { input.read() }.getOrDefault(-1)
+        if (b == -1) return null
+        if (b == '\n'.code) return buf.toString().trimEnd('\r')
+        buf.append(b.toChar())
+    }
+    return null
 }
 
 /** 真实局域网 IPv4 优选（用户规矩：排除虚拟/回环/APIPA，wlan > eth > 其他站点本地地址） */
@@ -59,8 +79,9 @@ class RemoteInbox(private val cap: Int = 8) {
     fun poll(): Pair<String, String>? = synchronized(dq) { if (dq.isEmpty()) null else dq.removeFirst() }
 }
 
-/** 手机 H5 输入页（TVBox 红主题版式）：标题+输入+发送+状态，纯内联无外链 */
-fun renderRemotePage(mode: String): String {
+/** 手机 H5 输入页（TVBox 红主题版式）：标题+输入+发送+状态，纯内联无外链；
+ *  P0-3：fetch 携带会话 token（k=），与二维码同链路下发 */
+fun renderRemotePage(mode: String, token: String): String {
     val title = if (mode == "sub") "电视订阅导入" else "电视远程输入"
     val hint = if (mode == "sub") "粘贴或输入订阅地址" else "输入关键词"
     return """
@@ -75,13 +96,14 @@ border-radius:8px}#st{margin-top:14px;color:#bbb;min-height:20px}</style></head>
 <button onclick="send()">发送</button><div id="st"></div>
 <script>function send(){var v=document.getElementById('t').value.trim();var st=document.getElementById('st');
 if(!v){st.textContent='内容为空';return}st.textContent='发送中…';
-fetch('/send?m=$mode&t='+encodeURIComponent(v)).then(r=>r.json()).then(j=>{st.textContent=j.ok?'已发送到电视':'发送失败'})
+fetch('/send?m=$mode&k=$token&t='+encodeURIComponent(v)).then(r=>r.json()).then(j=>{st.textContent=j.ok?'已发送到电视':'发送失败'})
 .catch(()=>{st.textContent='网络错误'})}</script></body></html>
 """.trimIndent()
 }
 
-/** 迷你 HTTP 服务：GET /remote?m= 出手机页、GET /send 入队；其余 404。daemon 线程，随进程退 */
-class RemoteServer(private val inbox: RemoteInbox, private val port: Int = PORT) {
+/** 迷你 HTTP 服务：GET /remote?m=&k= 出手机页、GET /send?m=&t=&k= 入队；k 非本会话 token 一律拒绝。
+ *  daemon 线程，随进程退；P0-3 加固：SO 读超时 8s + 请求行 8KB 上限，半开/灌流连接不再吊死服务线程 */
+class RemoteServer(private val inbox: RemoteInbox, private val token: String, private val port: Int = PORT) {
     companion object { const val PORT = 9978 }
 
     @Volatile private var running = false
@@ -108,20 +130,27 @@ class RemoteServer(private val inbox: RemoteInbox, private val port: Int = PORT)
     }
 
     private fun handle(s: Socket) {
-        // 注意：readLine 不能经 use 包 BufferedReader——关 reader 会连 socket 一起关掉，响应写不出去
-        val line = java.io.BufferedReader(s.getInputStream().reader()).readLine() ?: return
+        // P0-3：读超时+行长上限（readRequestLine 取代无界 readLine），畸形/灌流请求直接断连
+        runCatching { s.soTimeout = 8000 }
+        val line = readRequestLine(s.getInputStream(), 8192) ?: return
         if (!line.startsWith("GET")) return
         val pathQ = line.split(' ').getOrNull(1).orEmpty()
         val path = pathQ.substringBefore('?', "")
         val query = pathQ.substringAfter('?', "")
+        val key = query.split('&').firstOrNull { it.startsWith("k=") }?.substringAfter("k=")?.let {
+            runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull()
+        }
         when {
             path == "/remote" -> {
-                val mode = if (query.contains("m=sub")) "sub" else "search"
-                respond(s, 200, "text/html;charset=utf-8", renderRemotePage(mode))
+                if (key != token) respond(s, 403, "text/plain;charset=utf-8", "forbidden")
+                else {
+                    val mode = if (query.contains("m=sub")) "sub" else "search"
+                    respond(s, 200, "text/html;charset=utf-8", renderRemotePage(mode, token))
+                }
             }
             path == "/send" -> {
-                val parsed = parseSendQuery(query)
-                if (parsed == null) respond(s, 400, "application/json", """{"ok":0}""")
+                val parsed = parseSendQuery(query, token)
+                if (parsed == null) respond(s, 403, "application/json", """{"ok":0}""")
                 else {
                     inbox.put(parsed.first, parsed.second)
                     respond(s, 200, "application/json", """{"ok":1}""")

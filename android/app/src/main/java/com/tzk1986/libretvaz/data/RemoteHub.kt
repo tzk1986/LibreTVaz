@@ -14,14 +14,18 @@ import java.util.concurrent.CopyOnWriteArraySet
  */
 object RemoteHub {
     private val inbox = RemoteInbox()
-    private val server = RemoteServer(inbox)
+    // P0-3 会话 token：进程级随机 12 hex，只随二维码/H5 页传播——同网段未扫码设备无法伪造 /send
+    private val token: String = runCatching {
+        java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+    }.getOrDefault(System.nanoTime().toString(16))
+    private val server = RemoteServer(inbox, token)
     private val handlers = CopyOnWriteArraySet<(mode: String, text: String) -> Boolean>()
 
     /** 手机可达基址 http://<wlan-ip>:9978；空=未连 WiFi/无局域网地址 */
     @Volatile var base: String = ""
         private set
 
-    fun qrUrl(mode: String): String = "$base/remote?m=$mode"
+    fun qrUrl(mode: String): String = "$base/remote?m=$mode&k=$token"
 
     /** 页面注册命中回调：返回 true=已消费（一条只被一个页面吃掉）；随页面生命周期注销 */
     fun addHandler(h: (mode: String, text: String) -> Boolean): () -> Unit {

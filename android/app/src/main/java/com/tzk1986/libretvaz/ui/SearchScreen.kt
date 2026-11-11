@@ -141,8 +141,9 @@ fun SearchScreen(
         val pi = vocab.index(zone)
         if (pi.size() >= min) return@LaunchedEffect
         // web 同款排序：健康 ms 升序 + 当前源强制排首
+        // P0-1 坐标统一：siteIdx=池下标，先经 poolToFull 换算再取全量表当前源（专区池无当前源=不排优先）
         val all = store.vodSources()
-        val curUrl = all.getOrNull(SettingsStore(context).siteIdx)?.url
+        val curUrl = all.getOrNull(SiteIdx.poolToFull(all, SettingsStore(context).siteIdx))?.url
         val pool = all.filter { it.isAdult == zone && !health.isDead(it.url) }
             .sortedBy { health.of(it.url)?.ms ?: 4000L }
             .sortedByDescending { it.url == curUrl }

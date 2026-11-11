@@ -634,7 +634,9 @@ fun BrowseScreen(
                     if ((presets == null || presets.isEmpty()) && !hasGrps) {
                         PanelLabel("该分类不支持二级筛选（源未提供子分类或扩展字段）", small = false)
                     } else {
-                        val yr = java.time.LocalDate.now().year.toString()
+                        // 审计 2026-11-11 P0-5：minSdk=23 无 core library desugaring，java.time 在 Android 6/7 必崩
+                        // （组合期直调 NoClassDefFoundError）；全仓仅此一处，改老 API 零成本根除
+                        val yr = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR).toString()
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             val label: @Composable (String) -> Unit = { s -> PanelLabel(s) }
                             // ① 地区预设：树里有地区子分类→服务端合并 (a)，否则客户端 Region.of 兜底 (b)；

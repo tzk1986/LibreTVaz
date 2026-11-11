@@ -16,13 +16,15 @@ import androidx.compose.ui.unit.dp
 import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.HealthStore
 import com.tzk1986.libretvaz.data.ProbeRow
+import com.tzk1986.libretvaz.data.SiteIdx
 import com.tzk1986.libretvaz.data.SourceStore
 import kotlinx.coroutines.launch
 
 /**
  * 连接·点播源测速墙（web renderProbe/probeAll 等价）：逐源 ac=list+首分类列表往返，
  * 完成一源原位刷一行；显示按 ms 升序（未测/失败沉底）；点行=切为当前点播源；
- * 测速墙覆盖全量点播源（含专区，行序=vodSources 下标与 siteIdx 对齐）；全部测完后清理死满 7 天的普通源（专区源豁免）。
+ * 测速墙覆盖全量点播源（含专区）；P0-1 坐标统一：siteIdx=点播池下标，点行经 SiteIdx.fullToPool
+ * 换算后上报（专区行不可作首页当前源，点击无效并标「专区」）；全部测完后清理死满 7 天的普通源（专区源豁免）。
  */
 @Composable
 fun ProbeScreen(
@@ -35,7 +37,7 @@ fun ProbeScreen(
     val scope = rememberCoroutineScope()
     val repo = remember { CmsRepository() }
     val health = remember { HealthStore(context) }
-    var sources by remember { mutableStateOf(store.vodSources()) } // 全量含专区：行下标即 siteIdx
+    var sources by remember { mutableStateOf(store.vodSources()) } // 全量含专区：行下标为全量坐标，点行经 fullToPool 换算
     var rows by remember { mutableStateOf<List<ProbeRow>?>(null) } // 与 sources 下标对齐；null=未检测
     var running by remember { mutableStateOf(false) }
     var seq by remember { mutableIntStateOf(0) }
@@ -85,14 +87,16 @@ fun ProbeScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
             items(shown, key = { (i, _) -> i }) { (idx, row) ->
                 val dead = health.isDead(row.url)
+                val adult = sources.getOrNull(idx)?.isAdult == true
                 Row(
-                    modifier = Modifier.fillMaxWidth().clickable { onPick(idx) }.padding(vertical = 10.dp, horizontal = 8.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { SiteIdx.fullToPool(sources, idx)?.let(onPick) }.padding(vertical = 10.dp, horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(row.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (adult) Text("专区·不可设为当前源", color = Color(0xFFFFB74D), style = MaterialTheme.typography.labelMedium)
                             if (dead) Text("✗失效", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelMedium)
                         }
                         Text(row.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis)

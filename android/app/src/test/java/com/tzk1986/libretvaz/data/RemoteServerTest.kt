@@ -9,33 +9,54 @@ class RemoteServerTest {
 
     @Test
     fun parseSendQuery_plain() {
-        assertEquals("search" to "猫", parseSendQuery("m=search&t=%E7%8C%AB"))
+        assertEquals("search" to "猫", parseSendQuery("m=search&t=%E7%8C%AB&k=T", "T"))
     }
 
     @Test
     fun parseSendQuery_modeDefaultsToSearch() {
-        assertEquals("search" to "dog", parseSendQuery("t=dog"))
+        assertEquals("search" to "dog", parseSendQuery("t=dog&k=T", "T"))
     }
 
     @Test
     fun parseSendQuery_subMode() {
-        assertEquals("sub" to "http://a.b/c.json", parseSendQuery("m=sub&t=http%3A%2F%2Fa.b%2Fc.json"))
+        assertEquals("sub" to "http://a.b/c.json", parseSendQuery("m=sub&t=http%3A%2F%2Fa.b%2Fc.json&k=T", "T"))
     }
 
     @Test
     fun parseSendQuery_plusDecodesToSpace() {
-        assertEquals("search" to("a b"), parseSendQuery("m=search&t=a+b"))
+        assertEquals("search" to("a b"), parseSendQuery("m=search&t=a+b&k=T", "T"))
     }
 
     @Test
     fun parseSendQuery_rejectsEmptyText() {
-        assertNull(parseSendQuery("m=search&t="))
-        assertNull(parseSendQuery("m=search"))
+        assertNull(parseSendQuery("m=search&t=&k=T", "T"))
+        assertNull(parseSendQuery("m=search&k=T", "T"))
     }
 
     @Test
     fun parseSendQuery_rejectsUnknownMode() {
-        assertNull(parseSendQuery("m=evil&t=x"))
+        assertNull(parseSendQuery("m=evil&t=x&k=T", "T"))
+    }
+
+    // 审计 2026-11-11 P0-3：/send 必须带与本次会话 token 一致的 k，同网段设备盲打一律拒绝
+    @Test
+    fun parseSendQuery_rejectsWrongOrMissingToken() {
+        assertNull(parseSendQuery("m=search&t=x", "T"))
+        assertNull(parseSendQuery("m=search&t=x&k=WRONG", "T"))
+        assertNull(parseSendQuery("m=search&t=x&k=", "T"))
+    }
+
+    @Test
+    fun readRequestLine_returnsFirstLineTrimmedCr() {
+        val input = "GET /remote?m=search HTTP/1.0\r\nHost: x\r\n".byteInputStream()
+        assertEquals("GET /remote?m=search HTTP/1.0", readRequestLine(input, 8192))
+    }
+
+    @Test
+    fun readRequestLine_capsOversizedAndEof() {
+        val big = ByteArray(10000) { 'a'.code.toByte() } // 无换行的超长请求（半开/灌流 DoS 形态）
+        assertNull(readRequestLine(big.inputStream(), 8192))
+        assertNull(readRequestLine("GET /a".byteInputStream(), 8192)) // 未收到换行即断流
     }
 
     @Test
@@ -72,10 +93,16 @@ class RemoteServerTest {
 
     @Test
     fun renderRemotePage_hasTitleAndSend() {
-        val s = renderRemotePage("search")
+        val s = renderRemotePage("search", "TK1")
         assert(s.contains("电视远程输入")) { "search 页应含标题" }
         assert(s.contains("/send")) { "手机页应 fetch /send" }
-        val t = renderRemotePage("sub")
+        val t = renderRemotePage("sub", "TK2")
         assert(t.contains("电视订阅导入")) { "sub 页应含标题" }
+    }
+
+    // P0-3：内置 H5 页发送时须携带会话 token（随二维码下发，盲设备拿不到）
+    @Test
+    fun renderRemotePage_embedsToken() {
+        assert(renderRemotePage("search", "TK1").contains("k=TK1")) { "手机页 fetch 应带 token" }
     }
 }

@@ -146,7 +146,9 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AGG_MODE, true)
         set(value) = prefs.edit().putBoolean(KEY_AGG_MODE, value).apply()
 
-    /** 当前点播源下标（对应 web fongmi_site_idx；跨页面共享，测速墙点行可切换） */
+    /** 当前点播源下标（对应 web fongmi_site_idx；跨页面共享，测速墙点行可切换）。
+     *  坐标系唯一口径（审计 2026-11-11 P0-1）＝**点播池下标**（`SourceStore.vodPool()`=非专区序），
+     *  全量列表消费方（测速墙/守护/orderSources）经 `SiteIdx.fullToPool/poolToFull` 换算，禁止直接当全量下标用 */
     var siteIdx: Int
         get() = prefs.getInt(KEY_SITE_IDX, 0).coerceAtLeast(0)
         set(value) = prefs.edit().putInt(KEY_SITE_IDX, value.coerceAtLeast(0)).apply()

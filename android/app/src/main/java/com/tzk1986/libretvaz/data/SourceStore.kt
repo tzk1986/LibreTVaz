@@ -66,11 +66,20 @@ class SourceStore(context: Context) {
     private fun isHttp(url: String): Boolean =
         url.startsWith("http://") || url.startsWith("https://")
 
-    fun removeVodAt(index: Int) = mutateVod { list -> list.removeAt(index); true }
+    /** 按 URL 删除（审计 2026-11-11 P0-2）：行闭包捕获源对象身份而非渲染下标，
+     *  点击期间 SourceGuard/Zone 归池/订阅导入并发缩表也不再有 removeAt 越界崩 */
+    fun removeVodByUrl(url: String) = mutateVod { list ->
+        val i = list.indexOfFirst { it.url == url }
+        if (i < 0) false else { list.removeAt(i); true }
+    }
 
     /** 整表替换（健康清理死源后用） */
     fun replaceVod(list: List<VodSource>) = mutateVod { l -> l.clear(); l.addAll(list); true }
-    fun removeLiveAt(index: Int) = mutateLive { list -> list.removeAt(index); true }
+    /** 按 URL 删除直播源（同 P0-2：闭包捕获身份不吃渲染下标） */
+    fun removeLiveByUrl(url: String) = mutateLive { list ->
+        val i = list.indexOfFirst { it.url == url }
+        if (i < 0) false else { list.removeAt(i); true }
+    }
 
     /** 拉取订阅链接并合并入库；返回导入结果。失败抛异常由调用方展示 */
     data class ImportResult(
