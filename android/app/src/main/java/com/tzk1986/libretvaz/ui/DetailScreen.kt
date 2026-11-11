@@ -328,7 +328,8 @@ fun DetailScreen(
     var fsDur by remember { mutableLongStateOf(0L) }
     // TVBox 对标 C4（2026-11-10）：初始态跟随全局档 zoom_pref（1=满屏为 true；2=拉伸时钮显「适配」态）
     var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
-    var repeatOne by remember { mutableStateOf(false) }
+    // TVBox 对标 A2（审计 2026-11-11）：播放模式 0连播/1单集循环/2列表循环——旧 repeatOne 无 UI 入口即此档实现
+    var playMode by remember { mutableStateOf(settings.playMode) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
     // TVBox 对标 F1（2026-11-10）：倍速——speedX 跨换集/换线保留、退全屏复位 1.0（§8-R2）；speedPanel 弹层；speedFocus 面板走焦下标
     var speedX by remember { mutableStateOf(1f) }
@@ -753,12 +754,16 @@ fun DetailScreen(
                     SysCore.ST_END -> {
                         buffering = false
                         prog.clear(itemS.vodId, itemS.sourceKey)
-                        if (repeatOne) { player.seekTo(0); player.playing = true; return } // 单集循环：重播本集不连播
                         val g = lines().getOrNull(line) ?: return
-                        when {
-                            curEp + 1 >= g.list.size -> toast("已播完全部剧集")
-                            !settings.autoNext -> toast("本集结束（自动连播已关，可在选集行改点）")
-                            else -> { toast("本集结束，自动播放下一集"); goEp(1) }
+                        // A2：播完动作走纯函数判定（模式环+autoNext 兜底），单集循环即旧 repeatOne 分支
+                        when (playModeOnEnd(playMode, curEp, g.list.size, settings.autoNext)) {
+                            EndAct.REPLAY -> { player.seekTo(0); player.playing = true }
+                            EndAct.NEXT -> { toast("本集结束，自动播放下一集"); goEp(1) }
+                            EndAct.FIRST -> { toast("列表循环：回到第1集续播"); goEpTo(0) }
+                            EndAct.STOP -> toast(
+                                if (curEp + 1 >= g.list.size) "已播完全部剧集"
+                                else "本集结束（自动连播已关，可在选集行改点）"
+                            )
                         }
                     }
                     else -> {}
@@ -1660,6 +1665,12 @@ fun DetailScreen(
                         }
                         FsAct("比例", if (zoomMode) "画面满屏裁切" else "画面比例适配", active = zoomMode, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
                         FsAct("↺", "重播", res = R.drawable.tvb_v_replay, onFocused = rowFoc) { replayHere() }
+                        // TVBox 对标 A2（审计 2026-11-11）：播放模式钮——点按三档环 连播→单循环→列表循环，持久化跨片生效
+                        FsAct(playModeLabel(playMode), "播放模式：点按循环切换（连播/单集循环/列表循环）", active = playMode != 0, onFocused = rowFoc) {
+                            playMode = playModeNext(playMode)
+                            settings.playMode = playMode
+                            toast("播放模式：${playModeLabel(playMode)}")
+                        }
                         // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）；T-C1 系统档无 codec 选择=置灰
                         FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", off = engineX == 1, onFocused = rowFoc) { toggleHwDecode() }
                         // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）；T-C1 系统档不支持音轨=置灰

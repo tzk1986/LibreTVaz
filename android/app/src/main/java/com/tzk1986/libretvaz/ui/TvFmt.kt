@@ -23,6 +23,22 @@ fun speedLabel(x: Float): String = "%.2f".format(x).trimEnd('0').let { if (it.en
 /** 跳过时长钮文案 MM:SS（零填充，如 60→"01:00"） */
 fun fmtSkip(sec: Long): String = "%02d:%02d".format(sec / 60, sec % 60)
 
+/** A2（审计 2026-11-11）播放模式三档环：0=顺序连播（受 autoNext 约束）/1=单集循环/2=列表循环（末集回绕） */
+fun playModeNext(mode: Int): Int = (mode + 1) % 3
+
+fun playModeLabel(mode: Int): String = when (mode) { 1 -> "单循环"; 2 -> "列表循环"; else -> "连播" }
+
+/** 播完动作：REPLAY 重播本集 / NEXT 下一集 / FIRST 末集回绕首集 / STOP 停下（含列表未回 total=0 防越权） */
+enum class EndAct { REPLAY, NEXT, FIRST, STOP }
+
+fun playModeOnEnd(mode: Int, curEp: Int, total: Int, autoNext: Boolean): EndAct = when {
+    mode == 1 -> EndAct.REPLAY
+    total <= 0 -> EndAct.STOP
+    curEp + 1 < total -> if (mode == 2 || autoNext) EndAct.NEXT else EndAct.STOP
+    mode == 2 -> EndAct.FIRST
+    else -> EndAct.STOP
+}
+
 /** A5（审计 2026-11-11）跳过片头：起播 pos<片头 且 片长>2×片头（短视频不跳）→ 返回跳转毫秒；0=关 */
 fun skipStartJump(pos: Long, dur: Long, introSec: Int): Long? =
     if (introSec <= 0 || dur <= 0) null
