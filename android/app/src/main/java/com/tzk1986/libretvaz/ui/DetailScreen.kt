@@ -331,9 +331,9 @@ fun DetailScreen(
     var skipInDone by remember { mutableStateOf(-1) }
     var skipOutDone by remember { mutableStateOf(-1) }
     var fsDur by remember { mutableLongStateOf(0L) }
-    // TVBox 对标 C4（2026-11-10）：初始态跟随全局档 zoom_pref（1=满屏为 true；2=拉伸时钮显「适配」态）
-    var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
-    var scaleToggled by remember { mutableStateOf(false) }  // B16（审计 2026-11-11）：比例钮动过标记——player 重建后窗按钮态而非 C4 初始档恢复
+    // A10（审计 2026-11-11）：比例三档环 0适配/1裁切/2拉伸（与 zoom_pref/ZOOM_LABELS 同域），初始跟随全局档；
+    // 档态存本会话状态，B16 重建恢复语义天然满足（原 Boolean+scaleToggled 双态撤销）
+    var zoomMode by remember { mutableStateOf(settings.zoomPref.coerceIn(0, 2)) }
     // TVBox 对标 A2（审计 2026-11-11）：播放模式 0连播/1单集循环/2列表循环——旧 repeatOne 无 UI 入口即此档实现
     var playMode by remember { mutableStateOf(settings.playMode) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
@@ -474,12 +474,11 @@ fun DetailScreen(
 
     // ===== TVBox 式动作行（用户 2026-11-10 实拍图裁决：仅 7 钮；倍速/跳过/重置/循环/选集/退出撤 UI，逻辑各归其位） =====
     fun replayHere() { errorHint = null; playAt(line, curEp); toast("重新播放本集") }
+    // A10（审计 2026-11-11）：比例钮三档环 适配→裁切→拉伸→适配（原二档 FILL 不可达）
     fun toggleScale() {
-        zoomMode = !zoomMode
-        scaleToggled = true   // B16：此后重建窗按二档态恢复，不再回落 C4 初始档
-        fsPv?.resizeMode = if (zoomMode) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-        else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-        toast(if (zoomMode) "画面：满屏裁切" else "画面：比例适配")
+        zoomMode = zoomNext(zoomMode)
+        fsPv?.resizeMode = zoomResizeMode(zoomMode)
+        toast("画面：" + ZOOM_LABELS[zoomMode])
     }
     // 双击三分区左右=±15s：seekTo 后借 slideFinal/slideTick 复用居中时间胶囊反馈（同长按快进样式）
     fun doubleSeek(dir: Int) {
@@ -1252,11 +1251,11 @@ fun DetailScreen(
                                 .then(if (winFocused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke) else Modifier),
                         ) {
                             // TVBox 对标 F2+C6：系统档=SurfaceView letterbox 窗，焦点载体同款 view 级配置；
-                            // 缩放初始走 zoomPref（拉伸档系统壳无变形能力=近似 FIT 语义，由比例钮走 FIT↔ZOOM）
+                            // 缩放初始走 zoomPref（A10 三态化后系统壳拉伸档=surface 取满容器，能力补齐）
                             if (engineX == 1) {
                                 SysPlayerView(
                                     ctl = player as SysCtl,
-                                    fill = settings.zoomPref == 1,
+                                    mode = settings.zoomPref,
                                     modifier = Modifier.fillMaxSize().padding(2.dp),
                                     configure = { sv ->
                                         pvRef.value = sv
@@ -1514,21 +1513,18 @@ fun DetailScreen(
             }
         } else {
             // ===== 全屏层＝web fsBar 信息 + TVBox 式面板（2026-11-03 定稿：进度行+动作行；不适用钮隐藏） =====
-            // TVBox 对标 F2+C6：系统档 SurfaceView 窗——尺寸随 zoomMode 钮重算（fill=满屏裁切），黑底 letterbox
+            // TVBox 对标 F2+C6：系统档 SurfaceView 窗——尺寸随 zoomMode 钮重算（A10 三档 适配/裁切/拉伸），黑底 letterbox
             if (engineX == 1) {
-                SysPlayerView(ctl = player as SysCtl, fill = zoomMode, modifier = Modifier.fillMaxSize())
+                SysPlayerView(ctl = player as SysCtl, mode = zoomMode, modifier = Modifier.fillMaxSize())
             } else
             // TVBox 对标 C10（2026-11-10）：渲染方式档变化时 key 触发整视图重建，进全屏即生效
             key(settings.textureView) {
             AndroidView(
                 factory = { ctx -> pvFor(ctx, settings.textureView).apply {
                     this.player = player.exo; useController = false // Exo 分支恒有实例（engineX==0）
-                    // B16（审计 2026-11-11）：重建（引擎切换/整视图 key 重建）后缩放同步——比例钮动过按二档态，
-                    // 未动过才走 C4 全局初始档（默认 0=FIT 与原行为一致）
-                    resizeMode = if (scaleToggled) {
-                        if (zoomMode) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    } else zoomResizeMode(settings.zoomPref)
+                    // B16+A10（审计 2026-11-11）：重建后缩放同步=直接取会话三档态 zoomMode
+                    //（初始即 zoomPref，钮翻过即钮档，scaleToggled 双态撤销）
+                    resizeMode = zoomResizeMode(zoomMode)
                     fsPv = this
                 } },
                 // 硬解/软解/引擎重建：player 换实例须靠 update 重绑，否则全屏黑屏
@@ -1716,7 +1712,9 @@ fun DetailScreen(
                                 pokeFs()
                             }
                         }
-                        FsAct("比例", if (zoomMode) "画面满屏裁切" else "画面比例适配", active = zoomMode, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
+                        // A10（审计 2026-11-11）：比例钮三档环——图标钮 res 优先不显字，档态=非适配红图标+toast 播报
+                        FsAct("比例", "画面比例：当前" + ZOOM_LABELS[zoomMode] + "，点按循环（适配/裁切/拉伸）",
+                            active = zoomMode != 0, res = R.drawable.tvb_v_aspect, onFocused = rowFoc) { toggleScale() }
                         FsAct("↺", "重播", res = R.drawable.tvb_v_replay, onFocused = rowFoc) { replayHere() }
                         // TVBox 对标 A2（审计 2026-11-11）：播放模式钮——点按三档环 连播→单循环→列表循环，持久化跨片生效
                         FsAct(playModeLabel(playMode), "播放模式：点按循环切换（连播/单集循环/列表循环）", active = playMode != 0, onFocused = rowFoc) {

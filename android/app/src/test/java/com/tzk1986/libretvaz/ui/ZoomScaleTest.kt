@@ -19,10 +19,11 @@ class ZoomScaleTest {
         assertEquals(AspectRatioFrameLayout.RESIZE_MODE_FIT, zoomResizeMode(7))
     }
 
+    /** A10（审计 2026-11-11）：比例钮三档环 FIT→ZOOM→FILL（档值与 zoom_pref/ZOOM_LABELS 同域） */
     @Test
-    fun `zoomMode 初始仅满屏档为真`() {
-        assertEquals(false, zoomModeInitial(0))
-        assertEquals(true, zoomModeInitial(1))
-        assertEquals(false, zoomModeInitial(2))
+    fun `zoomNext 三档循环回绕`() {
+        assertEquals(1, zoomNext(0))
+        assertEquals(2, zoomNext(1))
+        assertEquals(0, zoomNext(2))
     }
 }

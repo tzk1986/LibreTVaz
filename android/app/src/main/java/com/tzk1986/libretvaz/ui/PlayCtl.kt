@@ -307,13 +307,13 @@ class SysCtl(private val context: Context) : PlayCtl {
 
 /**
  * 系统档渲染窗（T-C1）：SurfaceView + holder 注入 surface；尺寸=SysCore.surfaceSize 对容器取整
- * （fit 等比居中留黑边 / fill 撑满裁切），父层黑底即 letterbox。configure=焦点载体等 view 级配置钩子
- * （预览窗复刻 PlayerView 分支同款：可焦+按键转交）。
+ * （mode 三档=适配/裁切/拉伸，A10 审计 2026-11-11 随 surfaceSize 三态化），父层黑底即 letterbox。
+ * configure=焦点载体等 view 级配置钩子（预览窗复刻 PlayerView 分支同款：可焦+按键转交）。
  */
 @Composable
 internal fun SysPlayerView(
     ctl: SysCtl,
-    fill: Boolean,
+    mode: Int,
     modifier: Modifier = Modifier,
     configure: (SurfaceView) -> Unit = {},
 ) {
@@ -322,7 +322,7 @@ internal fun SysPlayerView(
     var boxH by remember { mutableIntStateOf(0) }
     val (vw, vh) = ctl.vsize.value
     Box(modifier.onSizeChanged { boxW = it.width; boxH = it.height }, contentAlignment = Alignment.Center) {
-        val (w, h) = if (boxW > 0) SysCore.surfaceSize(boxW, boxH, vw, vh, fill) else 0 to 0
+        val (w, h) = if (boxW > 0) SysCore.surfaceSize(boxW, boxH, vw, vh, mode) else 0 to 0
         if (w > 0 && h > 0) {
             AndroidView(
                 factory = { ctx ->

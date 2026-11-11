@@ -34,15 +34,22 @@ object SysCore {
     fun canSeek(state: Int): Boolean = state == ST_READY || state == ST_END
 
     /**
-     * 渲染表面像素尺寸：fit=等比缩小取小边（letterbox 居中不拉伸）、fill=等比放大取大边（满屏裁切）。
-     * 视频尺寸未知（vw/vh<=0）退化为屏幕尺寸。返回 (宽,高)。
+     * 渲染表面像素尺寸，mode 与 zoom_pref/ZOOM_LABELS 同域（A10 审计 2026-11-11 三态化，原 Boolean fill）：
+     * 0=比例适配（等比取小边 letterbox）、1=满屏裁切（等比取大边超屏裁剪）、2=拉伸充满（surface=容器尺寸非等比拉满）。
+     * 视频尺寸未知（vw/vh<=0）或越界 mode 防御性回落：前者退化为屏幕尺寸、后者按 0。返回 (宽,高)。
      */
-    fun surfaceSize(sw: Int, sh: Int, vw: Int, vh: Int, fill: Boolean): Pair<Int, Int> =
+    fun surfaceSize(sw: Int, sh: Int, vw: Int, vh: Int, mode: Int): Pair<Int, Int> =
         if (vw <= 0 || vh <= 0 || sw <= 0 || sh <= 0) sw to sh
-        else {
-            val s = if (fill) max(sw.toFloat() / vw, sh.toFloat() / vh)
-            else min(sw.toFloat() / vw, sh.toFloat() / vh)
-            (vw * s).roundToInt() to (vh * s).roundToInt()
+        else when (mode) {
+            2 -> sw to sh
+            1 -> {
+                val s = max(sw.toFloat() / vw, sh.toFloat() / vh)
+                (vw * s).roundToInt() to (vh * s).roundToInt()
+            }
+            else -> {
+                val s = min(sw.toFloat() / vw, sh.toFloat() / vh)
+                (vw * s).roundToInt() to (vh * s).roundToInt()
+            }
         }
 
     /**
