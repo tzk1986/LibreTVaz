@@ -42,6 +42,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// A5（审计 2026-11-11）：跳过片头/片尾秒档，两行共用；0=关（默认零打扰）
+val SKIP_LEVELS = listOf(0, 30, 60, 90, 120)
+val SKIP_LABELS = listOf("关闭", "30 秒", "1 分钟", "1 分半", "2 分钟")
+
 /**
  * 设置页网格（web SETTING_DEFS/LAB_DEFS/TAB_META 等价）：每设置一卡「标签+值」，
  * 点击行内切换或弹选择/编辑窗；导航栏卡=功能行显隐+排序（存 tabsJson，点播恒首位在消费侧保证）；
@@ -67,6 +71,8 @@ fun SettingsScreen(
     var histMax by remember { mutableStateOf(store.histMax) }
     var cacheTier by remember { mutableStateOf(store.cacheTier) }
     var zoomPref by remember { mutableStateOf(store.zoomPref) }
+    var skipIntro by remember { mutableStateOf(store.skipIntroSec) }
+    var skipOutro by remember { mutableStateOf(store.skipOutroSec) }
     var winPreview by remember { mutableStateOf(store.winPreview) }
     var renderTex by remember { mutableStateOf(store.textureView) }
     // TVBox 对标 F2+C6（2026-11-10）：播放器引擎两档（0=Exo 默认全链/1=系统 MediaPlayer 轻量壳）；仅点播，进详情页生效
@@ -153,6 +159,9 @@ fun SettingsScreen(
             item { SettingCard("缓存时长", CacheTiers.TIERS[cacheTier].label) { dlg = "cache" } }
             // TVBox 对标 C4（2026-11-10）：画面缩放全局档，详情预览+全屏窗初始态（比例钮循环不受档 2 约束）
             item { SettingCard("画面缩放", ZOOM_LABELS[zoomPref]) { dlg = "zoom" } }
+            // A5（审计 2026-11-11）：片头=起播落窗自动跳该时刻+浮钮手动；片尾=过半剩余入窗跳近结尾触发连播链
+            item { SettingCard("跳过片头", SKIP_LABELS[SKIP_LEVELS.indexOf(skipIntro).coerceAtLeast(0)]) { dlg = "skipIntro" } }
+            item { SettingCard("跳过片尾", SKIP_LABELS[SKIP_LEVELS.indexOf(skipOutro).coerceAtLeast(0)]) { dlg = "skipOutro" } }
             // TVBox 对标 C10（2026-11-10）：点播渲染方式两档直切（SurfaceView 默认/TextureView 纹理合成）；仅点播预览窗+全屏，直播不动
             item { SettingCard("渲染方式", if (renderTex) "TextureView" else "SurfaceView") { renderTex = !renderTex; store.textureView = renderTex } }
             // TVBox 对标 F2+C6（2026-11-10）：点播播放器引擎两档；详情页动作行亦有「Exo/系统」胶囊可当场切换
@@ -222,6 +231,13 @@ fun SettingsScreen(
     if (dlg == "zoom") PickerDialog("画面缩放（进入详情/全屏时的初始画面档）",
         ZOOM_LABELS, zoomPref,
         onDismiss = { dlg = "" }) { i -> zoomPref = i; store.zoomPref = i }
+
+    if (dlg == "skipIntro") PickerDialog("跳过片头（起播在片头窗内自动跳到该时刻；短视频不跳）",
+        SKIP_LABELS, SKIP_LEVELS.indexOf(skipIntro).coerceAtLeast(0),
+        onDismiss = { dlg = "" }) { i -> skipIntro = SKIP_LEVELS[i]; store.skipIntroSec = SKIP_LEVELS[i] }
+    if (dlg == "skipOutro") PickerDialog("跳过片尾（过半后剩余不足该时长=跳近结尾，触发播完连播链）",
+        SKIP_LABELS, SKIP_LEVELS.indexOf(skipOutro).coerceAtLeast(0),
+        onDismiss = { dlg = "" }) { i -> skipOutro = SKIP_LEVELS[i]; store.skipOutroSec = SKIP_LEVELS[i] }
 
     // 弹窗压缩（用户 2026-11-05：标题降字号+拉宽+行高收紧，手机一屏看全）
     val dlgWide = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)

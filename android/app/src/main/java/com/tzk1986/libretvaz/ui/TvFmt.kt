@@ -23,6 +23,16 @@ fun speedLabel(x: Float): String = "%.2f".format(x).trimEnd('0').let { if (it.en
 /** 跳过时长钮文案 MM:SS（零填充，如 60→"01:00"） */
 fun fmtSkip(sec: Long): String = "%02d:%02d".format(sec / 60, sec % 60)
 
+/** A5（审计 2026-11-11）跳过片头：起播 pos<片头 且 片长>2×片头（短视频不跳）→ 返回跳转毫秒；0=关 */
+fun skipStartJump(pos: Long, dur: Long, introSec: Int): Long? =
+    if (introSec <= 0 || dur <= 0) null
+    else { val ms = introSec * 1000L; if (pos < ms && ms * 2 < dur) ms else null }
+
+/** A5：过半后剩余≤片尾窗 → 跳近结尾（触发播完链=自动下一集）；0=关。未过半不跳防起播即落窗 */
+fun skipEndJump(pos: Long, dur: Long, outroSec: Int): Long? =
+    if (outroSec <= 0 || dur <= 0) null
+    else { val ms = outroSec * 1000L; if (pos > dur / 2 && dur - pos <= ms) dur - 1000 else null }
+
 /** 右上角时钟 HH:MM（24h 零填充） */
 fun fmtClock(hour: Int, minute: Int): String = "%02d:%02d".format(hour, minute)
 

@@ -86,6 +86,15 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_ZOOM_PREF, 0).coerceIn(0, 2)
         set(value) = prefs.edit().putInt(KEY_ZOOM_PREF, value.coerceIn(0, 2)).apply()
 
+    /** A5（审计 2026-11-11）跳过片头/片尾秒数：0=关（默认，零打扰）；片头=起播落窗即跳该时刻；片尾=过半后剩余入窗跳近结尾触发播完链 */
+    var skipIntroSec: Int
+        get() = prefs.getInt(KEY_SKIP_INTRO, 0).coerceAtLeast(0)
+        set(value) = prefs.edit().putInt(KEY_SKIP_INTRO, value.coerceAtLeast(0)).apply()
+
+    var skipOutroSec: Int
+        get() = prefs.getInt(KEY_SKIP_OUTRO, 0).coerceAtLeast(0)
+        set(value) = prefs.edit().putInt(KEY_SKIP_OUTRO, value.coerceAtLeast(0)).apply()
+
     /** TVBox 对标 C1（2026-11-10）：窗口预览——关=进详情不自动起播（窗显海报+常驻播放钮，点播放/窗OK=起播并进全屏）；开=现行即进即预览 */
     var winPreview: Boolean
         get() = prefs.getBoolean(KEY_WIN_PREVIEW, true)
@@ -185,6 +194,8 @@ class SettingsStore(context: Context) {
         private const val KEY_TABS = "tabs"
         private const val KEY_SHOW_SOURCE = "show_source"
         private const val KEY_ZOOM_PREF = "zoom_pref"
+        private const val KEY_SKIP_INTRO = "skip_intro_sec"
+        private const val KEY_SKIP_OUTRO = "skip_outro_sec"
         private const val KEY_WIN_PREVIEW = "win_preview"
         private const val KEY_RENDER_TEXTURE = "render_texture"
         private const val KEY_PLAYER_ENGINE = "player_engine"

@@ -322,6 +322,9 @@ fun DetailScreen(
     var fsSeq by remember { mutableIntStateOf(0) }
     // TVBox 式动作行状态（2026-11-03 定稿清单：拖拽进度/重播/单集循环/倍速/画面比例/重置）
     var fsPos by remember { mutableLongStateOf(0L) }
+    // A5（审计 2026-11-11）：片头/片尾自动跳每集消费一次（记下标；换集/换线重置自然生效）
+    var skipInDone by remember { mutableStateOf(-1) }
+    var skipOutDone by remember { mutableStateOf(-1) }
     var fsDur by remember { mutableLongStateOf(0L) }
     // TVBox 对标 C4（2026-11-10）：初始态跟随全局档 zoom_pref（1=满屏为 true；2=拉伸时钮显「适配」态）
     var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
@@ -843,6 +846,14 @@ fun DetailScreen(
                 fsEndTxt = fmtClockHms(e.get(java.util.Calendar.HOUR_OF_DAY), e.get(java.util.Calendar.MINUTE), e.get(java.util.Calendar.SECOND))
             }
             healthySnap.set(player.state == SysCore.ST_READY && player.position > 0)
+            // A5（审计 2026-11-11）：片头落窗自动跳（每集一次）；片尾过半剩余入窗跳近结尾触发播完链。
+            // 滑动预览/拖拽进度中不抢跳（用户意图优先）；非播放态不跳（暂停看片头=不动）
+            if (player.isPlaying && !slide.active && fsDragPos < 0) {
+                val inJ = skipStartJump(fsPos, fsDur, settings.skipIntroSec)
+                if (inJ != null && skipInDone != curEp) { player.seekTo(inJ); skipInDone = curEp }
+                val outJ = skipEndJump(fsPos, fsDur, settings.skipOutroSec)
+                if (outJ != null && skipOutDone != curEp) { player.seekTo(outJ); skipOutDone = curEp }
+            }
             // TVBox 参考样式顶栏数据：分辨率 + 实时码率（1s 与进度同频）
             val vf = player.exo?.videoFormat
             if (vf != null) {
@@ -1549,6 +1560,23 @@ fun DetailScreen(
                         "影片剩余 " + fmtHms((fsDur - shownMs).coerceAtLeast(0L) / 1000) + " | 影片结束 " + fsEndTxt,
                         color = Color(0xE6FFFFFF), fontSize = 15.sp,
                     )
+                }
+            }
+            // A5（审计 2026-11-11）：片头窗内左下浮钮「跳过片头 MM:SS」——点按跳片头末（自动跳同判据，
+            // 跳后/过窗即隐）；fmtSkip 死代码就此激活
+            AnimatedVisibility(
+                visible = fsBar && !locked && settings.skipIntroSec > 0 && skipInDone != curEp &&
+                    fsPos < settings.skipIntroSec * 1000L,
+                enter = fadeIn(), exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 88.dp),
+            ) {
+                Box(
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(TvColors.DetailBtn)
+                        .clickable { player.seekTo(settings.skipIntroSec * 1000L); skipInDone = curEp; pokeFs() }
+                        .semantics { contentDescription = "跳过片头" }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text("跳过片头 ${fmtSkip(settings.skipIntroSec.toLong())}", color = Color.White, style = MaterialTheme.typography.bodySmall)
                 }
             }
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
