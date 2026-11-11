@@ -69,7 +69,7 @@ private fun HomeBtn(label: String, modifier: Modifier = Modifier, tight: Boolean
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
-        color = if (btnFocused) TvColors.Red40 else Color(0x33FFFFFF),
+        color = if (btnFocused) TvColors.Red40 else TvColors.GhostBg,
         border = if (btnFocused) androidx.compose.foundation.BorderStroke(TvColors.StrokeW, TvColors.FocusStroke) else null,
         modifier = modifier.onFocusEvent { btnFocused = it.isFocused },
     ) {
@@ -243,7 +243,7 @@ fun SearchScreen(
                     // 首页 StatCard 同款（labelMedium+白20%半透底，用户 2026-11-05 随顶栏统一）：不再比 tab 高（用户 2026-11-04 对齐首页）
                     Box(
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                            .background(Color(0x33FFFFFF))
+                            .background(TvColors.GhostBg)
                             .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text("全局搜索 · ${if (zone) "资源口" else "点播"}", style = MaterialTheme.typography.labelMedium) }

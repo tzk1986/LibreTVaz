@@ -37,6 +37,23 @@ object TvColors {
     /** 半透黑浮层底（顶/底栏、胶囊共用近似） */
     val Overlay = Color(0xCC000000)
 
+    /** C34（审计 2026-11-11 #34）收敛 token ↓ */
+
+    /** 白 20% 幽灵底（FuncCard/PillButton 2026-11-05 终定；纯黑底上黑半透不可见所以白） */
+    val GhostBg = Color(0x33FFFFFF)
+
+    /** 白 40% 幽灵亮档（YearSort 激活序 / FsAct 关闭态 / 快搜未测点） */
+    val GhostBgStrong = Color(0x66FFFFFF)
+
+    /** 测速状态色（web sp-ok/sp-mid/sp-bad/sp-dim 语义，三套散写色板合一；Player/Probe/FindSource 共用） */
+    val SpeedFast = Color(0xFF66BB6A)
+    val SpeedMid = Color(0xFFFFC107)
+    val SpeedSlow = Color(0xFFEF5350)
+    val SpeedDim = Color(0xFF9E9E9E)
+
+    /** 选中线路旗标黄字（rail 在播线，TVBox flag 高亮语义） */
+    val Selected = Color(0xFFFFEB3B)
+
     /** 2mm 白描边宽度（1mm=短边/576，420dpi 下 2mm≈1.4dp） */
     val StrokeW = 1.5.dp
 

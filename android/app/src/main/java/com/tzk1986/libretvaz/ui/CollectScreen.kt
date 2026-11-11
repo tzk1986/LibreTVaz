@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.foundation.clickable
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -367,9 +368,9 @@ private fun YearSortBtn(order: YearOrder, onClick: () -> Unit) {
     var sortF by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Row(
         modifier = Modifier.onFocusEvent { sortF = it.isFocused }
-            .then(if (sortF) Modifier.border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
+            .then(if (sortF) Modifier.border(TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (sortF) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else if (order == YearOrder.NONE) Color(0x33FFFFFF) else Color(0x66FFFFFF))
+            .background(if (sortF) TvColors.Red40 else if (order == YearOrder.NONE) TvColors.GhostBg else TvColors.GhostBgStrong)
             .clickable(onClick = onClick)
             // C30（审计 2026-11-12）：与同排 TmBtn 32dp 基准等高（原 36dp 混排行高跳档；
             // 18sp 箭头行 24+内衬 6=36，压内衬至 3 再 heightIn 兜底 32）
@@ -392,9 +393,9 @@ private fun SourceColRow(label: String, selected: Boolean, onClick: () -> Unit) 
         modifier = Modifier
             .fillMaxWidth()
             .onFocusEvent { rowF = it.isFocused }
-            .then(if (rowF) Modifier.border(com.tzk1986.libretvaz.ui.theme.TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
+            .then(if (rowF) Modifier.border(TvColors.StrokeW, Color.White, RoundedCornerShape(8.dp)) else Modifier)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (rowF || selected) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else Color.Transparent)
+            .background(if (rowF || selected) TvColors.Red40 else Color.Transparent)
             .clickable(onClick = onClick)
             // C33（审计 2026-11-11 #33）：左源栏整宽单控件行（非行内混排，不受 32dp 等高约束），
             // vertical 9→14 使命中 20 行高+28=48dp

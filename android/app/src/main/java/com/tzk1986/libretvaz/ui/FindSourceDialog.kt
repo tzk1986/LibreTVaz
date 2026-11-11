@@ -20,6 +20,7 @@ import com.tzk1986.libretvaz.data.CacheTiers
 import com.tzk1986.libretvaz.data.CmsParser
 import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.HealthStore
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VodSource
@@ -264,15 +265,17 @@ fun FindSourceDialog(
  *  ●=即时档源接口延迟（绿≤500ms 黄≤1500ms 红=慢/死 灰=未测，用户 2026-11-06）；⚡=后台档首字节（快/中/慢） */
 @Composable
 private fun FindTextRow(hit: VodSummary, onClick: () -> Unit, healthMs: Long?, dead: Boolean, probe: String?) {
+    // C34（审计 2026-11-11 #34）：色值收敛 TvColors——红 E05252→SpeedSlow、绿 4CAF50→SpeedFast
+    //（与 web sp-* 色阶统一，微色差为收敛代价），未测=白40% GhostBgStrong
     val col = when {
-        healthMs == null -> Color(0x66FFFFFF)
-        dead || healthMs > 1500 -> Color(0xFFE05252)
-        healthMs <= 500 -> Color(0xFF4CAF50)
-        else -> Color(0xFFFFC107)
+        healthMs == null -> TvColors.GhostBgStrong
+        dead || healthMs > 1500 -> TvColors.SpeedSlow
+        healthMs <= 500 -> TvColors.SpeedFast
+        else -> TvColors.SpeedMid
     }
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-            .background(Color(0x99000000)).clickable(onClick = onClick)
+            .background(TvColors.ChipBg).clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -298,9 +301,9 @@ private fun FindTextRow(hit: VodSummary, onClick: () -> Unit, healthMs: Long?, d
             Text(
                 "⚡$it", style = MaterialTheme.typography.labelMedium, maxLines = 1,
                 color = when (it) {
-                    "快" -> Color(0xFF4CAF50)
-                    "中" -> Color(0xFFFFC107)
-                    else -> Color(0xFFE05252)
+                    "快" -> TvColors.SpeedFast
+                    "中" -> TvColors.SpeedMid
+                    else -> TvColors.SpeedSlow
                 },
             )
         }

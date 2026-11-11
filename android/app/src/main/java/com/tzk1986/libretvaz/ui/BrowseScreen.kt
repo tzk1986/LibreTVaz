@@ -1071,11 +1071,12 @@ internal fun WallChip(
         // M3 1.4.0 无 focusedContainerColor：焦点亮底折进 containerColor（TVBox focused=40% 白底）；
         // 选中底/描边撤 M3 primaryContainer 紫，统一 TvColors 红（用户 2026-11-09 遗留清理）
         colors = FilterChipDefaults.filterChipColors(
-            containerColor = if (focused) Color(0x66FFFFFF) else Color.Transparent,
+            containerColor = if (focused) TvColors.GhostBgStrong else Color.Transparent,
             selectedContainerColor = TvColors.Red40,
             disabledContainerColor = Color.Transparent,
         ),
-        border = if (focused) BorderStroke(2.dp, Color.White) else BorderStroke(
+        // C34（审计 #34）：焦点描边 2dp→StrokeW token（全 app 描边宽唯一源）
+        border = if (focused) BorderStroke(TvColors.StrokeW, TvColors.FocusStroke) else BorderStroke(
             1.dp,
             if (selected) TvColors.Red else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
         ),
@@ -1104,7 +1105,7 @@ internal fun FuncCard(icon: String?, name: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(10.dp),
-        color = Color(0x33FFFFFF),
+        color = TvColors.GhostBg, // C34（审计 #34）：白 20% 幽灵底 token（2026-11-05 定式）
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -1128,7 +1129,7 @@ internal fun FuncCard(icon: String?, name: String, onClick: () -> Unit) {
 internal fun StatCard(name: String) {
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = Color(0x33FFFFFF), // 用户 2026-11-05：与 FuncCard 同步改白 20%（纯黑底上黑半透不可见）
+        color = TvColors.GhostBg, // 用户 2026-11-05：与 FuncCard 同步白 20%；C34 token 化
     ) {
         Text(
             name,

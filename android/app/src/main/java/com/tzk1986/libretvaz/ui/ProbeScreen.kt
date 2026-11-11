@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tzk1986.libretvaz.data.CmsRepository
 import com.tzk1986.libretvaz.data.HealthStore
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import com.tzk1986.libretvaz.data.ProbeRow
 import com.tzk1986.libretvaz.data.SiteIdx
 import com.tzk1986.libretvaz.data.SourceStore
@@ -97,7 +98,7 @@ fun ProbeScreen(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(row.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (adult) Text("专区·不可设为当前源", color = Color(0xFFFFB74D), style = MaterialTheme.typography.labelMedium)
-                            if (dead) Text("✗失效", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelMedium)
+                            if (dead) Text("✗失效", color = TvColors.SpeedSlow, style = MaterialTheme.typography.labelMedium)
                         }
                         Text(row.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -109,8 +110,9 @@ fun ProbeScreen(
     }
 }
 
+// C34（审计 2026-11-11 #34）：与 speedTagColor 同 token 族，撤散写色值
 private fun probeColor(state: String): Color = when {
-    state.startsWith("OK") -> Color(0xFF66BB6A)
-    state.contains("失败") || state.contains("失效") || state.contains("为空") || state.contains("无数据") -> Color(0xFFEF5350)
-    else -> Color(0xFF9E9E9E)
+    state.startsWith("OK") -> TvColors.SpeedFast
+    state.contains("失败") || state.contains("失效") || state.contains("为空") || state.contains("无数据") -> TvColors.SpeedSlow
+    else -> TvColors.SpeedDim
 }

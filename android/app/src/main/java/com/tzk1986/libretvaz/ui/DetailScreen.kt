@@ -190,7 +190,7 @@ private fun FsAct(
     ) {
         // 用户 2026-11-09 #134：res≠0 用 TVBox 解码矢量图标（vs_30 大小），文字钮保留给跳过/倍速等文本胶囊
         val fg = when {
-            off -> Color(0x66FFFFFF)
+            off -> TvColors.GhostBgStrong
             tint != null -> tint
             active -> TvColors.Red
             else -> Color.White
@@ -1689,7 +1689,7 @@ fun DetailScreen(
                 // 紧凑化修订（用户 2026-11-10 手机实拍）：撤底栏内小时钟行（与右下大时钟重复且占高），
                 // padding/进度盒缩小，按钮行 40dp 触控高——整栏 ~74dp，为右下时钟与退出钮让出空间
                 Column(
-                    modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = tvu(33), vertical = tvu(8)),
+                    modifier = Modifier.fillMaxWidth().background(TvColors.ChipBg).padding(horizontal = tvu(33), vertical = tvu(8)),
                     verticalArrangement = Arrangement.spacedBy(tvu(3)),
                 ) {
                     // 进度行（参考图样式）：当前时间—红细线+圆点拇指—总时长；手指按住即拖（跟手预览、松手 seek）、单击定位；遥控 ←→ 仍走 ±15s（fsKeyMod）
@@ -1856,7 +1856,7 @@ fun DetailScreen(
                                     .border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(TvColors.RadiusDetail))
                                 else Modifier,
                                 contentPadding = PaddingValues(horizontal = tvu(11), vertical = 0.dp)) {
-                                Text("${lg.flag}(${lg.list.size})", color = if (i == line) Color(0xFFFFEB3B) else Color.White, style = MaterialTheme.typography.labelMedium)
+                                Text("${lg.flag}(${lg.list.size})", color = if (i == line) TvColors.Selected else Color.White, style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }

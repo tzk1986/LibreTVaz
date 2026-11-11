@@ -37,18 +37,19 @@ import com.tzk1986.libretvaz.data.LiveSource
 import com.tzk1986.libretvaz.data.LiveStore
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VideoCache
+import com.tzk1986.libretvaz.ui.theme.TvColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** 测速标签配色（对齐 web sp-ok/sp-mid/sp-bad/sp-dim 语义色） */
+/** 测速标签配色（对齐 web sp-ok/sp-mid/sp-bad/sp-dim 语义色；C34 收敛 TvColors token） */
 internal fun speedTagColor(cls: String): Color = when (cls) {
-    "sp-ok" -> Color(0xFF66BB6A)
-    "sp-mid" -> Color(0xFFFFC107)
-    "sp-bad" -> Color(0xFFEF5350)
-    else -> Color(0xFF9E9E9E)
+    "sp-ok" -> TvColors.SpeedFast
+    "sp-mid" -> TvColors.SpeedMid
+    "sp-bad" -> TvColors.SpeedSlow
+    else -> TvColors.SpeedDim
 }
 
 @OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -450,7 +451,7 @@ fun PlayerScreen(
                     num,
                     color = Color.White,
                     fontSize = 64.sp,
-                    modifier = Modifier.align(Alignment.Center).background(Color(0x99000000)).padding(horizontal = 28.dp, vertical = 10.dp),
+                    modifier = Modifier.align(Alignment.Center).background(TvColors.ChipBg).padding(horizontal = 28.dp, vertical = 10.dp),
                 )
             }
         } else {

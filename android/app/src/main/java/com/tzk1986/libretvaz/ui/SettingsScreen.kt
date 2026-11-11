@@ -472,7 +472,7 @@ private fun SettingCard(label: String, value: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().onFocusEvent { rowF = it.isFocused }.clip(RoundedCornerShape(8.dp))
             .then(if (rowF) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier)
-            .background(if (rowF) TvColors.Red40 else Color(0x33FFFFFF))
+            .background(if (rowF) TvColors.Red40 else TvColors.GhostBg)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -556,7 +556,7 @@ private fun Modifier.dlgRow(selected: Boolean = false, vPad: androidx.compose.ui
         .onFocusEvent { rowF = it.isFocused }
         .then(if (rowF) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier)
         .clip(RoundedCornerShape(8.dp))
-        .background(if (rowF) TvColors.Red40 else if (selected) Color(0x66FFFFFF) else Color(0x33FFFFFF))
+        .background(if (rowF) TvColors.Red40 else if (selected) TvColors.GhostBgStrong else TvColors.GhostBg)
         .padding(DlgRowPH, vPad)
 }
 
