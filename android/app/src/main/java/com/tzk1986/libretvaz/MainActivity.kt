@@ -34,6 +34,8 @@ import com.tzk1986.libretvaz.ui.SettingsScreen
 import com.tzk1986.libretvaz.ui.SourcesScreen
 import com.tzk1986.libretvaz.ui.ZoneScreen
 import com.tzk1986.libretvaz.ui.dropCollectMem
+import com.tzk1986.libretvaz.ui.remoteJump
+import com.tzk1986.libretvaz.ui.remoteZone
 import com.tzk1986.libretvaz.ui.theme.LibreTVazTheme
 
 sealed class Screen {
@@ -136,14 +138,12 @@ class MainActivity : ComponentActivity() {
                         val off = RemoteHub.addHandler { mode, text ->
                             if (mode == "sub") remoteSub = text
                             else {
-                                val zone = when (val s = screen) {
-                                    is Screen.Search -> s.zone
-                                    is Screen.Collect -> s.zone
-                                    is Screen.Keep -> s.zone
-                                    is Screen.Hist -> s.zone
-                                    else -> false
-                                }
-                                if (screen !is Screen.Search) screen = Screen.Search(zone)
+                                // A13（审计 2026-11-11）：播放态（Detail/Player）不跳页打断观演，
+                                // 词缓存待进搜索页由既有 remoteKw 消费链自动搜索；池沿 backTo 递归（专区链落专区池）
+                                val zone = remoteZone(screen)
+                                if (remoteJump(screen)) screen = Screen.Search(zone)
+                                else android.widget.Toast.makeText(this@MainActivity,
+                                    "已收远程关键词，进入搜索页自动搜索", android.widget.Toast.LENGTH_LONG).show()
                                 remoteKw = text
                             }
                             true
