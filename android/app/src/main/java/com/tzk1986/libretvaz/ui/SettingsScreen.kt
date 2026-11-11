@@ -66,6 +66,7 @@ fun SettingsScreen(
     var autoLine by remember { mutableStateOf(store.autoLine) }
     var resume by remember { mutableStateOf(store.resumePlay) }
     var qrAuto by remember { mutableStateOf(store.qrAuto) }
+    var ghProxy by remember { mutableStateOf(store.ghProxy) } // E46（审计 2026-11-11）
     var showSource by remember { mutableStateOf(store.showSourceName) }
     var threads by remember { mutableStateOf(store.searchThreads) }
     var histMax by remember { mutableStateOf(store.histMax) }
@@ -150,6 +151,10 @@ fun SettingsScreen(
             item { SettingCard("失败自动换线", onOff(autoLine)) { autoLine = !autoLine; store.autoLine = autoLine } }
             item { SettingCard("跨会话续播", onOff(resume)) { resume = !resume; store.resumePlay = resume } }
             item { SettingCard("扫码自动导入", onOff(qrAuto)) { qrAuto = !qrAuto; store.qrAuto = qrAuto } }
+            // E46（审计 2026-11-11）：gh-proxy 中转兜底可选——订阅 URL 经第三方有 token 泄露面，明示可关
+            item { SettingCard("GitHub 中转兜底", onOff(ghProxy)) { ghProxy = !ghProxy; store.ghProxy = ghProxy } }
+            item { Text("GitHub raw 直连失败时自动经 gh-proxy.com 中转拉取——订阅链接会经第三方（带 token 的私有订阅有泄露风险）；关=直连失败直接报错",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)) }
             // TVBox 对标 C2（2026-11-10）：四墙海报卡源名前缀统一开关
             item { SettingCard("数据源显示", onOff(showSource)) { showSource = !showSource; store.showSourceName = showSource } }
             // TVBox 对标 C1（2026-11-10）：关=进详情窗不起播（海报+常驻播放钮），点播放/窗OK=起播并进全屏

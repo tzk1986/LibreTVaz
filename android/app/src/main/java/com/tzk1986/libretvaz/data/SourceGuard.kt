@@ -19,26 +19,8 @@ import kotlinx.coroutines.sync.withPermit
  */
 object SourceGuard {
 
-    /** 订阅仓库预设（web fongmi.js PRESETS 对齐，源管理页共用；tvyuan=master 分支，main 已 404）。
-     *  后 9 条来自 2026-11-10「极客小盒」接口合集 xlsx：全部经三级实测（本 app 同款协议：
-     *  ac=videolist 搜索有结果 → vod_id 详情取 vod_play_url → 播放地址真拉流验视频流），
-     *  剔除 18+/爬虫主导(type3/csp)/格式不兼容(jsm模板)/vicp穿透域/重复镜像后择优收录。 */
-    val PRESETS = listOf(
-        "noimank 多仓" to "https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json",
-        "Liucn 单仓" to "https://raw.liucn.cc/box/m.json",
-        "Qist 综合" to "https://gh-proxy.com/https://raw.githubusercontent.com/qist/tvbox/master/0821.json",
-        "tvyuan 体检聚合" to "https://gh-proxy.com/https://raw.githubusercontent.com/25175/tvyuan/master/tvbox_collect.json",
-        "51源合集" to "https://raw.githubusercontent.com/fadai9991/tvbox-sub/main/tvbox.json",
-        "Easy涛聚合" to "https://raw.githubusercontent.com/EasyXC/EasyTVbox/refs/heads/main/api/tao.json",
-        "Clun 盒子" to "https://clun.top/box.json",
-        "非凡 1024" to "https://raw.githubusercontent.com/jigedos/1024/master/jsm.json",
-        "zheng 合集" to "https://raw.githubusercontent.com/zheng197600/tvbox/main/0820.json",
-        "平安 2万" to "https://cnb.cool/cnlv/tv/-/git/raw/main/20000.json",
-        "牛角 TV" to "https://raw.githubusercontent.com/niubihu1/tvbox-/main/1.json",
-        "陆城影视" to "https://jianhancloud.cn/lcys/lcjk.json",
-        "letian 盒子" to "https://raw.githubusercontent.com/letian1650/mybox/main/m.json",
-        "猫 map" to "https://raw.githubusercontent.com/supermeguo/BoxRes/main/Myuse/catcr.json",
-    )
+    // E46（审计 2026-11-11）：14 仓预设迁 SubRepos.DEFAULT——清单用户可编（源管理「✎ 编辑预设」），
+    // 守护补录改读 SubRepos.editable(settings.subReposRaw)，不再静默合并不可删的硬编码
 
     private const val BG_FRESH_MS = 60_000L
     private val guardMutex = Mutex()
@@ -93,7 +75,7 @@ object SourceGuard {
     /** 预设订阅补录 + 24h 自动重拉合并（web refreshSubsIfStale 等价） */
     private suspend fun refreshSubsIfStale(store: SourceStore, settings: SettingsStore, context: Context) {
         val have = store.subs().toMutableSet()
-        val missing = PRESETS.map { PerfCore.norm(it.second) }.filter { it !in have }
+        val missing = SubRepos.editable(settings.subReposRaw).map { PerfCore.norm(it.second) }.filter { it !in have }
         if (missing.isNotEmpty()) {
             missing.forEach { addSubPref(context, it) }
             settings.subsTs = 0L

@@ -155,6 +155,16 @@ class SettingsStore(context: Context) {
         get() = prefs.getLong(KEY_LIVE_TS, 0L)
         set(value) = prefs.edit().putLong(KEY_LIVE_TS, value).apply()
 
+    /** E46（审计 2026-11-11）：订阅仓库预设清单用户可编（行式 名称\tURL；空=未初始化回退 SubRepos.DEFAULT） */
+    var subReposRaw: String
+        get() = prefs.getString(KEY_SUB_REPOS, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_SUB_REPOS, value).apply()
+
+    /** E46：GitHub raw 直连失败时自动经 gh-proxy.com 中转兜底（订阅 URL 会经第三方，可关） */
+    var ghProxy: Boolean
+        get() = prefs.getBoolean(KEY_GH_PROXY, true)
+        set(value) = prefs.edit().putBoolean(KEY_GH_PROXY, value).apply()
+
     /** 首页点播墙聚合模式（对应 web fongmi_agg；首启默认聚合=用户要求，偏离 web 代码默认单源；用户在源弹窗选单源后记住） */
     var aggMode: Boolean
         get() = prefs.getBoolean(KEY_AGG_MODE, true)
@@ -187,6 +197,8 @@ class SettingsStore(context: Context) {
         private const val KEY_BUILTIN_SEED = "builtin_seed"
         private const val KEY_LIVE_SEED = "live_seed"
         private const val KEY_AUTO = "auto_maintain"
+        private const val KEY_SUB_REPOS = "sub_repos"
+        private const val KEY_GH_PROXY = "gh_proxy"
         private const val KEY_SUBS_TS = "subs_ts"
         private const val KEY_LIVE_TS = "live_ts"
         private const val KEY_PROXY = "proxy_url"

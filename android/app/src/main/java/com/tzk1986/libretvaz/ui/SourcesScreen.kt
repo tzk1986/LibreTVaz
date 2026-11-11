@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -20,6 +21,7 @@ import com.tzk1986.libretvaz.data.LiveSource
 import com.tzk1986.libretvaz.data.SettingsStore
 import com.tzk1986.libretvaz.data.SourceGuard
 import com.tzk1986.libretvaz.data.SourceStore
+import com.tzk1986.libretvaz.data.SubRepos
 import com.tzk1986.libretvaz.data.VodSource
 import com.tzk1986.libretvaz.data.perf.PerfCore
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +32,7 @@ import kotlinx.coroutines.withContext
  * 源管理页（web drawSrcMgr 等价）：顶部四按钮[添加内置已测源/立即更新订阅/自动维护开关/清除所有点播源]；
  * 守护语义提示行（订阅 24h 重拉·死 3 次标失效满 7 天移除·当前源失效自动切最快健康源跳过专区）；
  * 列表三分组=点播·常规 / 专区·仅资源口可见（非空才显示）/ 直播，行内健康徽标 ✓ms / ✗失效。
- * 订阅预设复用 SourceGuard.PRESETS（单一事实源防漂移）。
+ * 订阅预设=SubRepos.editable(用户可编，默认种子 SubRepos.DEFAULT 14 仓)——守护补录与本页同一事实源。
  */
 @Composable
 fun SourcesScreen(
@@ -55,6 +57,11 @@ fun SourcesScreen(
     var showQr by remember { mutableStateOf(false) }
     var confirmSub by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    // E46：订阅预设可编（repos=生效清单；editDraft=弹窗内草稿，保存才写 prefs）
+    var repos by remember { mutableStateOf(SubRepos.editable(settings.subReposRaw)) }
+    var showRepos by remember { mutableStateOf(false) }
+    var editDraft by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    var repoUrlDraft by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
@@ -168,14 +175,20 @@ fun SourcesScreen(
             TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
             TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), onClick = { showQr = true }) { Text("📱 扫码导入") }
         }
-        // 订阅仓库预设（复用 SourceGuard.PRESETS 单一事实源）：点击即填入并导入，免手输长 URL
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SourceGuard.PRESETS.forEach { (pname, purl) ->
+        // E46（审计 2026-11-11）：订阅仓库预设用户可编（SubRepos.editable=自定义或默认 14 仓）：
+        // 点击即填入并导入，免手输长 URL；「✎ 编辑预设」可删/增/恢复默认（守护补录同读此清单，删=不再回填）
+        // 14 仓+编辑钮超一屏宽，补横向滚动防裁剪（原 Row 溢出右缘即被裁）
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            repos.forEach { (pname, purl) ->
                 TmBtn(
                     enabled = !busy,
                     onClick = { importUrl = purl; doImport(purl) },
                 ) { Text(pname) }
             }
+            TmBtn(onClick = { editDraft = SubRepos.editable(settings.subReposRaw).toMutableList(); showRepos = true }) { Text("✎ 编辑预设") }
         }
         // 站单备份文件导入（无源版救急）：格式同 assets=[[名称,地址],…]，点播/专区二选一按钮分流
         Text("备份文件恢复（无源版导入私有站单）", style = MaterialTheme.typography.titleSmall)
@@ -256,6 +269,63 @@ fun SourcesScreen(
     }
 
     if (showQr) RemoteQrDialog(mode = "sub", onDismiss = { showQr = false })
+
+    // E46：订阅预设编辑——删=守护不再补录；＋=把上方「配置链接」框 URL 加为预设；恢复默认=回内置 14 仓
+    if (showRepos) TmDialog(
+        onDismissRequest = { showRepos = false },
+        confirmButton = {
+            TmBtn(onClick = {
+                settings.subReposRaw = SubRepos.serialize(editDraft)
+                repos = SubRepos.editable(settings.subReposRaw)
+                showRepos = false
+                message = "已保存订阅预设（${repos.size} 个）"
+            }) { Text("保存") }
+        },
+        dismissButton = { TmBtn(onClick = { showRepos = false }) { Text("取消") } },
+        title = {
+            Column {
+                Text("编辑订阅预设仓库", style = MaterialTheme.typography.titleMedium)
+                Text("删除后自动维护不再补录该仓订阅；底部输入 URL「＋ 添加」入预设（名称取 host）；「恢复默认」回到内置 14 仓",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                editDraft.forEachIndexed { i, (n, u) ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(n, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                            Text(u, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 1)
+                        }
+                        TmBtn(onClick = { editDraft = editDraft.toMutableList().also { it.removeAt(i) } }) { Text("删除") }
+                    }
+                }
+                if (editDraft.isEmpty()) Text("清单为空：守护将不自动补录任何订阅仓库", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                // 弹窗内自带 URL 输入（页面配置链接框被弹窗遮挡不可填）；名称自动取 host
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = repoUrlDraft,
+                        onValueChange = { repoUrlDraft = it },
+                        label = { Text("新订阅仓库 URL") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).height(TmFieldHeight),
+                    )
+                    TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), onClick = {
+                        val u = repoUrlDraft.trim()
+                        if (u.isBlank()) message = "请先填入要收藏的订阅 URL"
+                        else {
+                            editDraft = SubRepos.add(editDraft, u.substringAfter("://").substringBefore("/"), u)
+                            repoUrlDraft = ""
+                        }
+                    }) { Text("＋ 添加") }
+                    TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), onClick = { editDraft = SubRepos.DEFAULT }) { Text("恢复默认") }
+                }
+            }
+        },
+    )
 
     confirmSub?.let { u ->
         TmDialog(

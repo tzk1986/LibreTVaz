@@ -102,12 +102,15 @@ class SourceStore(context: Context) {
         if (u.isNotBlank() && list.none { it == u }) { list.add(u); prefs.edit().putString(KEY_SUBS, JSONArray(list).toString()).apply() }
     }
 
-    /** raw.githubusercontent 直连失败自动换 gh-proxy 前缀（web A5 doImport getSub 等价） */
+    /** raw.githubusercontent 直连失败自动换 gh-proxy 前缀（web A5 doImport getSub 等价）。
+     *  E46（审计 2026-11-11）：中转会把订阅 URL 交给第三方（token 型订阅有泄露面），
+     *  开关 gh_proxy（SettingsStore，默认开维持现行为）关闭时不再兜底、直连失败即报错 */
     private suspend fun getSub(u: String): String = withContext(Dispatchers.IO) {
         try {
             Http.get(PerfCore.norm(u), timeoutMs = 20000)
         } catch (e: Exception) {
-            if (Regex("^https://raw\\.githubusercontent\\.com/", RegexOption.IGNORE_CASE).matches(u))
+            val ghOn = app.getSharedPreferences("libretvaz", Context.MODE_PRIVATE).getBoolean("gh_proxy", true)
+            if (ghOn && Regex("^https://raw\\.githubusercontent\\.com/", RegexOption.IGNORE_CASE).matches(u))
                 Http.get("https://gh-proxy.com/$u", timeoutMs = 20000)
             else throw e
         }
