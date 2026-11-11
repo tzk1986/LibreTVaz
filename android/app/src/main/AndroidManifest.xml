@@ -2,14 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- E47（审计 2026-11-11 #47）：BrowseScreen 网络指纹/LineSpeed 测速直调 ConnectivityManager，
+         原靠库 manifest 合并隐式获得，显式声明防依赖移除后静默失权 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- TV 特性声明为可选：同一 APK 兼顾安卓投影仪（触屏/普通启动器） -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- E43（审计 2026-11-11 #43）：关云备份/设备迁移——源库与订阅 URL 属隐私数据不随 Auto-Backup 上云；
+         E45（#45）：点播源大量为 http 明文站点，usesCleartextTraffic 维持显式 true 不扩大（未加 networkSecurityConfig 白名单） -->
     <application
         android:name=".App"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:banner="@drawable/tv_banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

@@ -11,4 +11,11 @@ vitest-results.json
 .mimosa/
 .zcode/
 .codebuddy/
+.claude/
+.cany-tvbox/
 generated-images/
+docs/superpowers/
+
+# 构建产物与崩溃转储（E42 审计 2026-11-11：私有 assets 保护从 .git/info/exclude 落仓库级）
+*.apk
+*.stackdump
