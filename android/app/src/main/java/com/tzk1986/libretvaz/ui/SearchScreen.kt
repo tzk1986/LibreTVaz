@@ -212,7 +212,7 @@ fun SearchScreen(
     // 遥控无键可输）：36 键改「⌨键盘」钮手动开合，默认=非触屏开/触屏关；系统 IME 真弹出时自动收起我方键盘防双键盘
     val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var kbShow by remember { mutableStateOf(!hasTouch) }
-    val swDp = LocalConfiguration.current.screenWidthDp
+    val swDp = canvasWdp() // P1-4：断点用画布逻辑宽（投影档 cfg dp 与画布错配 4 倍）
     val leftW = if (swDp >= 820) 300.dp else 260.dp
     val rightW = if (swDp >= 820) 200.dp else 170.dp
 

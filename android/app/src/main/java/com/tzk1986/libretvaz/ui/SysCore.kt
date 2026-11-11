@@ -50,4 +50,26 @@ object SysCore {
      * 需上层设完后回起；暂停中直接设无副作用。返回 (倍率, 是否需要回起播放)。
      */
     fun speedPlan(rate: Float, playing: Boolean): Pair<Float, Boolean> = rate to playing
+
+    /** P1-7（审计 2026-11-11）：AudioManager 焦点事件归一 */
+    enum class Fc { GAIN, LOSS, LOSS_TRANSIENT, LOSS_TRANSIENT_CAN_DUCK }
+
+    /** 焦点动作：0 不动 / 1 暂停保焦点（短暂 loss，待 GAIN 续）/ 2 续播 / 3 暂停并释放焦点（永久 loss 不自动续） */
+    const val F_NOOP = 0
+    const val F_PAUSE = 1
+    const val F_RESUME = 2
+    const val F_PAUSE_ABANDON = 3
+
+    /**
+     * 焦点事件→动作裁决（纯函数）：wantPlay=播放意图（含缓冲中未出声），第二返回值=新「焦点暂停」标记
+     * （true=GAIN 到达自动续播；短暂 LOSS 只暂停在播者、重复事件不双暂停；永久 LOSS 清标记撤自动续；
+     * 用户自己暂停的焦点回来不擅自续播；视频场景 CAN_DUCK 不闪避降音量、直接暂停）。
+     */
+    fun focusPlan(ev: Fc, wantPlay: Boolean, pausedByFocus: Boolean): Pair<Int, Boolean> = when (ev) {
+        Fc.GAIN -> if (pausedByFocus) F_RESUME to false else F_NOOP to pausedByFocus
+        Fc.LOSS -> if (pausedByFocus) F_NOOP to false
+        else if (wantPlay) F_PAUSE_ABANDON to false else F_NOOP to false
+        Fc.LOSS_TRANSIENT, Fc.LOSS_TRANSIENT_CAN_DUCK ->
+            if (wantPlay && !pausedByFocus) F_PAUSE to true else F_NOOP to pausedByFocus
+    }
 }

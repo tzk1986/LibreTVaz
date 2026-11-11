@@ -3,6 +3,9 @@ package com.tzk1986.libretvaz.ui
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -299,6 +302,7 @@ fun DetailScreen(
     var speeds by remember { mutableStateOf<List<Long?>?>(null) }
     var probeSeq by remember { mutableIntStateOf(0) }
     var autoSrcTried by remember { mutableStateOf(false) }
+    var subOn by remember { mutableStateOf(false) } // P1-6：当前是否有字幕轨开启（钮高亮）
     // C1 修复：初值改 false——播放器未 load 时不该显「缓冲中」（旧初值 true 是"进页即起播"时代的加载反馈，
     // 预览关待播态下 player 永不发事件，文案恒挂=误判成"关预览仍起播"）
     var buffering by remember { mutableStateOf(false) }
@@ -383,12 +387,15 @@ fun DetailScreen(
         // 下一集预取+带宽余量闸（用户 2026-11-06 批准；实机复测发现慢线预取抢当前播放带宽反噬换集速度）：
         // 仅当当前线实测吞吐 ≥ 2×节目码率（A4）才预取；未测/判死/码率未知一律跳过，绝不与播放抢流。
         // T-C1：预取走 Exo 的 VideoCache 本地代理，系统档不命中该缓存=无收益，跳过
+        // P1-1（审计 2026-11-11）：LineSpeed.cached 盘回灌（miss 时读文件+JSON）移出主线程
         linkOf(l, e + 1)?.let { next ->
             val lk = LineSpeed.key(itemS.sourceKey, itemS.vodId, e)
-            val kbps = LineSpeed.cached(lk)?.getOrNull(l)
-            val bps = LineSpeed.cachedBps(lk)?.getOrNull(l)
-            if (player.exo != null && kbps != null && kbps > 0 && bps != null && bps > 0 && kbps * 1024 >= 2 * bps) {
-                VodPreload.preload(context, next)
+            scope.launch(Dispatchers.IO) {
+                val kbps = LineSpeed.cached(lk)?.getOrNull(l)
+                val bps = LineSpeed.cachedBps(lk)?.getOrNull(l)
+                if (player.exo != null && kbps != null && kbps > 0 && bps != null && bps > 0 && kbps * 1024 >= 2 * bps) {
+                    VodPreload.preload(context, next)
+                }
             }
         }
     }
@@ -518,6 +525,38 @@ fun DetailScreen(
         val f = gr.getTrackFormat(i)
         val lbl = f.label?.takeIf { it.isNotEmpty() } ?: f.language?.takeIf { it.isNotEmpty() }
         toast("已切音轨 " + (lbl ?: "${i + 1}/${flat.size}"))
+    }
+
+    fun toggleSubtitle() {
+        // P1-6（审计 2026-11-11）：字幕轨轮切＝对标 TVBox/Emby 标配（旧全项目无文本轨处理）。
+        // 档序：关→轨0→…→轨N→关（subNext 纯函数+单测）；关=禁用 TRACK_TYPE_TEXT（清 override 会被
+        // 自动选轨按语言重新抢选，禁用才真关）；Exo 独有，系统档钮已置灰。无轨流仅提示不动参数
+        val ex = player.exo ?: return
+        val flat = ex.currentTracks.groups
+            .filter { it.type == androidx.media3.common.C.TRACK_TYPE_TEXT && it.isSupported }
+            .flatMap { gr -> (0 until gr.length).filter { gr.isTrackSupported(it) }.map { idx -> gr to idx } }
+        if (flat.isEmpty()) { toast("该流无字幕轨"); return }
+        val p0 = ex.trackSelectionParameters
+        val disabled = p0.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_TEXT)
+        var cur = -1
+        if (!disabled) {
+            flat.forEachIndexed { k, pair ->
+                if (cur >= 0) return@forEachIndexed
+                val ov = p0.overrides[pair.first.mediaTrackGroup]
+                if (ov != null) { if (pair.second in ov.trackIndices) cur = k }
+                else if (pair.first.isTrackSelected(pair.second)) cur = k
+            }
+        }
+        cur = subNext(cur, flat.size)
+        val b = p0.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, cur < 0)
+        if (cur >= 0) {
+            val (gr, i) = flat[cur]
+            b.setOverrideForType(androidx.media3.common.TrackSelectionOverride(gr.mediaTrackGroup, i))
+            val f = gr.getTrackFormat(i)
+            toast("字幕：${subLabel(f.label, f.language, cur)}")
+        } else toast("字幕已关")
+        subOn = cur >= 0
+        ex.trackSelectionParameters = b.build()
     }
 
     // ===== 换源（用户 2026-11-03：手动换源改弹框＝FindSourceDialog matchBest；此函数仅剩 autoSrc 链路：全源找同名直切首个） =====
@@ -770,7 +809,8 @@ fun DetailScreen(
         tried = setOf(line)
         speeds = null
         errText = null
-        val cached = repo.detailCached(source, itemS.vodId)
+        // P1-1（审计 2026-11-11）：详情盘读下沉 IO（LaunchedEffect 默认 Main，旧=进页主线程读文件+解码）
+        val cached = withContext(Dispatchers.IO) { repo.detailCached(source, itemS.vodId) }
         val paintedCached = cached != null && cached.lines.isNotEmpty()
         if (paintedCached) paint(cached!!, pendingResume)
         val d = repo.detail(source, itemS.vodId)
@@ -834,6 +874,17 @@ fun DetailScreen(
             player.removeCb(listener); player.release()
         }
     }
+    // P1-7（审计 2026-11-11）：退后台=暂停（回桌面/切他 app/息屏触发 ON_STOP，播放页无观察=旧后台续响根因）。
+    // 两引擎统一走 PlayCtl.playing=false（Exo 弃焦+暂停、Sys 手挂弃焦）；回前台不自动续——「后台续听」
+    // 开关需另行确认，本期从简手动复播。键含 player：硬软解/引擎切换重建后观察自动换绑
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val obs = LifecycleEventObserver { _, ev ->
+            if (ev == Lifecycle.Event.ON_STOP && player.isPlaying) player.playing = false
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     // 分层返回（用户 2026-11-06 两档定稿）：面板→关面板→控件亮则只隐控件→再按才退全屏→回墙
     BackHandler {
         when {
@@ -846,6 +897,7 @@ fun DetailScreen(
     }
     // TVBox 对标 F1：倍速参数跟随 player——重建（硬软解/引擎切换）时速率丢，effect 兜底重放
     // （T-C1 改走 ctl.setSpeed：系统档=setPlaybackParams+播放中自动暂停回起，见 SysCore.speedPlan）
+    LaunchedEffect(player) { subOn = false } // P1-6：播放器重建（硬软解/引擎切换）字幕选择清零重选
     LaunchedEffect(player, speedX) {
         player.setSpeed(speedX)
     }
@@ -1088,15 +1140,27 @@ fun DetailScreen(
                 }
                 Box(Modifier.fillMaxSize().background(Color(0xB3000000))) // 压暗层（蓝本实拍模糊清晰可辨，70% 黑保文字对比度）
                 Column(modifier = Modifier.fillMaxSize().padding(horizontal = tvu(50), vertical = tvu(20)), verticalArrangement = Arrangement.spacedBy(tvu(10))) {
-                    // topLayout：左预览窗 + 右信息列（activity_detail 双栏）
-                    Row(horizontalArrangement = Arrangement.spacedBy(tvu(20))) {
+                    // topLayout：左预览窗 + 右信息列（activity_detail 双栏）。
+                    // P1-5（审计 2026-11-11）：!wide 时双 fillMaxWidth 子项信息列分得 0 宽整列消失
+                    // （现被 sensorLandscape 锁掩盖，解锁竖屏/分屏即触发）——窄宽改 Column 纵排
+                    // RowColumnScope 非公开 API 不能做泛型接收者——改双 Modifier 参数：
+                    // weight 在 Row/Column 各自 scope 就地调用后传入，内容块只消费 winMod/infoMod
+                    @Composable
+                    fun TopLayout(content: @Composable (winMod: Modifier, infoMod: Modifier) -> Unit) {
+                        if (wide) Row(horizontalArrangement = Arrangement.spacedBy(tvu(20))) {
+                            content(Modifier.width(winW), Modifier.weight(1f).height(winW * 9f / 16f))
+                        } else Column(verticalArrangement = Arrangement.spacedBy(tvu(10))) {
+                            content(Modifier.fillMaxWidth(), Modifier.weight(1f, fill = false).fillMaxWidth())
+                        }
+                    }
+                    TopLayout { winMod, infoMod ->
                         // TVBox 复刻（用户 2026-11-09 裁决①）：窗口模式关 Media3 内建控制器——
                         // 视频窗=可聚焦预览块，OK/点按=进全屏，←→=±15s（此前 OK 被内建控制器吞掉的根因）；
                         // 焦点态=透明底+2mm 白描边（button_detail_preview selector 实锤）
                         // 白描边画在外层 Box：PlayerView 的 SurfaceView 在窗口最上层打洞，描边加在
                         // AndroidView 层会被视频盖掉（装机走查实证）→ surface 内缩 2dp 露出边框
                         Box(
-                            modifier = (if (wide) Modifier.width(winW) else Modifier.fillMaxWidth())
+                            modifier = winMod
                                 .aspectRatio(16f / 9f)
                                 .background(Color.Black)
                                 // 焦点载体=PlayerView（view 级，见上 Ruling）；Box 只做触摸点击=进全屏，
@@ -1217,8 +1281,8 @@ fun DetailScreen(
                     // 右信息列（蓝本右列：标题 ts_30 bold→元信息 ts_18→演员/导演→简介 ts_16 maxLines4
                     // 行距1.1→Spacer 吃余量→动作行；列高=窗高，全文走「简介」弹窗）
                     Column(
-                        modifier = if (wide) Modifier.weight(1f).height(winW * 9f / 16f)
-                        else Modifier.fillMaxWidth(),
+                        // P1-5：TopLayout 窄宽=Column——winMod/infoMod 在各自 scope 调好 weight（宽=余宽限窗高/窄=余高不填满防压动作行）
+                        modifier = infoMod,
                         verticalArrangement = Arrangement.spacedBy(tvu(4)),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(8))) {
@@ -1511,12 +1575,20 @@ fun DetailScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        // 用户 2026-11-10 实拍图裁决：按钮行只留 7 钮（上集/下集/播放/比例/重播/硬软解/音轨）。
-                        // 锁→左中、退出→右中、时钟→右下；跳过/循环/倍速/选集/重置钮撤下（逻辑与键盘路径保留）
+                        // 用户 2026-11-10 实拍图裁决：按钮行只留 7 钮。锁→左中、退出→右中、时钟→右下；跳过/循环/重置撤下。
+                        // 2 次放权恢复：倍速（F1 11-10 裁决）、选集（P1-8 11-11 审计批准——fsEpPanel 面板曾无入口=死码，
+                        // 全屏选集必须退全屏是功能缺口；对标 TVBox 底栏标配）
                         // OK 放行判据引用计数（用户 2026-11-10）：任一钮含焦即>0，钮间移焦 +1/−1 顺序无关
                         val rowFoc: (Boolean) -> Unit = { d -> fsRowFocusN.intValue = (fsRowFocusN.intValue + (if (d) 1 else -1)).coerceAtLeast(0) }
                         FsAct("上集", "上一集", off = curEp <= 0, res = R.drawable.tvb_v_prev, onFocused = rowFoc) { goEp(-1) }
                         FsAct("下集", "下一集", off = total > 0 && curEp >= total - 1, res = R.drawable.tvb_v_next, onFocused = rowFoc) { goEp(1) }
+                        // P1-8 选集钮：接通右侧半透明集数网格（打开=自动对齐当前集，十字键选，Enter/点选即播，Back 关）
+                        FsAct(if (fsEpPanel) "选集▣" else "选集", "打开/关闭选集面板", active = fsEpPanel, onFocused = rowFoc) {
+                            // 与倍速面板互斥（按键分发 speedPanel 优先，同开会遮断选集走焦）
+                            speedPanel = false
+                            fsEpPanel = !fsEpPanel
+                            if (fsEpPanel) pokeFs()
+                        }
                         // 用户 2026-11-04：暂停态显示红色播放键，其余统一白色字形
                         // U+23F8 在 Android emoji 字体下无视 VS15 恒渲橙色，改用文字双竖条 ❚❚
                         FsAct(if (playing) "❚❚" else "▶", if (playing) "暂停" else "播放",
@@ -1528,6 +1600,7 @@ fun DetailScreen(
                         FsAct(if (speedX == 1f) "倍速" else "x" + speedLabel(speedX), "播放倍速",
                             active = speedX != 1f, onFocused = rowFoc) {
                             speedPanel = !speedPanel
+                            if (speedPanel) fsEpPanel = false // P1-8 互斥（同上）
                             if (speedPanel) {
                                 speedFocus = SPEED_OPTIONS.indexOfFirst { it == speedX }.coerceAtLeast(0)
                                 pokeFs()
@@ -1539,6 +1612,8 @@ fun DetailScreen(
                         FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", off = engineX == 1, onFocused = rowFoc) { toggleHwDecode() }
                         // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）；T-C1 系统档不支持音轨=置灰
                         FsAct("音轨", "切换音轨", res = R.drawable.tvb_v_audio, off = engineX == 1, onFocused = rowFoc) { toggleAudioTrack() }
+                        // P1-6（审计 2026-11-11）：字幕轮切钮（含「关」档，toast 显轨标签）；系统档不支持=置灰（同音轨）
+                        FsAct("字幕", "切换字幕轨", active = subOn, off = engineX == 1, onFocused = rowFoc) { toggleSubtitle() }
                         // TVBox 对标 F2+C6：播放器引擎胶囊钮（Exo=全功能/系统=轻量壳，切换续位重播，见 toggleEngine）
                         FsAct(if (engineX == 1) "系统" else "Exo", if (engineX == 1) "当前系统播放器，点击切回 Exo" else "当前 Exo 播放器，点击切系统播放器", onFocused = rowFoc) { toggleEngine() }
                     }

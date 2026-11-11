@@ -1,6 +1,7 @@
 package com.tzk1986.libretvaz.ui
 
 import android.content.Context
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
@@ -127,6 +128,56 @@ class SysCtl(private val context: Context) : PlayCtl {
     private var rate = 1f
     private var released = false
 
+    // P1-7（审计 2026-11-11）：系统档手挂音频焦点——MediaPlayer 无 Exo handleAudioFocus 的自动托管，
+    // 不挂=来电/他人出声重叠。裁决纯逻辑在 SysCore.focusPlan（单测覆盖），此处只做 API 桥接：
+    // 起播申请、暂停/播完/释放放弃；短暂 LOSS 暂停保焦待 GAIN 续播，永久 LOSS 弃焦不自动续
+    private val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private var focusReq: android.media.AudioFocusRequest? = null // API26+ 句柄，弃焦须同对象
+    private var pausedByFocus = false
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { ev ->
+        val fc = when (ev) {
+            AudioManager.AUDIOFOCUS_GAIN -> SysCore.Fc.GAIN
+            AudioManager.AUDIOFOCUS_LOSS -> SysCore.Fc.LOSS
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> SysCore.Fc.LOSS_TRANSIENT
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> SysCore.Fc.LOSS_TRANSIENT_CAN_DUCK
+            else -> return@OnAudioFocusChangeListener
+        }
+        val (act, mark) = SysCore.focusPlan(fc, wantPlay = playing, pausedByFocus)
+        pausedByFocus = mark
+        when (act) {
+            SysCore.F_PAUSE -> runCatching { mp.pause() }.also { fireIsPlaying() }
+            SysCore.F_PAUSE_ABANDON -> {
+                abandonFocus()
+                runCatching { mp.pause() }.also { fireIsPlaying() }
+            }
+            SysCore.F_RESUME -> runCatching { mp.start() }.also { fireIsPlaying() }
+        }
+    }
+
+    private fun requestFocus() {
+        val a = audio ?: return
+        if (Build.VERSION.SDK_INT >= 26) {
+            val req = focusReq ?: android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+            focusReq = req
+            runCatching { a.requestAudioFocus(req) }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { a.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN) }
+        }
+    }
+
+    private fun abandonFocus() {
+        val a = audio ?: return
+        if (Build.VERSION.SDK_INT >= 26) focusReq?.let { runCatching { a.abandonAudioFocusRequest(it) } }
+        else @Suppress("DEPRECATION") runCatching { a.abandonAudioFocus(focusListener) }
+    }
+
     /** Compose 可观测视频尺寸（SysPlayerView 据此重算 letterbox/crop） */
     private val _vsize = mutableStateOf(0 to 0)
     val vsize: State<Pair<Int, Int>> get() = _vsize
@@ -137,10 +188,11 @@ class SysCtl(private val context: Context) : PlayCtl {
             if (startMs > 0) runCatching { mp.seekTo(startMs.toInt()) }
             if (rate != 1f) applySpeed()
             setState(SysCore.ST_READY)
-            if (playing) runCatching { mp.start() }
+            // 缓冲期已因焦点暂停（pausedByFocus）：prepared 不抢起，等 GAIN 或手动
+            if (playing && !pausedByFocus) { requestFocus(); runCatching { mp.start() } }
             fireIsPlaying()
         }
-        mp.setOnCompletionListener { setState(SysCore.ST_END) }
+        mp.setOnCompletionListener { abandonFocus(); setState(SysCore.ST_END) }
         mp.setOnErrorListener { _, what, extra ->
             prepared = false
             fireError("MEDIA_ERROR_SYSTEM($what/$extra)", "")
@@ -169,7 +221,9 @@ class SysCtl(private val context: Context) : PlayCtl {
         set(v) {
             field = v
             if (!prepared) return
-            if (v) runCatching { mp.start() } else runCatching { mp.pause() }
+            pausedByFocus = false // 手动操作撤销焦点自动续播标记（GAIN 不再擅自续）
+            if (v) { requestFocus(); runCatching { mp.start() } }
+            else { runCatching { mp.pause() }; abandonFocus() }
             fireIsPlaying()
         }
 
@@ -229,6 +283,7 @@ class SysCtl(private val context: Context) : PlayCtl {
     override fun release() {
         if (released) return
         released = true
+        abandonFocus() // P1-7：释放即弃焦（Exo 档由 player.release 内部自动弃，系统档手挂须自己收）
         runCatching { mp.reset(); mp.release() }
     }
 

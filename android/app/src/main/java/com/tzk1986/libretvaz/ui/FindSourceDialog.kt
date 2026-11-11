@@ -198,9 +198,9 @@ fun FindSourceDialog(
       // 用户 2026-11-05 终定（TVBox 实机图对照）：高度折中 0.98（手机可用区≈屏比0.85），与宽度解耦；
       // 用户 2026-11-05 修正：dialog 窗口四边有系统 surfaceInsets(84px)，fillMaxWidth(0.7) 实际只到屏宽 65%——
       // 改按屏宽×0.7 定宽。注意 displayMetrics.widthPixels 在横屏 edge-to-edge 下返回的是扣掉系统区后的
-      // app 宽（实测 1980≠物理 2400），须用 LocalConfiguration.screenWidthDp（=全宽 914dp）；
-      // 窗口 gr=CENTER 且 insets 左右对称＝物理屏居中
-      val scrW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+      // app 宽（实测 1980≠物理 2400）；P1-4（2026-11-11）：基准改画布逻辑宽 canvasWdp()——投影 4K 档
+      // 原密度 cfg dp 与画布错配 4 倍会溢屏，手机档两者相等；窗口 gr=CENTER 且 insets 左右对称＝物理屏居中
+      val scrW = canvasWdp().dp
       Surface(
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,

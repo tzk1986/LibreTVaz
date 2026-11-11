@@ -23,6 +23,22 @@ fun tvMinSide(minSideDp: Float): Float = minSideDp.coerceAtMost(420f)
 fun tvCanvasScale(widthPx: Int, density: Float): Float =
     (widthPx / 914f).coerceAtLeast(density)
 
+/** 画布逻辑 dp（审计 2026-11-11 P1-4）：px ÷ 生效密度。投影档 LocalConfiguration 的 dp 仍按
+ *  原密度算（3840dp），与画布（914dp）错 4 倍——弹窗宽/高与断点一律以此为基准 */
+fun canvasDp(px: Int, scale: Float): Float = px / scale
+
+/** MainActivity 在 LocalDensity 改写处同步下发画布宽高 dp；0=未下发，回退原配置 dp（手机档两者相等） */
+val LocalCanvasWdp = androidx.compose.runtime.compositionLocalOf { 0f }
+val LocalCanvasHdp = androidx.compose.runtime.compositionLocalOf { 0f }
+
+@Composable
+fun canvasWdp(): Float =
+    LocalCanvasWdp.current.takeIf { it > 0 } ?: LocalConfiguration.current.screenWidthDp.toFloat()
+
+@Composable
+fun canvasHdp(): Float =
+    LocalCanvasHdp.current.takeIf { it > 0 } ?: LocalConfiguration.current.screenHeightDp.toFloat()
+
 @Composable
 fun tvu(mm: Int): Dp {
     val c = LocalConfiguration.current

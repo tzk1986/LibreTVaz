@@ -27,6 +27,10 @@ object VideoCache {
         StandaloneDatabaseProvider(context),
     ).also { cache = it }
 
+    /** P1-1（审计 2026-11-11）：启动预热单例——DB 打开+索引修剪放 IO 线程做，详情页组合期 factory 命中直返 */
+    @Synchronized
+    fun prewarm(context: Context) { obtain(context.applicationContext) }
+
     @Synchronized
     fun factory(context: Context, upstream: DataSource.Factory): DataSource.Factory =
         CacheDataSource.Factory()

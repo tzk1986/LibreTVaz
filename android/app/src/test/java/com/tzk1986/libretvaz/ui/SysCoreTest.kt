@@ -55,4 +55,36 @@ class SysCoreTest {
         assertEquals(1.5f to true, SysCore.speedPlan(1.5f, playing = true))
         assertEquals(1.5f to false, SysCore.speedPlan(1.5f, playing = false))
     }
+
+    // P1-7（审计 2026-11-11）：系统档音频焦点事件→动作裁决。wantPlay=播放意图（含缓冲中），
+    // 第二值=新「焦点暂停」标记（true=待焦点恢复自动续播；永久 LOSS 清标记=不自动续）
+    @Test
+    fun `transient loss pauses only when we intended to play`() {
+        assertEquals(SysCore.F_PAUSE to true, SysCore.focusPlan(SysCore.Fc.LOSS_TRANSIENT, wantPlay = true, pausedByFocus = false))
+        assertEquals(SysCore.F_NOOP to false, SysCore.focusPlan(SysCore.Fc.LOSS_TRANSIENT, wantPlay = false, pausedByFocus = false))
+        // 可闪避（导航播报）同样暂停——视频场景不做 duck 音量
+        assertEquals(SysCore.F_PAUSE to true, SysCore.focusPlan(SysCore.Fc.LOSS_TRANSIENT_CAN_DUCK, wantPlay = true, pausedByFocus = false))
+    }
+
+    @Test
+    fun `gain resumes only when paused by focus`() {
+        assertEquals(SysCore.F_RESUME to false, SysCore.focusPlan(SysCore.Fc.GAIN, wantPlay = true, pausedByFocus = true))
+        // 用户自己暂停的（未标记）：焦点回来不能擅自续播
+        assertEquals(SysCore.F_NOOP to false, SysCore.focusPlan(SysCore.Fc.GAIN, wantPlay = true, pausedByFocus = false))
+    }
+
+    @Test
+    fun `permanent loss abandons focus and kills auto resume`() {
+        // 播放中被抢焦点（永久 LOSS）：暂停+释放焦点，不标记（来电级 GAIN 也不自动续，需手动）
+        assertEquals(SysCore.F_PAUSE_ABANDON to false, SysCore.focusPlan(SysCore.Fc.LOSS, wantPlay = true, pausedByFocus = false))
+        // 已因短暂 LOSS 暂停并标记：永久 LOSS 到达→不再重复暂停，清标记撤自动续播
+        assertEquals(SysCore.F_NOOP to false, SysCore.focusPlan(SysCore.Fc.LOSS, wantPlay = true, pausedByFocus = true))
+        // 本就没播：啥也不动
+        assertEquals(SysCore.F_NOOP to false, SysCore.focusPlan(SysCore.Fc.LOSS, wantPlay = false, pausedByFocus = false))
+    }
+
+    @Test
+    fun `repeated transient loss does not double pause`() {
+        assertEquals(SysCore.F_NOOP to true, SysCore.focusPlan(SysCore.Fc.LOSS_TRANSIENT, wantPlay = true, pausedByFocus = true))
+    }
 }

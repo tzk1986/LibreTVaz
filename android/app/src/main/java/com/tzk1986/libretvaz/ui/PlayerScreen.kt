@@ -81,7 +81,19 @@ internal fun buildPlayer(context: android.content.Context, live: Boolean = false
         .setLoadControl(load)
         .setMediaSourceFactory(DefaultMediaSourceFactory(VideoCache.factory(context, dsf)))
         .build()
-        .apply { playWhenReady = true }
+        .apply {
+            // P1-7（审计 2026-11-11）：焦点托管——media3 DefaultAudioFocusManager 仅在
+            // handleAudioFocus=true 激活（默认关=旧来电重叠声根因）：短暂 LOSS 暂停、GAIN 自动续，
+            // 永久 LOSS 暂停+弃焦。三屏共用本厂（点播详情/Player/Live）一处生效
+            setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            playWhenReady = true
+        }
 }
 
 /** 全应用共享的播放 OkHttp 客户端（连接池/协议栈复用；媒体请求并发高，池给足）。

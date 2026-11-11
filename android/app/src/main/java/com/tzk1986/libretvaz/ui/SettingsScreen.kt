@@ -56,8 +56,8 @@ fun SettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    // 弹窗列表最大高=屏高 70%（用户 2026-11-04 手机横屏适配：原 420dp 固定值超出手机屏会被裁）
-    val dlgMaxH = (LocalConfiguration.current.screenHeightDp * 0.7f).dp
+    // 弹窗列表最大高=画布高 70%（用户 2026-11-04 手机横屏适配：原 420dp 固定值超出手机屏会被裁；P1-4 投影档基准改画布 dp）
+    val dlgMaxH = (canvasHdp() * 0.7f).dp
     var autoNext by remember { mutableStateOf(store.autoNext) }
     var autoLine by remember { mutableStateOf(store.autoLine) }
     var resume by remember { mutableStateOf(store.resumePlay) }
@@ -502,7 +502,7 @@ private fun PickerDialog(
         text = {
             // 用户 2026-11-05：行间加 6dp 间距——白20%整行底相接会连成一整块，看不见分隔
             LazyColumn(
-                modifier = Modifier.heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.7f).dp),
+                modifier = Modifier.heightIn(max = (canvasHdp() * 0.7f).dp), // P1-4 画布基准
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 itemsIndexed(labels) { i, label ->

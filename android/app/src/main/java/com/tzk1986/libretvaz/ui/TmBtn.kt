@@ -34,10 +34,10 @@ import com.tzk1986.libretvaz.ui.theme.tvBtnContainer
 /** 全 app 输入框统一高度＝TmBtn 按钮高度（用户 2026-11-05：所有输入框与按钮同高） */
 val TmFieldHeight = 48.dp
 
-/** 全 app 弹窗统一宽＝屏宽×0.7（用户 2026-11-05；须配 usePlatformDefaultWidth=false） */
+/** 全 app 弹窗统一宽＝画布逻辑宽×0.7（用户 2026-11-05；须配 usePlatformDefaultWidth=false。
+ *  P1-4：基准从原密度 cfg dp 改画布 dp——4K 投影档 cfg=3840dp 而画布 914dp，旧式溢屏 3 倍） */
 @Composable
-fun tmDialogW(): androidx.compose.ui.unit.Dp =
-    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 0.7f
+fun tmDialogW(): androidx.compose.ui.unit.Dp = (canvasWdp() * 0.7f).dp
 
 val tmDialogProps = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
 

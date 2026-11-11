@@ -127,16 +127,19 @@ class SourceStore(context: Context) {
         return ImportResult(vodAdded, liveAdded, parsed.skipped, parsed.format, parsed.name, parsed.repos, parsed.reposFailed)
     }
 
-    /** 后台维护重拉专用（web refreshSubsIfStale 等价）：前 5 订阅、合并增量、norm 去重、200 封顶，返回新增数 */
-    suspend fun refreshSubs(): Int {
+    /** 后台维护重拉专用（web refreshSubsIfStale 等价）：前 5 订阅、合并增量、norm 去重、200 封顶。
+     *  返回 (新增数, 任一订阅拉取成功)——P1-3：全失败时 guard 落退避戳短周期重试，不再消费满 24h */
+    suspend fun refreshSubs(): Pair<Int, Boolean> {
         var added = 0
+        var anyOk = false
         subs().take(5).forEach { sub ->
             val parsed = runCatching { SubscriptionParser.parseExpanded(getSub(sub)) { repoUrl -> getSub(repoUrl) } }.getOrNull()
-                ?: return@forEach // 订阅暂时不可达，下个周期再试
+                ?: return@forEach // 订阅暂时不可达，退避后再试
+            anyOk = true
             mutateVod { list -> added += mergeVod(list, parsed.vod); true }
         }
         if (added > 0) alignZone()
-        return added
+        return added to anyOk
     }
 
     private fun mergeVod(target: MutableList<VodSource>, incoming: List<VodSource>): Int {

@@ -40,7 +40,6 @@ object SourceGuard {
         "猫 map" to "https://raw.githubusercontent.com/supermeguo/BoxRes/main/Myuse/catcr.json",
     )
 
-    private const val SUBS_REFRESH_MS = 24 * 3600_000L
     private const val BG_FRESH_MS = 60_000L
     private val guardMutex = Mutex()
 
@@ -101,10 +100,12 @@ object SourceGuard {
         }
         if (store.vodSources().isEmpty() && settings.subsTs != 0L) return
         val now = System.currentTimeMillis()
-        if (now - settings.subsTs < SUBS_REFRESH_MS) return
-        settings.subsTs = now
-        val added = store.refreshSubs()
+        if (!SubsGate.due(now, settings.subsTs)) return
+        // P1-3：戳由结果定——任一订阅拉成功才消费满 24h，全败落退避戳 30 分钟后重试（旧式先写后刷=弱网整轮失败仍等一天）
+        val (added, anyOk) = store.refreshSubs()
+        settings.subsTs = SubsGate.stamp(now, anyOk)
         if (added > 0) note("订阅自动更新：新增 $added 个源（翻页或重进后生效）")
+        if (!anyOk) note("订阅重拉全部失败，${SubsGate.BACKOFF_MS / 60_000} 分钟后自动重试")
     }
 
     /**
@@ -113,10 +114,9 @@ object SourceGuard {
      */
     private suspend fun liveCheck(store: SourceStore, settings: SettingsStore, context: Context) = coroutineScope {
         val now = System.currentTimeMillis()
-        if (now - settings.liveTs < SUBS_REFRESH_MS) return@coroutineScope
-        settings.liveTs = now
+        if (!SubsGate.due(now, settings.liveTs)) return@coroutineScope
         val live = store.liveSources()
-        if (live.size < 2) return@coroutineScope // 空/单源无对比意义
+        if (live.size < 2) { settings.liveTs = SubsGate.stamp(now, ok = true); return@coroutineScope } // 空/单源无对比意义，消费满周期
         val repo = LiveRepository(context)
         val sem = Semaphore(3)
         val dead = live.map { s ->
@@ -124,6 +124,8 @@ object SourceGuard {
                 sem.withPermit { runCatching { repo.load(s).channels.isNotEmpty() }.getOrDefault(false) }
             }
         }.count { !it.await() }
+        // P1-3：全灭=大概率本机断网，落退避戳短周期重试而非再等 24h（部分可达属源本身故障，正常消费周期）
+        settings.liveTs = SubsGate.stamp(now, ok = dead < live.size)
         if (dead > 0) note("直播源健康检查：$dead/${live.size} 个源暂不可达（下个周期自动重试）")
     }
 

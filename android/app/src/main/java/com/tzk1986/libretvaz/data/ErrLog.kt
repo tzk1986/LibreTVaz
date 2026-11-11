@@ -41,16 +41,29 @@ object ErrLog {
         DiskCache.write(DISK_KEY, System.currentTimeMillis(), lines.joinToString("\n") { "${it.first}\t${it.second}" })
     }
 
+    /** 审计 2026-11-11 P1-2：源 URL/域名=私有数据（日志设置页可见+落盘 7 天+可截屏/adb 拉取）。
+     *  入口统一脱敏：http(s) URL 整体替换为「源[sha1(host)前8hex]」——host 同则哈希同，跨条可关联排障，域名零泄露 */
+    fun sanitize(msg: String): String = URL_RE.replace(msg) { m ->
+        val host = m.value.substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+        val hash = runCatching {
+            java.security.MessageDigest.getInstance("SHA-1").digest(host.toByteArray()).joinToString("") { "%02x".format(it) }.take(8)
+        }.getOrElse { "00000000" }
+        "源[$hash]"
+    }
+
+    private val URL_RE = Regex("https?://[^\\s\"'<>]+")
+
     fun add(tag: String, msg: String) {
         synchronized(this) {
             load()
             val now = System.currentTimeMillis()
-            val key = tag + msg
+            val safe = sanitize(msg)
+            val key = tag + safe
             val prev = lastSeen[key]
             if (prev != null && now - prev < DEDUP_MS) return
             lastSeen[key] = now
             if (lastSeen.size > 400) lastSeen.clear()
-            val m = if (msg.length > MSG_MAX) msg.substring(0, MSG_MAX) + "…" else msg
+            val m = if (safe.length > MSG_MAX) safe.substring(0, MSG_MAX) + "…" else safe
             lines.addLast(now to "${fmt.format(Date(now))} [$tag] $m")
             while (lines.size > MAX) lines.removeFirst()
             while (lines.isNotEmpty() && now - lines.first().first > KEEP_MS) lines.removeFirst()

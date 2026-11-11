@@ -13,6 +13,8 @@ import com.tzk1986.libretvaz.data.DiskCache
 import com.tzk1986.libretvaz.data.Http
 import com.tzk1986.libretvaz.data.LiveCtx
 import com.tzk1986.libretvaz.data.SourceGuard
+import com.tzk1986.libretvaz.data.VideoCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.tzk1986.libretvaz.data.RemoteHub
@@ -90,6 +92,9 @@ class MainActivity : ComponentActivity() {
         val settingsStore = SettingsStore(this)
         Http.proxyUrl = settingsStore.proxyUrl // 全局 HTTP/播放数据源共用可选代理
         Http.applyGlobalProxy()
+        // P1-1（审计 2026-11-11）：SimpleCache 首建=DB 打开+索引修剪数百 ms 盘 IO，旧在首帧
+        // buildPlayer 组合期主线程发生成（低端盒详情卡死）——启动即后台预热，进页 obtain 命中直返
+        lifecycleScope.launch(Dispatchers.IO) { VideoCache.prewarm(applicationContext) }
         BuiltinSources.seedIfAbsent(this, sourceStore) // 首启自动种入 17 站内置点播源（web BUILTIN_SOURCES 对齐）
         BuiltinSources.seedLiveIfAbsent(this, sourceStore) // 内置直播源种子（B16：全球精筛+中国在线）
         sourceStore.alignZone() // 冷启动归池收编（站单空=静默跳过）
@@ -107,13 +112,15 @@ class MainActivity : ComponentActivity() {
                 // 投影画布映射（用户 2026-11-11 N1S 定稿）：4K 低密度投影短边 dp 巨大，
                 // 整幅 UI 按手机横屏画布宽(914dp)等比放大——占屏比例=手机、物理尺寸随屏
                 // 放大远看可读；手机/竖屏 coerceAtLeast 原 density 不缩（纯函数 tvCanvasScale 单测）
-                val scale = com.tzk1986.libretvaz.ui.tvCanvasScale(
-                    androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
-                        .toFloat().let { (it * dens.density).toInt() }, dens.density,
-                )
+                val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+                val widthPx = (cfg.screenWidthDp * dens.density).toInt()
+                val scale = com.tzk1986.libretvaz.ui.tvCanvasScale(widthPx, dens.density)
+                // P1-4：画布逻辑宽高 dp 同步下发（弹窗/断点基准）——投影档 cfg dp 按原密度算会与画布错配溢屏
                 androidx.compose.runtime.CompositionLocalProvider(
                     androidx.compose.ui.platform.LocalDensity provides
                         androidx.compose.ui.unit.Density(scale, dens.fontScale.coerceAtMost(1.15f)),
+                    com.tzk1986.libretvaz.ui.LocalCanvasWdp provides com.tzk1986.libretvaz.ui.canvasDp(widthPx, scale),
+                    com.tzk1986.libretvaz.ui.LocalCanvasHdp provides com.tzk1986.libretvaz.ui.canvasDp((cfg.screenHeightDp * dens.density).toInt(), scale),
                 ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Browse) }
