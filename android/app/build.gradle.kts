@@ -19,8 +19,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // P0-2（审计 2026-11-11）：开 R8 代码收缩+资源收缩（dex 18.12→预计 7~9.5MiB）；
+            // 签名复用 AGP debug keystore（同签名与调试渠道可互相覆盖升级，minSdk23 保 v1 签名自动带上）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
