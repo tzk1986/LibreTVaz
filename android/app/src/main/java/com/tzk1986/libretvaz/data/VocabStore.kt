@@ -13,8 +13,11 @@ object VocabPools {
     private var inst: VocabStore? = null
 
     @Synchronized
-    fun get(context: Context): VocabStore =
-        inst ?: VocabStore(context.applicationContext).also { inst = it }
+    fun get(context: Context): VocabStore {
+        // P0-1（审计 2026-11-11）：PinIndex 构造前确保拼音首字母查表已装（读败=降级无联想，同原 coll 缺失）
+        com.tzk1986.libretvaz.data.perf.PinTable.ensureLoaded(context)
+        return inst ?: VocabStore(context.applicationContext).also { inst = it }
+    }
 }
 
 /**

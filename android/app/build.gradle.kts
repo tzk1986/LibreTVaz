@@ -60,12 +60,13 @@ dependencies {
     implementation(libs.androidx.media3.database)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.coil.compose)
-    // 拼音首字母索引需与浏览器 Intl(pinyin) 行为一致：桌面 JVM 的 java.text.Collator 非拼音序，统一用 ICU4J
-    implementation(libs.icu4j)
     // 扫码远程输入二维码：纯 JVM zxing core 离线生成（无 GMS 依赖）
     implementation(libs.zxing.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // 单元测试里 android.jar 的 org.json 是空桩，需放真实实现（测试 classpath 优先于 android.jar）
     testImplementation(libs.junit)
     testImplementation(libs.json)
+    // P0-1（审计 2026-11-11）：拼音首字母改离线表（assets/pin_index.bin，tools/PinTableGen.java 用 ICU 预生成），
+    // ICU4J 退出运行时（省 ~10.3MiB）；仅测试端保留：PinTableParityTest 全表逐字校验防漂移+锚点单调断言
+    testImplementation(libs.icu4j)
 }

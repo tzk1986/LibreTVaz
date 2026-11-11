@@ -15,9 +15,12 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class PinIndexSnapshotTest {
 
+    // P0-1 后拼音走离线表：测试 JVM 直读随包 assets 安装
+    init { PinTable.install(java.io.File("src/main/assets", PinTable.ASSET_NAME).readBytes()) }
+
     @Test fun `snapshot 隔离后续变更`() {
         val pi = PinIndex()
-        assertTrue(pi.ok) // ICU Collator 可用才有并发意义
+        assertTrue(pi.ok) // 拼音表已装才有并发意义
         pi.add("流浪地球")
         pi.bump("流浪地球", 3)
         val (ws, wfs) = pi.snapshot()

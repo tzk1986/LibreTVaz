@@ -16,6 +16,9 @@ import org.junit.Test
 /** perf-core.js web 测试套的 Kotlin 对齐断言（B0） */
 class PerfCoreTest {
 
+    // P0-1 后拼音走离线表：测试 JVM 直读随包 assets 安装
+    init { PinTable.install(java.io.File("src/main/assets", PinTable.ASSET_NAME).readBytes()) }
+
     @Test fun `norm 去尾斜杠与空白`() {
         assertEquals("http://a.com", PerfCore.norm(" http://a.com// "))
         assertEquals("", PerfCore.norm(null))

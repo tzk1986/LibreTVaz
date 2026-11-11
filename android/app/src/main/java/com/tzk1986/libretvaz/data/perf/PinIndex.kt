@@ -1,13 +1,12 @@
 package com.tzk1986.libretvaz.data.perf
 
-import com.ibm.icu.text.Collator
-import com.ibm.icu.util.ULocale
 import java.util.Locale
 
 /**
  * 拼音首字母索引（perf-core.js createPinIndex 的 Kotlin 等价）。
- * ICU Collator(zh-Hans-CN) 比较区间法取首字母：锚点必须是该字母「最小音节」汉字——
- * 23 锚点表为 2026-11-02 修正版（D=大、补 W=蛙），移植勿用旧 22 锚数据。
+ * 首字母=PinTable 离线预生成查表（审计 2026-11-11 P0-1：原 ICU Collator(zh-Hans-CN) 锚点区间法
+ * 已在构建期逐字烘成 assets/pin_index.bin，PinTableParityTest 全表校验一致，运行时零 ICU 依赖）。
+ * 锚点表 PIN_ANCHORS 为 2026-11-02 修正版（D=大、补 W=蛙），系重生成 pin_index.bin 的算法源数据，勿用旧 22 锚。
  * 前 2 字母分桶：≥2 字母查询只扫小桶；词频权重排序与超量淘汰；与 web 行为逐一对齐。
  */
 class PinIndex(
@@ -34,27 +33,14 @@ class PinIndex(
         fun isCjk(ch: Char): Boolean = ch in '㐀'..'䶿' || ch in '一'..'鿿'
     }
 
-    // ICU4J CLDR：zh 默认 collation=拼音，与浏览器/Android Intl 同源（java.text.Collator 在桌面 JVM 非拼音序，勿换回）
-    private val coll: Collator? = try {
-        (Collator.getInstance(ULocale.forLanguageTag("zh-Hans-CN")) as Collator).apply { strength = Collator.TERTIARY }
-    } catch (e: Exception) { null }
-    val ok: Boolean = coll != null
+    /** 表已装即拼音可用（未装/读败=降级无联想，语义同原 coll==null） */
+    val ok: Boolean get() = PinTable.ok
 
-    private val iniCache = HashMap<Char, Char>()
-
-    /** 单字首字母：ASCII 数字字母原样小写；CJK 按锚点区间；其余（标点等）返回 NUL 不占位 */
+    /** 单字首字母：ASCII 数字字母原样小写；CJK 查预生成表；其余（标点等）返回 NUL 不占位 */
     private fun initialOf(ch: Char): Char {
         if (ch in '0'..'9' || ch in 'a'..'z') return ch
         if (ch in 'A'..'Z') return 'a' + (ch - 'A')
-        if (coll != null && isCjk(ch)) {
-            iniCache[ch]?.let { return it }
-            var res = 0.toChar()
-            for ((init, anchor) in PIN_ANCHORS) {
-                if (coll.compare(ch.toString(), anchor) >= 0) res = init.lowercaseChar() else break
-            }
-            iniCache[ch] = res
-            return res
-        }
+        if (isCjk(ch)) return PinTable.initialOf(ch)
         return 0.toChar()
     }
 
@@ -133,7 +119,7 @@ class PinIndex(
     /** 首字母前缀联想：≥2 字母只扫前缀桶；按权重降序、同权重新词优先，上限 limit */
     @Synchronized fun suggest(q: String?, limit: Int = 30): List<String> {
         val ql = (q ?: "").trim().lowercase(Locale.ROOT)
-        if (ql.isEmpty() || !alphaRe.matches(ql) || coll == null) return emptyList()
+        if (ql.isEmpty() || !alphaRe.matches(ql) || !ok) return emptyList()
         val cand: List<String> = if (ql.length >= 2) (buckets[ql.substring(0, 2)] ?: emptySet()).toList() else words
         val hits = cand.filter { w -> py[w]?.any { it.startsWith(ql) } == true }
         return hits.sortedWith(rank).take(limit)
@@ -142,7 +128,7 @@ class PinIndex(
     /** 模糊召回：首字母串包含查询的「相关词」（非前缀也算，如 ffczz 含 fcz） */
     @Synchronized fun fuzzy(q: String?, limit: Int = 30): List<String> {
         val ql = (q ?: "").trim().lowercase(Locale.ROOT)
-        if (ql.isEmpty() || coll == null) return emptyList()
+        if (ql.isEmpty() || !ok) return emptyList()
         val hits = words.filter { w -> py[w]?.any { it.contains(ql) } == true }
         return hits.sortedWith(rank).take(limit)
     }

@@ -10,9 +10,12 @@ import com.ibm.icu.util.ULocale
 /** web 拼音测试套对齐（B0）：修正 23 锚点、多音字、权重、淘汰、分桶性能 */
 class PinIndexTest {
 
-    @Test fun `collator 可用与锚点单调`() {
+    // P0-1 后拼音走离线表：测试 JVM 直读随包 assets 安装（生产由 VocabPools.ensureLoaded 装）
+    init { PinTable.install(java.io.File("src/main/assets", PinTable.ASSET_NAME).readBytes()) }
+
+    @Test fun `表可用与锚点单调`() {
         val idx = PinIndex()
-        assertTrue("需 zh-Hans pinyin Collator", idx.ok)
+        assertTrue("需拼音表已装", idx.ok)
         val c = Collator.getInstance(ULocale.forLanguageTag("zh-Hans-CN")).apply { strength = Collator.TERTIARY }
         for (i in PinIndex.PIN_ANCHORS.indices) {
             val anchor = PinIndex.PIN_ANCHORS[i].second
