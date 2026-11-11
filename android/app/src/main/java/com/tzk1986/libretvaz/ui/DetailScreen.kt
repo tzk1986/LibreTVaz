@@ -121,14 +121,16 @@ private fun PillButton(
     val pillSrc = remember { MutableInteractionSource() }
     val pillPressed by pillSrc.collectIsPressedAsState()
     val pillShape = RoundedCornerShape(50)
+    // 投影适配（用户 2026-11-11）：高/内边距改 tvu 等比——与 tvSp 字号同比例律，
+    // 按钮宽占列宽比不随 dpi 变（固定 dp 内边距+等比字号在低 dpi 大屏溢出裁切实锤）
     Box(
         modifier = modifier
-            .requiredHeight(32.dp)
+            .requiredHeight(tvu(32))
             .onFocusEvent { focused = it.isFocused }
             .background(tvBtnContainer(focused, pillPressed, TvBtnKind.Detail), pillShape)
             .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, pillShape) else Modifier)
             .clickable(interactionSource = pillSrc, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 2.dp),
+            .padding(horizontal = tvu(10), vertical = tvu(2)),
         contentAlignment = Alignment.Center,
     ) {
         // 选中红下划线（用户 2026-11-06）：不占布局、置文字底缘 5px
@@ -169,14 +171,15 @@ private fun FsAct(
         onClick = onClick,
         enabled = !off,
         interactionSource = actSrc,
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        contentPadding = PaddingValues(horizontal = tvu(4), vertical = 0.dp),
         // M3 1.4.0 无 focusedContainerColor：焦点亮底折进 containerColor
         colors = ButtonDefaults.textButtonColors(
             // TVBox 复刻：焦点/按下→40%红底，未激活全屏透明（button_dialog_vod）
             containerColor = tvBtnContainer(focused, actPressed, TvBtnKind.Fs),
         ),
-        // 紧凑修订（用户 2026-11-10 手机实拍）：固定 40dp 高（覆掉 M3 48dp 最小触控高的留白）
-        modifier = modifier.height(40.dp).semantics { contentDescription = desc }
+        // 紧凑修订（用户 2026-11-10 手机实拍）：覆掉 M3 48dp 最小触控高的留白；
+        // 投影适配（2026-11-11）高改 tvu(40) 等比，随短边 dp 与字号同律
+        modifier = modifier.height(tvu(40)).semantics { contentDescription = desc }
             .onFocusEvent { focused = it.isFocused; onFocused(it.isFocused) }
             .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(TvColors.RadiusFs)) else Modifier),
     ) {
@@ -195,7 +198,7 @@ private fun FsAct(
                 modifier = Modifier.size(tvu(26)),
             )
         } else {
-            Text(icon + "︎", fontSize = 18.sp, color = fg)
+            Text(icon + "︎", fontSize = tvSp(18), color = fg)
         }
     }
 }
@@ -1220,7 +1223,8 @@ fun DetailScreen(
                             Text(detail?.title?.ifBlank { null } ?: itemS.name, fontSize = tvSp(30), fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         }
                         // 元信息行（tvSite|tvYear|tvArea|tvType ts_18 80%白；tvLang：CMS 详情解析无语言字段→略，见 ledger Ruling）
-                        Row(horizontalArrangement = Arrangement.spacedBy(tvu(10))) {
+                        // 投影适配（2026-11-11）：源名+年代+地区+类型四全时总宽可超列宽→横滚兜底
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(tvu(10))) {
                             listOfNotNull(
                                 itemS.sourceName,
                                 (detail?.year?.ifBlank { null } ?: itemS.year)?.ifBlank { null },
@@ -1250,19 +1254,22 @@ fun DetailScreen(
                             horizontalArrangement = Arrangement.spacedBy(tvu(10)),
                         ) {
                             val af = Modifier.focusRequester(actRowFr)
+                            // 投影适配（用户 2026-11-11）：内边距覆写为 tvu 等比（TmBtn 默认固定 dp
+                            // 不动=他页零波及）——钮总宽与字号同比例律，任意 dpi 下占列宽比恒定
+                            val actPad = PaddingValues(horizontal = tvu(12), vertical = tvu(4))
                             // C1：预览关时播放钮常驻；winActivate=待播则补起播链后进全屏（正常态等旧行为）
-                            if (!playing || noPreview) TmBtn(modifier = af, onClick = { winActivate() }) { Text("播放", fontSize = tvSp(20)) }
-                            TmBtn(modifier = if (playing) af else Modifier, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
-                            TmBtn(onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
-                            TmBtn(onClick = {
+                            if (!playing || noPreview) TmBtn(modifier = af, contentPadding = actPad, onClick = { winActivate() }) { Text("播放", fontSize = tvSp(20)) }
+                            TmBtn(modifier = if (playing) af else Modifier, contentPadding = actPad, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
+                            TmBtn(contentPadding = actPad, onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
+                            TmBtn(contentPadding = actPad, onClick = {
                                 LineSpeed.delete(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))
                                 userPickedLine = false
                                 speeds = null
                                 probeSpeeds(curEp)
                                 toast("重新测速各线路…")
                             }) { Text("测速", fontSize = tvSp(20)) }
-                            TmBtn(onClick = { showDesc = true }) { Text("简介", fontSize = tvSp(20)) }
-                            TmBtn(onClick = { kept = keepSt.toggle(itemS) }) { Text(if (kept) "★ 已收藏" else "☆ 收藏", fontSize = tvSp(20)) }
+                            TmBtn(contentPadding = actPad, onClick = { showDesc = true }) { Text("简介", fontSize = tvSp(20)) }
+                            TmBtn(contentPadding = actPad, onClick = { kept = keepSt.toggle(itemS) }) { Text(if (kept) "★ 已收藏" else "☆ 收藏", fontSize = tvSp(20)) }
                             // 复制直链钮已撤（用户 2026-11-09：不需要）
                         }
                     }
