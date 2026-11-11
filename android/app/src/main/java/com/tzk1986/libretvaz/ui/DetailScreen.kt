@@ -89,7 +89,10 @@ import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.withTimeout
 
 /** 换源/快搜跳转续播上下文（web App.resume 等价） */
-private data class ResumeCtx(val line: Int, val ep: Int, val sec: Long)
+private data class ResumeCtx(val line: Int, val ep: Int, val sec: Long, val epUrl: String? = null) {
+    /** B17（审计 2026-11-11）：换源续播前固化「当前线路的当前集 URL」——paint 跨源时集号按新源列表失效，URL 命中即同集 */
+    fun withUrl(u: String?) = if (u.isNullOrBlank()) this else copy(epUrl = u)
+}
 
 private fun fmtHms(sec: Long): String {
     val s = sec.coerceAtLeast(0)
@@ -292,6 +295,7 @@ fun DetailScreen(
     var itemS by remember { mutableStateOf(item) }
     val source = remember(itemS) { VodSource(itemS.sourceName, itemS.sourceUrl, isAdult = itemS.isAdult) }
     var pendingResume by remember { mutableStateOf<ResumeCtx?>(null) }
+    var loadedUrl by remember { mutableStateOf<String?>(null) }  // B19：playAt 最后装载 URL，判重播/晚到守卫
 
     var detail by remember { mutableStateOf<VideoDetail?>(null) }
     var errText by remember { mutableStateOf<String?>(null) }
@@ -328,6 +332,7 @@ fun DetailScreen(
     var fsDur by remember { mutableLongStateOf(0L) }
     // TVBox 对标 C4（2026-11-10）：初始态跟随全局档 zoom_pref（1=满屏为 true；2=拉伸时钮显「适配」态）
     var zoomMode by remember { mutableStateOf(zoomModeInitial(settings.zoomPref)) }
+    var scaleToggled by remember { mutableStateOf(false) }  // B16（审计 2026-11-11）：比例钮动过标记——player 重建后窗按钮态而非 C4 初始档恢复
     // TVBox 对标 A2（审计 2026-11-11）：播放模式 0连播/1单集循环/2列表循环——旧 repeatOne 无 UI 入口即此档实现
     var playMode by remember { mutableStateOf(settings.playMode) }
     var fsPv by remember { mutableStateOf<PlayerView?>(null) }
@@ -385,6 +390,7 @@ fun DetailScreen(
     fun linkOf(l: Int, e: Int): String? = lines().getOrNull(l)?.list?.getOrNull(e)?.link
     fun playAt(l: Int, e: Int, startPosMs: Long = 0) {
         val u = linkOf(l, e) ?: return
+        loadedUrl = u   // B19（审计 2026-11-11）：自动换线晚到判据——该 URL 已装载则不再重复重启
         errorHint = null
         buffering = true
         noPreview = false // 任何真实 load 即撤海报待播态（C1）
@@ -404,6 +410,14 @@ fun DetailScreen(
             }
         }
     }
+    // TVBox 复刻（用户 2026-11-09）：全屏 ←→=长按连续快进预览（松手才真 seek）+ 居中时间胶囊；
+    // slideTick 心跳：每步进 ++，胶囊显 1s 尾巴后自隐（updateSeekUI 消息 1000/1001 等价）
+    // B15（审计 2026-11-11）：声明上移至 exitFs 之前——退全屏需 stop 预览态
+    val slide = remember { SlideSeek() }
+    var slideTick by remember { mutableIntStateOf(0) }
+    var slideShow by remember { mutableStateOf(false) }
+    var slideFinal by remember { mutableLongStateOf(0L) }  // 松手提交后胶囊仍显示的目标位
+    var slideDirFinal by remember { mutableIntStateOf(1) }
     fun enterFs() {
         fs = true; fsBar = true; fsSeq++
         insetCtrl?.apply {
@@ -413,6 +427,9 @@ fun DetailScreen(
     }
     fun exitFs() {
         fs = false
+        // B15（审计 2026-11-11）：退全屏必须终止长按快进预览态——slide 未 stop 时残留 simPos 污染窗口层
+        // seekFromDrag，胶囊 tick 尾巴也会漏绘；←→长按中按 Back 退窗即断
+        slide.stop(); slideShow = false
         // TVBox 对标 F1 §8-R2：退全屏复位倍速，防误触残留
         speedPanel = false
         speedX = 1f
@@ -434,13 +451,6 @@ fun DetailScreen(
         lastToggleAt = now
         player.playing = !player.playing
     }
-    // TVBox 复刻（用户 2026-11-09）：全屏 ←→=长按连续快进预览（松手才真 seek）+ 居中时间胶囊；
-    // slideTick 心跳：每步进 ++，胶囊显 1s 尾巴后自隐（updateSeekUI 消息 1000/1001 等价）
-    val slide = remember { SlideSeek() }
-    var slideTick by remember { mutableIntStateOf(0) }
-    var slideShow by remember { mutableStateOf(false) }
-    var slideFinal by remember { mutableLongStateOf(0L) }  // 松手提交后胶囊仍显示的目标位
-    var slideDirFinal by remember { mutableIntStateOf(1) }
     LaunchedEffect(slideTick) {
         if (slideTick > 0) { slideShow = true; delay(1000); slideShow = false }
     }
@@ -465,6 +475,7 @@ fun DetailScreen(
     fun replayHere() { errorHint = null; playAt(line, curEp); toast("重新播放本集") }
     fun toggleScale() {
         zoomMode = !zoomMode
+        scaleToggled = true   // B16：此后重建窗按二档态恢复，不再回落 C4 初始档
         fsPv?.resizeMode = if (zoomMode) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         toast(if (zoomMode) "画面：满屏裁切" else "画面：比例适配")
@@ -493,6 +504,8 @@ fun DetailScreen(
     LaunchedEffect(hwDecode, engineX) {
         val r = hwResume ?: return@LaunchedEffect // 首次组帧 hwResume=null 自然跳过
         hwResume = null
+        // B18（审计 2026-11-11）：C1 预览关态（noPreview 待点播放）切引擎/软硬解不得自动起播——续位改挂 pendSec
+        if (noPreview) { pendSec = r.first / 1000; return@LaunchedEffect }
         playAt(line, curEp, r.first)
         player.playing = r.second
     }
@@ -610,7 +623,7 @@ fun DetailScreen(
             }
             changing = false
             if (hits.isEmpty()) { toast("其它源未找到「$title」"); return@launch }
-            openWith(hits[0], ResumeCtx(line, curEp, player.position / 1000))
+            openWith(hits[0], ResumeCtx(line, curEp, player.position / 1000).withUrl(linkOf(line, curEp)))
         }
     }
 
@@ -738,7 +751,13 @@ fun DetailScreen(
         userPickedLine = false
         if (r != null) {
             if (d.lines.getOrNull(r.line)?.list?.isNotEmpty() == true) l = r.line
-            d.lines.getOrNull(l)?.list?.let { if (it.isNotEmpty()) e = r.ep.coerceIn(0, it.size - 1) }
+            d.lines.getOrNull(l)?.list?.let { eps ->
+                if (eps.isNotEmpty()) {
+                    // B17（审计 2026-11-11）：跨源集号坐标系不通——带旧集 URL 时先按 URL 命中同集，未中回退 coerce 集号
+                    e = r.epUrl?.let { u -> eps.indexOfFirst { it.link == u }.takeIf { it >= 0 } }
+                        ?: r.ep.coerceIn(0, eps.size - 1)
+                }
+            }
             sec = r.sec
         } else if (settings.resumePlay && ph != null) {
             val fi = if (ph.flag.isNotEmpty()) d.lines.indexOfFirst { g -> g.flag == ph.flag } else -1
@@ -820,9 +839,15 @@ fun DetailScreen(
                 speeds = LineSpeed.cached(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))
                 line = ni
                 toast("该线路无法播放，3 秒后自动切换「${lines().getOrNull(ni)?.flag ?: ""}」")
+                // B19（审计 2026-11-11）：晚到守卫补齐——捕获换线瞬间的作品/集号，3s 内换集换源则作废；
+                // 目标线该集 URL 若已被装载（用户手动先切/重试）不再重复 playAt 重启
+                val vidAt = itemS.vodId; val epAt = curEp
                 scope.launch {
                     delay(3000)
-                    if (line == ni) playAt(ni, curEp)
+                    if (line == ni && curEp == epAt && itemS.vodId == vidAt) {
+                        val u = linkOf(ni, epAt)
+                        if (u != null && u != loadedUrl) playAt(ni, epAt)
+                    }
                 }
             }
         }
@@ -1492,7 +1517,12 @@ fun DetailScreen(
             AndroidView(
                 factory = { ctx -> pvFor(ctx, settings.textureView).apply {
                     this.player = player.exo; useController = false // Exo 分支恒有实例（engineX==0）
-                    resizeMode = zoomResizeMode(settings.zoomPref) // TVBox 对标 C4：全屏窗初始缩放档走全局设置（默认 0=FIT 与原行为一致）
+                    // B16（审计 2026-11-11）：重建（引擎切换/整视图 key 重建）后缩放同步——比例钮动过按二档态，
+                    // 未动过才走 C4 全局初始档（默认 0=FIT 与原行为一致）
+                    resizeMode = if (scaleToggled) {
+                        if (zoomMode) androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        else androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    } else zoomResizeMode(settings.zoomPref)
                     fsPv = this
                 } },
                 // 硬解/软解/引擎重建：player 换实例须靠 update 重绑，否则全屏黑屏
@@ -1838,7 +1868,9 @@ fun DetailScreen(
         onDismiss = { chDlg = false },
         onPick = { sum ->
             chDlg = false
-            openWith(sum, ResumeCtx(line, curEp, player.position / 1000))
+            // B17（审计 2026-11-11）：跨源换源带当前集 URL，paint 按新源列表 link 匹配定位集号，
+            // 防旧源集号在新源错位（快搜定源与自动换源两条路径同口径）
+            openWith(sum, ResumeCtx(line, curEp, player.position / 1000).withUrl(linkOf(line, curEp)))
         },
     )
 
