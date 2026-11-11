@@ -1009,6 +1009,28 @@ fun DetailScreen(
         }
     }
 
+    // A3（审计 2026-11-11）：遥控媒体键/频道键=播放暂停·±15s·上下集；锁屏态吞掉不响应；非媒体键放行
+    DisposableEffect(player) {
+        MediaKeys.handler = { code ->
+            val plan = mediaKeyPlan(code, live = false)
+            if (plan == null) false
+            else if (locked) true
+            else {
+                when (plan) {
+                    Mk.Toggle -> togglePlayFs()
+                    Mk.SeekFwd -> doubleSeek(1)
+                    Mk.SeekBack -> doubleSeek(-1)
+                    // ⚠不能用组合期快照 total：effect 仅首帧跑一次，captured total=0（detail 未回）→
+                    // 装机实锤 87 恒走「已是最后一集」；lines()/curEp 读 state 恒最新
+                    Mk.NextItem -> { val tot = lines().getOrNull(line)?.list?.size ?: 0; val n = curEp + 1; if (n < tot) goEpTo(n) else toast("已是最后一集") }
+                    Mk.PrevItem -> { val n = curEp - 1; if (n >= 0) goEpTo(n) else toast("已是第一集") }
+                }
+                true
+            }
+        }
+        onDispose { MediaKeys.handler = null }
+    }
+
     // TVBox 复刻（用户 2026-11-09）全屏左右半区竖调：右=STREAM_MUSIC 音量、左=window 亮度。
     // 与根 detectTapGestures(pokeFs) 并列共存：竖拖有位移→tap 被取消；纯 tap 无位移→竖拖不触发。
     val audio = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }

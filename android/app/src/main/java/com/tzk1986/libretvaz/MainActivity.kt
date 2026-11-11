@@ -85,6 +85,10 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    /** A3（审计 2026-11-11）：媒体键/频道键转发页级 handler（播放页注册）；无人认领=放行系统 */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean =
+        (com.tzk1986.libretvaz.ui.MediaKeys.handler?.invoke(keyCode) == true) || super.onKeyDown(keyCode, event)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyImmersive()

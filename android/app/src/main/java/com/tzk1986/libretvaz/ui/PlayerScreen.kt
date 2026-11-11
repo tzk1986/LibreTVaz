@@ -215,12 +215,36 @@ fun PlayerScreen(
         onDispose { player.release() }
     }
 
+
     /** web playChan：换台写 last 并切流（读 LiveCtx.chans：换源后闭包里的旧列表不可用） */
     fun playChan(i: Int) {
         val c = LiveCtx.chans.getOrNull(i) ?: return
         chanIdx = i
         LiveCtx.cur = i
         store.setLast(LiveCtx.srcIdx, c.url)
+    }
+
+    // A3（审计 2026-11-11）：媒体键=播放/暂停；频道/上下曲键=上下台回绕（仅直播态；非直播其余放行系统）
+    DisposableEffect(player, live) {
+        MediaKeys.handler = { code ->
+            when (mediaKeyPlan(code, live)) {
+                null -> false
+                Mk.Toggle -> { if (player.isPlaying) player.pause() else player.play(); true }
+                Mk.NextItem, Mk.PrevItem -> {
+                    if (!live) false
+                    else {
+                        val n = LiveCtx.chans.size
+                        if (n > 0) {
+                            val d = if (code == 166 || code == 87 || code == 274) 1 else -1 // CH_UP/NEXT/STEP_FWD
+                            playChan(((chanIdx + d) % n + n) % n)
+                        }
+                        true
+                    }
+                }
+                else -> false
+            }
+        }
+        onDispose { MediaKeys.handler = null }
     }
 
     fun switchSrc(i: Int, s: LiveSource) {
