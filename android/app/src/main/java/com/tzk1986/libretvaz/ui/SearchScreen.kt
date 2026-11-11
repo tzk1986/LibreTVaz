@@ -363,7 +363,15 @@ fun SearchScreen(
                 }
                 if (kws.isEmpty()) Text("暂无本池搜索历史", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f, fill = false)) {
-                    items(kws) { k -> WordChip(k) { search(k) } }
+                    // A8（审计 2026-11-11）：行尾 ✕ 单条删除（chip 本体点=搜索不变）
+                    items(kws) { k ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(Modifier.weight(1f, fill = false)) { WordChip(k) { search(k) } }
+                            TmBtn(contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp), onClick = {
+                                vocab.dropKw(k, zone); kws = vocab.kws(zone)
+                            }) { Text("✕") }
+                        }
+                    }
                 }
             }
         }
