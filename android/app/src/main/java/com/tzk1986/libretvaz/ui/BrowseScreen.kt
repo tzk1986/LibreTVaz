@@ -936,6 +936,7 @@ private fun PickerRow(name: String, sub: String?, selected: Boolean, onClick: ()
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
+            .tmFocusBorder(focusedBg = TvColors.Red40)
             .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),

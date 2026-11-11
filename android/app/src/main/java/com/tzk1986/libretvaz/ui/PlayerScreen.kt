@@ -474,7 +474,7 @@ fun PlayerScreen(
                         TextButton(
                             onClick = { switchSrc(i, s) },
                             enabled = !switching,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().tmFocusBorder(),
                         ) {
                             Text(
                                 s.name + if (i == LiveCtx.srcIdx) "（当前）" else "",

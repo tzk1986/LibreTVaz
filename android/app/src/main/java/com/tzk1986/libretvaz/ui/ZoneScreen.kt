@@ -581,7 +581,7 @@ fun ZoneScreen(
 private fun SrcRow(selected: Boolean, name: String, badge: String?, onClick: () -> Unit) {
     TextButton(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().tmFocusBorder(),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -666,6 +666,7 @@ private fun ZonePoster(item: VodSummary, tag: PerfCore.SpeedTag?, onClick: () ->
                     .align(Alignment.BottomStart)
                     .padding(4.dp)
                     .clickable(onClick = onSrc)
+                    .tmFocusBorder(shape = RoundedCornerShape(4.dp), focusedBg = com.tzk1986.libretvaz.ui.theme.TvColors.Red40)
                     .padding(horizontal = 6.dp, vertical = 12.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color.Black.copy(alpha = 0.55f))

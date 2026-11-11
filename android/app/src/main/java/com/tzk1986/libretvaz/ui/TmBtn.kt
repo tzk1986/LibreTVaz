@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.composed
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.ProvideTextStyle
@@ -40,6 +41,20 @@ val TmFieldHeight = 48.dp
 fun tmDialogW(): androidx.compose.ui.unit.Dp = (canvasWdp() * 0.7f).dp
 
 val tmDialogProps = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+
+/** C26（审计 2026-11-11）：内嵌可点行/项通用焦点描边——白描边+可选 40%红底（TmBtn/FsAct/LiveScreen 行同族），
+ *  给不走 TmBtn 的 Row/Text/TextButton clickable 补遥控可视焦点（隐形焦点修复）。
+ *  用法：置于 clip 之后 background 之前（描边画在自身层、红底垫在项底色下方）。 */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+fun Modifier.tmFocusBorder(
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(8.dp),
+    focusedBg: Color? = null,
+): Modifier = composed {
+    var f by remember { mutableStateOf(false) }
+    onFocusEvent { f = it.isFocused }
+        .then(if (f) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, shape) else Modifier)
+        .then(if (f && focusedBg != null) Modifier.background(focusedBg, shape) else Modifier)
+}
 
 @Composable
 fun TmBtn(

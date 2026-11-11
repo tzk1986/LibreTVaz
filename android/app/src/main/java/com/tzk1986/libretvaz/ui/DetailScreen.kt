@@ -209,6 +209,39 @@ private fun FsAct(
     }
 }
 
+/** C24（审计 2026-11-11）：全屏层圆形浮钮统一壳——焦点=40%红底+白描边（TmBtn/FsAct 同族），
+ *  修退出/锁/解锁/居中播放钮遥控隐形焦点（原 clickable 无描边无可视态） */
+@Composable
+private fun FsCircleBtn(
+    res: Int,
+    desc: String,
+    bg: Color,
+    modifier: Modifier = Modifier,
+    iconTint: Color = Color.White,
+    size: androidx.compose.ui.unit.Dp = 46.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 26.dp,
+    iconOffsetX: androidx.compose.ui.unit.Dp = 0.dp,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .onFocusEvent { focused = it.isFocused }
+            .background(if (focused || pressed) TvColors.Red40 else bg, CircleShape)
+            .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, CircleShape) else Modifier)
+            .clickable(interactionSource = src, onClick = onClick)
+            .semantics { contentDescription = desc },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(res), null, tint = iconTint,
+            modifier = Modifier.size(iconSize).offset(x = iconOffsetX))
+    }
+}
+
 /** 全屏右上暂停标（用户 2026-11-10 按 TVBox 实拍图）：仅暂停时由调用方挂载——
  *  「当前 / 总时长」文字在前、圆圈双竖条暂停图标在后（点按续播），短细进度线（红前白后）仅挂在时间文字下方。
  *  控件亮/自隐两处共用；toggle=null 时图标不可点。 */
@@ -1572,36 +1605,15 @@ fun DetailScreen(
             }
             // 用户 2026-11-10 实拍图版式：右中「<」=退出全屏回详情页（原 CenterEnd 大时间区迁至右下）
             AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
-                Box(
-                    modifier = Modifier.clip(CircleShape).background(TvColors.Overlay)
-                        .clickable { exitFs() }
-                        .semantics { contentDescription = "退出全屏" }
-                        .padding(10.dp),
-                ) {
-                    Icon(painterResource(R.drawable.tvb_v_back), null, tint = Color.White, modifier = Modifier.size(26.dp))
-                }
+                FsCircleBtn(R.drawable.tvb_v_back, "退出全屏", TvColors.Overlay) { exitFs() }
             }
             // 用户 2026-11-10 实拍图版式：左中=锁定钮（移出按钮行）；锁定后收起控件，左中改常驻「解锁」钮
             AnimatedVisibility(visible = fsBar && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) {
-                Box(
-                    modifier = Modifier.clip(CircleShape).background(TvColors.Overlay)
-                        .clickable { toggleLock() }
-                        .semantics { contentDescription = "锁定屏幕" }
-                        .padding(10.dp),
-                ) {
-                    Icon(painterResource(R.drawable.tvb_icon_lock), null, tint = Color.White, modifier = Modifier.size(26.dp))
-                }
+                FsCircleBtn(R.drawable.tvb_icon_lock, "锁定屏幕", TvColors.Overlay) { toggleLock() }
             }
             if (fs && locked) {
-                Box(
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)
-                        .clip(CircleShape).background(TvColors.DetailBtn)
-                        .clickable { toggleLock() }
-                        .semantics { contentDescription = "解锁屏幕" }
-                        .padding(10.dp),
-                ) {
-                    Icon(painterResource(R.drawable.tvb_icon_unlock), null, tint = Color.White, modifier = Modifier.size(26.dp))
-                }
+                FsCircleBtn(R.drawable.tvb_icon_unlock, "解锁屏幕", TvColors.DetailBtn,
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) { toggleLock() }
             }
             // 用户 2026-11-10 实拍图版式：右下（控件上方）=当前时间大时钟 + 影片剩余/结束时刻
             // 修订（用户手机实拍：与右中「<」重叠）：字号 displaySmall→headlineMedium、bottom 贴合紧凑后的底栏
@@ -1746,14 +1758,10 @@ fun DetailScreen(
             // TVBox 复刻（用户 2026-11-09）暂停居中播放大钮：随控件条显隐，点按续播
             // 修（用户 2026-11-10）：Text("▶") 字形光学偏左不在圆心，改矢量图标右移 2dp 光学居中
             if (fs && !playing && fsBar && !locked && !buffering) {
-                Box(
-                    modifier = Modifier.align(Alignment.Center).size(64.dp).clip(CircleShape)
-                        .background(TvColors.Overlay)
-                        .clickable { player.playing = true; pokeFs() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(painterResource(R.drawable.tvb_v_play), null, tint = TvColors.Red,
-                        modifier = Modifier.size(30.dp).offset(x = 2.dp))
+                FsCircleBtn(R.drawable.tvb_v_play, "继续播放", TvColors.Overlay,
+                    modifier = Modifier.align(Alignment.Center),
+                    iconTint = TvColors.Red, size = 64.dp, iconSize = 30.dp, iconOffsetX = 2.dp) {
+                    player.playing = true; pokeFs()
                 }
             }
             // 暂停浮层居中胶囊已撤（用户 2026-11-10：不要再显示进度条在中间）；

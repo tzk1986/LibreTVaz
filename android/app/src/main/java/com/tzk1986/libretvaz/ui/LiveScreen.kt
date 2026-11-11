@@ -334,7 +334,9 @@ private fun ChannelRow(
             color = if (fav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             // 走查 #14：TV 点★难命中——glyph 触控面撑到 ~42dp（foundation 1.12.1 无
             // minimumInteractiveTouchArea，按简报用内层 padding 等效；padding 须在 clickable 内侧才计入手势界）
-            modifier = Modifier.clickable(onClick = onFav).padding(horizontal = 8.dp, vertical = 14.dp),
+            modifier = Modifier.clickable(onClick = onFav)
+                .tmFocusBorder(focusedBg = com.tzk1986.libretvaz.ui.theme.TvColors.Red40)
+                .padding(horizontal = 8.dp, vertical = 14.dp),
         )
         onEpg?.let {
             TmBtn(onClick = it) { Text("节目单") }
