@@ -10,6 +10,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -707,6 +709,7 @@ fun BrowseScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
     // 紧凑化（用户 2026-11-03 TV/投影要求）：列间距 8→4dp，chip 行最小触控 48→26dp，标题降字号——纵向全让海报墙
+    // 紧凑化（用户 2026-11-03 TV/投影要求）：列间距 8→4dp，chip 行最小触控 48→26dp，标题降字号——纵向全让海报墙
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 点播即首页（web P8）：无源时保留顶栏骨架，内容区仅提示（对齐 web typeRow 文案）
@@ -906,7 +909,9 @@ fun BrowseScreen(
     }
 }
 
-/** 聚合墙尾部哨兵（web moreBtn 等价）：可聚焦按钮=遥控 OK 续轮；加载中/到底退化为文本 */
+/** 聚合墙尾部哨兵（web moreBtn 等价）：可聚焦按钮=遥控 OK 续轮。
+ *  C22（审计 2026-11-11）：三态恒为同一可焦节点——原「加载中/到底退化为纯 Text」会把
+ *  正被走焦的按钮换掉，焦点落空回跳别处、连按中断；现换文案不换节点（禁用态仍可焦）。 */
 @Composable
 internal fun WallSentinel(
     loading: Boolean,
@@ -916,17 +921,33 @@ internal fun WallSentinel(
     label: String? = null,
     onMore: () -> Unit,
 ) {
-    when {
-        loading -> Text("加载中…", modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        canMore -> TmBtn(
-            onClick = onMore,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .focusRequester(fr)
-                .onFocusEvent { onFocus(it.isFocused) },
-        ) { Text(label ?: "⌄ 加载更多（确认键继续加载）") }
-        else -> Text("已到底（各源无新内容）", modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+    val moreEnabled = !loading && canMore
+    val src = remember { MutableInteractionSource() }
+    val text = when {
+        loading -> "加载中…"
+        canMore -> label ?: "⌄ 加载更多（确认键继续加载）"
+        else -> "已到底（各源无新内容）"
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(fr)
+            .onFocusEvent { onFocus(it.isFocused) }
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .tmFocusBorder(focusedBg = com.tzk1986.libretvaz.ui.theme.TvColors.Red40)
+            .focusable(interactionSource = src)
+            .clickable(interactionSource = src, enabled = moreEnabled, onClick = onMore)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            color = when {
+                loading -> Color.White.copy(alpha = 0.6f)
+                canMore -> Color.White
+                else -> Color.White.copy(alpha = 0.5f)
+            },
+        )
     }
 }
 

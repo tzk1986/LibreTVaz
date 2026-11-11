@@ -20,7 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
@@ -76,6 +78,15 @@ internal fun PanelChip(
     dim: Boolean = false,
     fr: FocusRequester? = null,
 ) {
-    val m = if (fr != null) Modifier.focusRequester(fr) else Modifier
+    // C25（审计 2026-11-11）：面板 chip 纵向走焦=逃逸主通道（UP 跳背后墙/顶行、DOWN 穿底部同行墙卡），
+    // 单行面板纵向无物可达——onExit 取消纵向移出，左右留行内循环，BACK 收面板照旧
+    val m = (if (fr != null) Modifier.focusRequester(fr) else Modifier)
+        .focusProperties {
+            onExit = { s ->
+                if (s.requestedFocusDirection == FocusDirection.Up ||
+                    s.requestedFocusDirection == FocusDirection.Down
+                ) s.cancelFocusChange()
+            }
+        }
     TmChip(selected = selected, onClick = onClick, label = label, dim = dim, modifier = m.padding(0.dp))
 }
