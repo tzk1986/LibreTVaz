@@ -297,6 +297,10 @@ class SysCtl(private val context: Context) : PlayCtl {
 
     private fun fireError(code: String, detail: String) {
         setState(SysCore.ST_IDLE)
+        // B21（审计 2026-11-11）：错误即停播须随发 onIsPlaying(false)，对齐 Exo 档错误后
+        // media3 自动派发 onIsPlayingChanged(false) 的语义；否则播放钮停在「播放中」态。
+        // 桥接代码无纯逻辑可拆（SysCtl 依赖真机 MediaPlayer），以装机抽验覆盖。
+        cbs.forEach { it.onIsPlaying(false) }
         cbs.forEach { it.onError(code, detail) }
     }
 }

@@ -42,7 +42,13 @@ private fun SavedWall(
     modifier: Modifier = Modifier,
 ) {
     var delMode by remember { mutableStateOf(false) }
-    BackHandler { if (delMode) delMode = false else onBack() }
+    // B20（审计 2026-11-11）：整池清空不可恢复，加二次确认弹窗（对标源页「清除所有点播源」同款）
+    var confirmClear by remember { mutableStateOf(false) }
+    BackHandler {
+        if (confirmClear) confirmClear = false
+        else if (delMode) delMode = false
+        else onBack()
+    }
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TmBtn(onClick = onBack) { Text("← 返回") }
@@ -51,7 +57,7 @@ private fun SavedWall(
             if (items.isNotEmpty()) {
                 // 删除模式激活=亮底（TmBtn selected），配合海报红✕角标；统一钮样式（用户 2026-11-05）
                 TmBtn(onClick = { delMode = !delMode }, selected = delMode) { Text(if (delMode) "取消删除" else "删除") }
-                TmBtn(onClick = { onClear(); delMode = false }) { Text("清空") }
+                TmBtn(onClick = { confirmClear = true }) { Text("清空") }
             }
         }
         if (items.isEmpty()) {
@@ -92,6 +98,22 @@ private fun SavedWall(
                 }
             }
         }
+    }
+    if (confirmClear) {
+        AlertDialog(
+            modifier = Modifier.width(tmDialogW()),
+            properties = tmDialogProps,
+            onDismissRequest = { confirmClear = false },
+            title = { Text("确认清空$title？") },
+            text = { Text("将删除全部 ${items.size} 条记录，不可恢复。") },
+            confirmButton = {
+                TmBtn(onClick = {
+                    confirmClear = false
+                    onClear(); delMode = false
+                }) { Text("清空") }
+            },
+            dismissButton = { TmBtn(onClick = { confirmClear = false }) { Text("取消") } },
+        )
     }
 }
 
