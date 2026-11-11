@@ -65,7 +65,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
@@ -218,9 +217,11 @@ private fun FsCircleBtn(
     bg: Color,
     modifier: Modifier = Modifier,
     iconTint: Color = Color.White,
-    size: androidx.compose.ui.unit.Dp = 46.dp,
-    iconSize: androidx.compose.ui.unit.Dp = 26.dp,
-    iconOffsetX: androidx.compose.ui.unit.Dp = 0.dp,
+    // C28（审计 2026-11-12）：尺寸参数由固定 dp 改 tvu mm 档（46/26/0dp→63/36/0mm 等值换算），
+    // 与同层 FsAct/EpCell 等比律统一——小窗/分屏不再钮缩框不缩
+    sizeMm: Int = 63,
+    iconMm: Int = 36,
+    iconOffsetX: Int = 0,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -228,7 +229,7 @@ private fun FsCircleBtn(
     val pressed by src.collectIsPressedAsState()
     Box(
         modifier = modifier
-            .size(size)
+            .size(tvu(sizeMm))
             .clip(CircleShape)
             .onFocusEvent { focused = it.isFocused }
             .background(if (focused || pressed) TvColors.Red40 else bg, CircleShape)
@@ -238,7 +239,7 @@ private fun FsCircleBtn(
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(res), null, tint = iconTint,
-            modifier = Modifier.size(iconSize).offset(x = iconOffsetX))
+            modifier = Modifier.size(tvu(iconMm)).offset(x = tvu(iconOffsetX)))
     }
 }
 
@@ -252,17 +253,17 @@ private fun FsPauseBadge(timeTxt: String, frac: Float, toggle: (() -> Unit)?) {
     // 不再固定 110dp——避免短于/长于文字看着不协调
     val dens = LocalDensity.current
     var textW by remember { mutableStateOf(0.dp) }
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(tvu(14))) {
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(tvu(8))) {
             Text(
                 timeTxt, color = Color.White, style = MaterialTheme.typography.titleMedium,
                 onTextLayout = { r -> textW = with(dens) { r.size.width.toDp() } },
             )
-            Box(Modifier.width(textW).height(3.dp).background(TvColors.Track, RoundedCornerShape(2.dp))) {
-                Box(Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
+            Box(Modifier.width(textW).height(tvu(4)).background(TvColors.Track, RoundedCornerShape(tvu(3)))) {
+                Box(Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(tvu(3))))
             }
         }
-        val m = Modifier.size(32.dp)
+        val m = Modifier.size(tvu(44))
         Icon(
             painterResource(R.drawable.tvb_v_pause_circle), "已暂停", tint = Color.White,
             modifier = if (toggle != null) m.clickable { toggle() } else m,
@@ -1568,22 +1569,22 @@ fun DetailScreen(
             // ===== TVBox 手机版样式复刻（用户 2026-11-04 参考图）：左上标题/分辨率·右上码率·右中当前大时间+剩余·红细线进度·底部图标动作行；跟手拖拽+遥控焦点均可用 =====
             val fsTitle = (detail?.title?.ifBlank { null } ?: itemS.name) + "：第${curEp + 1}集"
             val shownMs = if (fsDragPos >= 0) fsDragPos else fsPos
-            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopStart).padding(20.dp, 14.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.size(width = 4.dp, height = 22.dp).background(TvColors.Red))
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopStart).padding(tvu(27), tvu(19))) {
+                Column(verticalArrangement = Arrangement.spacedBy(tvu(3))) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(11))) {
+                        Box(Modifier.size(width = tvu(6), height = tvu(30)).background(TvColors.Red))
                         Text(fsTitle, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                     }
                     // TVBox 复刻（用户 2026-11-09）次行「竖条+清晰度」：短红竖条 + qualityLabel(hPx)，其后跟淡色原始分辨率
-                    if (fsQualityTxt.isNotEmpty() || fsResTxt.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.size(width = 4.dp, height = 14.dp).background(TvColors.Red))
+                    if (fsQualityTxt.isNotEmpty() || fsResTxt.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(11))) {
+                        Box(Modifier.size(width = tvu(6), height = tvu(19)).background(TvColors.Red))
                         Text(fsQualityTxt.ifEmpty { fsResTxt }, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                         if (fsQualityTxt.isNotEmpty()) Text(fsResTxt, color = Color(0x99FFFFFF), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(20.dp, 14.dp)) {
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(tvu(27), tvu(19))) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(tvu(3))) {
                     if (fsBit.isNotEmpty()) Text(fsBit, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                     if (buffering) Text("缓冲中…", color = Color.Yellow, style = MaterialTheme.typography.bodySmall)
                     // 用户 2026-11-10 修订：播放中什么都不显，仅暂停时显「时间+圆圈标+短进度线」标（FsPauseBadge）
@@ -1596,7 +1597,7 @@ fun DetailScreen(
             }
             // 修订（用户 2026-11-10）：底栏控件自隐后，右上继续显示「⏸ + 暂停时间点」——
             // 快进/后退(←→/拖拽)后 fsPos 1s 轮询刷新，靠此时间反映当前位置；替代原居中进度胶囊
-            AnimatedVisibility(visible = fsBar.not() && !playing && !locked && !buffering, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(20.dp, 14.dp)) {
+            AnimatedVisibility(visible = fsBar.not() && !playing && !locked && !buffering, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(tvu(27), tvu(19))) {
                 FsPauseBadge(
                     fmtHms(shownMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
                     if (fsDur > 0) shownMs.toFloat() / fsDur else 0f,
@@ -1604,27 +1605,27 @@ fun DetailScreen(
                 )
             }
             // 用户 2026-11-10 实拍图版式：右中「<」=退出全屏回详情页（原 CenterEnd 大时间区迁至右下）
-            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterEnd).padding(end = tvu(27))) {
                 FsCircleBtn(R.drawable.tvb_v_back, "退出全屏", TvColors.Overlay) { exitFs() }
             }
             // 用户 2026-11-10 实拍图版式：左中=锁定钮（移出按钮行）；锁定后收起控件，左中改常驻「解锁」钮
-            AnimatedVisibility(visible = fsBar && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) {
+            AnimatedVisibility(visible = fsBar && !locked, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.CenterStart).padding(start = tvu(27))) {
                 FsCircleBtn(R.drawable.tvb_icon_lock, "锁定屏幕", TvColors.Overlay) { toggleLock() }
             }
             if (fs && locked) {
                 FsCircleBtn(R.drawable.tvb_icon_unlock, "解锁屏幕", TvColors.DetailBtn,
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) { toggleLock() }
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = tvu(27))) { toggleLock() }
             }
             // 用户 2026-11-10 实拍图版式：右下（控件上方）=当前时间大时钟 + 影片剩余/结束时刻
             // 修订（用户手机实拍：与右中「<」重叠）：字号 displaySmall→headlineMedium、bottom 贴合紧凑后的底栏
             // 再修（用户 2026-11-10）：靠右贴边（与右上对齐，end=20dp）——底栏紧凑+时钟缩小后与「<」已无竖向交叠；
             // 剩余/结束分隔改「/」
-            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 88.dp)) {
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (fsClock.isNotEmpty()) Text(fsClock, color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Normal)
+            AnimatedVisibility(visible = fsBar, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomEnd).padding(end = tvu(27), bottom = tvu(121))) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(tvu(6))) {
+                    if (fsClock.isNotEmpty()) Text(fsClock, color = Color.White, fontSize = tvSp(60), fontWeight = FontWeight.Normal)
                     if (fsDur > 0) Text(
                         "影片剩余 " + fmtHms((fsDur - shownMs).coerceAtLeast(0L) / 1000) + " | 影片结束 " + fsEndTxt,
-                        color = Color(0xE6FFFFFF), fontSize = 15.sp,
+                        color = Color(0xE6FFFFFF), fontSize = tvSp(21),
                     )
                 }
             }
@@ -1634,13 +1635,13 @@ fun DetailScreen(
                 visible = fsBar && !locked && settings.skipIntroSec > 0 && skipInDone != curEp &&
                     fsPos < settings.skipIntroSec * 1000L,
                 enter = fadeIn(), exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 88.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = tvu(27), bottom = tvu(121)),
             ) {
                 Box(
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(TvColors.DetailBtn)
+                    modifier = Modifier.clip(RoundedCornerShape(tvu(11))).background(TvColors.DetailBtn)
                         .clickable { player.seekTo(settings.skipIntroSec * 1000L); skipInDone = curEp; pokeFs() }
                         .semantics { contentDescription = "跳过片头" }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = tvu(19), vertical = tvu(11)),
                 ) {
                     Text("跳过片头 ${fmtSkip(settings.skipIntroSec.toLong())}", color = Color.White, style = MaterialTheme.typography.bodySmall)
                 }
@@ -1649,14 +1650,14 @@ fun DetailScreen(
                 // 紧凑化修订（用户 2026-11-10 手机实拍）：撤底栏内小时钟行（与右下大时钟重复且占高），
                 // padding/进度盒缩小，按钮行 40dp 触控高——整栏 ~74dp，为右下时钟与退出钮让出空间
                 Column(
-                    modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 24.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.fillMaxWidth().background(Color(0x99000000)).padding(horizontal = tvu(33), vertical = tvu(8)),
+                    verticalArrangement = Arrangement.spacedBy(tvu(3)),
                 ) {
                     // 进度行（参考图样式）：当前时间—红细线+圆点拇指—总时长；手指按住即拖（跟手预览、松手 seek）、单击定位；遥控 ←→ 仍走 ±15s（fsKeyMod）
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(11))) {
                         Text(fmtHms(shownMs / 1000), color = Color.White, style = MaterialTheme.typography.bodySmall)
                         Box(
-                            modifier = Modifier.weight(1f).height(18.dp).pointerInput(fsDur) {
+                            modifier = Modifier.weight(1f).height(tvu(25)).pointerInput(fsDur) {
                                 awaitEachGesture {
                                     val downEv = awaitFirstDown(requireUnconsumed = false)
                                     val w = size.width.toFloat()
@@ -1674,15 +1675,18 @@ fun DetailScreen(
                                 }
                             },
                         ) {
+                            // C28（审计 2026-11-12）：描边/拇指提手到 tvu 档——DrawScope 非 Composable 调不了 tvu，
+                            // 在外层 Box 内容槽取好；原 2/2/4/7dp 固定值分屏钮缩线不缩（2.7/2.7/5.5/9.6mm 等值）
+                            val trackW = tvu(3); val bufW = tvu(3); val progW = tvu(6); val thumbR = tvu(10)
                             Canvas(Modifier.matchParentSize()) {
                                 val half = size.height / 2f
                                 val f = if (fsDur > 0L) (shownMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
                                 // TVBox 复刻（用户 2026-11-09）：轨道 40%白 → 次缓冲 深灰 → 已播 主题红 → 红圆拇指
                                 val bf = if (fsDur > 0L) (fsBuf.toFloat() / fsDur).coerceIn(f, 1f) else 0f
-                                drawLine(TvColors.Track, Offset(0f, half), Offset(size.width, half), 2.dp.toPx())
-                                drawLine(TvColors.Buffer, Offset(0f, half), Offset(size.width * bf, half), 2.dp.toPx())
-                                drawLine(TvColors.Red, Offset(0f, half), Offset(size.width * f, half), 4.dp.toPx())
-                                drawCircle(TvColors.Red, 7.dp.toPx(), Offset(size.width * f, half))
+                                drawLine(TvColors.Track, Offset(0f, half), Offset(size.width, half), trackW.toPx())
+                                drawLine(TvColors.Buffer, Offset(0f, half), Offset(size.width * bf, half), bufW.toPx())
+                                drawLine(TvColors.Red, Offset(0f, half), Offset(size.width * f, half), progW.toPx())
+                                drawCircle(TvColors.Red, thumbR.toPx(), Offset(size.width * f, half))
                             }
                         }
                         Text(if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
@@ -1691,7 +1695,7 @@ fun DetailScreen(
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(tvu(6)),
                     ) {
                         // 用户 2026-11-10 实拍图裁决：按钮行只留 7 钮。锁→左中、退出→右中、时钟→右下；跳过/循环/重置撤下。
                         // 2 次放权恢复：倍速（F1 11-10 裁决）、选集（P1-8 11-11 审计批准——fsEpPanel 面板曾无入口=死码，
@@ -1752,7 +1756,7 @@ fun DetailScreen(
                     level = avLevel,
                     modifier = Modifier
                         .align(if (avZone == EdgeZone.Brightness) Alignment.CenterStart else Alignment.CenterEnd)
-                        .padding(horizontal = 24.dp),
+                        .padding(horizontal = tvu(33)),
                 )
             }
             // TVBox 复刻（用户 2026-11-09）暂停居中播放大钮：随控件条显隐，点按续播
@@ -1760,7 +1764,7 @@ fun DetailScreen(
             if (fs && !playing && fsBar && !locked && !buffering) {
                 FsCircleBtn(R.drawable.tvb_v_play, "继续播放", TvColors.Overlay,
                     modifier = Modifier.align(Alignment.Center),
-                    iconTint = TvColors.Red, size = 64.dp, iconSize = 30.dp, iconOffsetX = 2.dp) {
+                    iconTint = TvColors.Red, sizeMm = 88, iconMm = 41, iconOffsetX = 3) {
                     player.playing = true; pokeFs()
                 }
             }
@@ -1776,22 +1780,22 @@ fun DetailScreen(
                     modifier = Modifier.align(Alignment.Center)
                         .background(
                             Brush.horizontalGradient(listOf(Color.Transparent, TvColors.Overlay, Color.Transparent)),
-                            RoundedCornerShape(16.dp),
+                            RoundedCornerShape(tvu(22)),
                         )
-                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                        .padding(horizontal = tvu(33), vertical = tvu(19)),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(tvu(11)),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(tvu(16))) {
                         Text(if (d < 0) "◀◀" else "▶▶", color = Color.White, style = MaterialTheme.typography.titleMedium)
                         Text(
                             fmtHms(showMs / 1000) + " / " + (if (fsDur > 0) fmtHms(fsDur / 1000) else "--:--:--"),
-                            color = Color.White, fontSize = 26.sp,
+                            color = Color.White, fontSize = tvSp(36),
                         )
                     }
-                    Box(Modifier.width(220.dp).height(3.dp).background(Color.White.copy(alpha = 0.35f), RoundedCornerShape(2.dp))) {
+                    Box(Modifier.width(tvu(302)).height(tvu(4)).background(Color.White.copy(alpha = 0.35f), RoundedCornerShape(tvu(3)))) {
                         val f = if (fsDur > 0) (showMs.toFloat() / fsDur).coerceIn(0f, 1f) else 0f
-                        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(2.dp)))
+                        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(TvColors.Red, RoundedCornerShape(tvu(3))))
                     }
                 }
             }
@@ -1799,12 +1803,12 @@ fun DetailScreen(
             // 点选/OK 即播并收看板；打开时自动抢焦点，十字键即可走焦；BACK/Esc=关看板
             AnimatedVisibility(visible = fsEpPanel, enter = fadeIn() + slideInHorizontally { it / 2 }, exit = fadeOut() + slideOutHorizontally { it / 2 }, modifier = Modifier.align(Alignment.CenterEnd)) {
                 Column(
-                    modifier = Modifier.width(300.dp).fillMaxHeight().background(Color(0xB3000000)).padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.width(tvu(411)).fillMaxHeight().background(Color(0xB3000000)).padding(horizontal = tvu(14), vertical = tvu(11)),
+                    verticalArrangement = Arrangement.spacedBy(tvu(6)),
                 ) {
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(tvu(6))) {
                         lines().forEachIndexed { i, lg ->
-                            TextButton(onClick = { if (i != line) switchLine(i) }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                            TextButton(onClick = { if (i != line) switchLine(i) }, contentPadding = PaddingValues(horizontal = tvu(11), vertical = 0.dp)) {
                                 Text("${lg.flag}(${lg.list.size})", color = if (i == line) Color(0xFFFFEB3B) else Color.White, style = MaterialTheme.typography.labelMedium)
                             }
                         }
@@ -1812,18 +1816,18 @@ fun DetailScreen(
                     val epsFs = lines().getOrNull(line)?.list ?: emptyList()
                     LazyVerticalGrid(
                         state = fsGrid,
-                        columns = GridCells.Adaptive(92.dp),
+                        columns = GridCells.Adaptive(tvu(126)),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(tvu(8)),
+                        verticalArrangement = Arrangement.spacedBy(tvu(8)),
                     ) {
                         itemsIndexed(epsFs) { i, e ->
                             Button(
                                 onClick = { goEpTo(i); fsEpPanel = false },
                                 // TVBox 统一（用户 2026-11-09 遗留清理）：焦点=40%红底+白描边、当前集=红字（tvEpTextColor），撤旧黄框蓝底
-                                modifier = if (i == fsFocusEp) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier,
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                                modifier = if (i == fsFocusEp) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(tvu(11))) else Modifier,
+                                shape = RoundedCornerShape(tvu(11)),
+                                contentPadding = PaddingValues(horizontal = tvu(8), vertical = 0.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (i == fsFocusEp) TvColors.Red40 else TvColors.SeriesBg,
                                     contentColor = tvEpTextColor(i == curEp),
@@ -1849,15 +1853,15 @@ fun DetailScreen(
             AnimatedVisibility(visible = speedPanel && fs, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
                 Column(
                     modifier = Modifier.clip(RoundedCornerShape(TvColors.RadiusFs)).background(TvColors.Overlay)
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .padding(horizontal = tvu(25), vertical = tvu(14)),
+                    verticalArrangement = Arrangement.spacedBy(tvu(6)),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     SPEED_OPTIONS.forEachIndexed { i, x ->
                         TextButton(
                             onClick = { speedX = x; speedPanel = false; pokeFs() },
-                            modifier = if (i == speedFocus) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(8.dp)) else Modifier,
-                            contentPadding = PaddingValues(horizontal = 26.dp, vertical = 0.dp),
+                            modifier = if (i == speedFocus) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(tvu(11))) else Modifier,
+                            contentPadding = PaddingValues(horizontal = tvu(36), vertical = 0.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (i == speedFocus) TvColors.Red40 else Color.Transparent,
                                 contentColor = if (x == speedX) TvColors.Red else Color.White,

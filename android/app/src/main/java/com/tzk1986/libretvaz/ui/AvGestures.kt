@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
 import com.tzk1986.libretvaz.ui.theme.TvColors
 
 /**
@@ -36,11 +35,12 @@ fun tapZone(x: Float, width: Float): TapZone = when {
 fun dragToLevel(dy: Float, height: Float, startLevel: Float): Float =
     (startLevel - dy / height).coerceIn(0f, 1f)
 
-/** TVBox 竖向滑条（5dp×90dp）：40%白槽底 + 主题红自底填充 level(0..1)。松手由调用方延迟隐藏 */
+/** TVBox 竖向滑条（tvu 档，基线≈5dp×90dp）：40%白槽底 + 主题红自底填充 level(0..1)。松手由调用方延迟隐藏
+ *  C28（审计 2026-11-12）：固定 dp→tvu 等比（7/123/4mm），与全屏层钮控同律防分屏漂移 */
 @Composable
 fun TvSliderBar(level: Float, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(3.dp)
-    Box(modifier = modifier.width(5.dp).height(90.dp).clip(shape).background(TvColors.Track)) {
+    val shape = RoundedCornerShape(tvu(4))
+    Box(modifier = modifier.width(tvu(7)).height(tvu(123)).clip(shape).background(TvColors.Track)) {
         Box(
             Modifier
                 .align(Alignment.BottomCenter)
