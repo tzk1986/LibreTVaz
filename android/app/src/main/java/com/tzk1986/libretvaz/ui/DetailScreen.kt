@@ -687,12 +687,14 @@ fun DetailScreen(
         probeSpeeds(i)
     }
     fun switchLine(i: Int) {
-        line = i; curEp = 0
+        // B14（审计 2026-11-11）：换线保在播集（序号钳位），不再强制回首集
+        val keep = Playback.epMigrate(curEp, lines().getOrNull(i)?.list?.size ?: 0)
+        line = i; curEp = keep
         tried = setOf(i)
         userPickedLine = true
         toast("正在切换线路至「${lines()[i].flag}」")
-        probeSpeeds(0)
-        playAt(i, 0)
+        probeSpeeds(keep)
+        playAt(i, keep)
     }
 
     // ===== 渲染（web paint 等价）：默认线→6h 快线复用→resume/prog 覆盖→起播+测速 =====

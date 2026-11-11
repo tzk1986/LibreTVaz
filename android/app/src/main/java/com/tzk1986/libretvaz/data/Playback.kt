@@ -12,6 +12,10 @@ object Playback {
         return if (i >= 0) i else lines.indexOfFirst { it.list.isNotEmpty() }
     }
 
+    /** B14（审计 2026-11-11）：换线保在播集——序号保留，新线集数不足钳到末集；空线归 0 */
+    fun epMigrate(curEp: Int, newSize: Int): Int =
+        if (newSize <= 0) 0 else curEp.coerceAtMost(newSize - 1)
+
     data class LineCandidate(val index: Int, val episode: PlayEpisode)
 
     /** 自动换线候选：B4 起带 speeds（实测慢/不可用线沉底，null=未知不惩罚） */
