@@ -94,6 +94,14 @@ class KeepStore(context: Context) {
         ProgStore(ctx).pruneOrphans(ctx)
     }
 
+    /** A7（审计 2026-11-11）：批量删除=单次 persist（省 N 次编码写盘）；同组去重随 remove 语义 */
+    fun removeMany(vods: List<VodSummary>) {
+        if (vods.isEmpty()) return
+        val keys = vods.map { SavedItem(it, 0) }
+        persist(all().filterNot { e -> keys.any { sameVod(e, it) } })
+        ProgStore(ctx).pruneOrphans(ctx)
+    }
+
     /** 清空本池收藏（用户 2026-11-05：收藏墙照历史墙同款，含「清空」） */
     fun clear(zone: Boolean) {
         persist(all().filterNot { it.vod.isAdult == zone })
@@ -167,6 +175,14 @@ class HistStore(context: Context) {
     fun remove(vod: VodSummary) {
         val cur = SavedItem(vod, 0)
         persist(all().filterNot { sameVod(it, cur) })
+        ProgStore(ctx).pruneOrphans(ctx)
+    }
+
+    /** A7（审计 2026-11-11）：批量删除=单次 persist；同组去重随 remove 语义 */
+    fun removeMany(vods: List<VodSummary>) {
+        if (vods.isEmpty()) return
+        val keys = vods.map { SavedItem(it, 0) }
+        persist(all().filterNot { e -> keys.any { sameVod(e, it) } })
         ProgStore(ctx).pruneOrphans(ctx)
     }
 
