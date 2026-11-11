@@ -299,6 +299,7 @@ fun DetailScreen(
 
     var detail by remember { mutableStateOf<VideoDetail?>(null) }
     var errText by remember { mutableStateOf<String?>(null) }
+    var detailTick by remember { mutableIntStateOf(0) } // A6（审计 2026-11-11）：详情失败「重试」=++tick 重拉
     var line by remember { mutableStateOf(0) }
     var curEp by remember { mutableStateOf(0) }
     var tried by remember { mutableStateOf(setOf(0)) }
@@ -854,7 +855,7 @@ fun DetailScreen(
     }
 
     // 进页/换源：写历史+词权（web openDetail 头部），SWR 缓存秒显→拉新，数据未变不重绘打断播放
-    LaunchedEffect(itemS) {
+    LaunchedEffect(itemS, detailTick) {
         hist.push(itemS, mergeName = settings.histMerge, maxPerPool = settings.histMax)
         VocabPools.get(context).bump(itemS.name, 2L, itemS.isAdult)
         autoSrcTried = false
@@ -1407,8 +1408,13 @@ fun DetailScreen(
                             // 不动=他页零波及）——钮总宽与字号同比例律，任意 dpi 下占列宽比恒定
                             val actPad = PaddingValues(horizontal = tvu(12), vertical = tvu(4))
                             // C1：预览关时播放钮常驻；winActivate=待播则补起播链后进全屏（正常态等旧行为）
-                            if (!playing || noPreview) TmBtn(modifier = af, contentPadding = actPad, onClick = { winActivate() }) { Text("播放", fontSize = tvSp(20)) }
-                            TmBtn(modifier = if (playing) af else Modifier, contentPadding = actPad, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
+                            // A6（审计 2026-11-11）：错误兜底后显式「重试」——详情失败++detailTick 重拉、
+                            // 播放失败 replayHere 重载本集；正常待播仍「播放」走 winActivate
+                            val errNow = errText != null || errorHint != null
+                            if (!playing || noPreview || errNow) TmBtn(modifier = af, contentPadding = actPad, onClick = {
+                                if (errText != null) detailTick++ else if (errorHint != null) replayHere() else winActivate()
+                            }) { Text(if (errNow) "重试" else "播放", fontSize = tvSp(20)) }
+                            TmBtn(modifier = if (playing && !errNow) af else Modifier, contentPadding = actPad, onClick = { chDlg = true }) { Text("快搜", fontSize = tvSp(20)) }
                             TmBtn(contentPadding = actPad, onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
                             TmBtn(contentPadding = actPad, onClick = {
                                 LineSpeed.delete(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))
