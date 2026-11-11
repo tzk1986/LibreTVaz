@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
@@ -32,8 +33,11 @@ import com.tzk1986.libretvaz.ui.theme.tvBtnContainer
  * （环 124px vs 底 73px）——改 Box 自绘：底/描边/点击同节点，描边严丝合缝贴按钮边界；
  * clickable 节点天然可焦（BrowseScreen tabFrs/详情窗先例），遥控走焦不受影响。
  */
-/** 全 app 输入框统一高度＝TmBtn 按钮高度（用户 2026-11-05：所有输入框与按钮同高） */
-val TmFieldHeight = 48.dp
+/** 全 app 输入框统一高度（C29 审计 2026-11-12：48→56——M3 OutlinedTextField 固有高 56dp
+ *  （label 16+行 24+上下内衬 8/8），强压 48 把 label/输入文字挤压裁切实锤
+ *  （SettingsScreen 服务器/代理弹窗、SourcesScreen 导入/手动添加行）；
+ *  输入框与钮同 Row 时钮处标 requiredHeight(TmFieldHeight) 保行内等高） */
+val TmFieldHeight = 56.dp
 
 /** 全 app 弹窗统一宽＝画布逻辑宽×0.7（用户 2026-11-05；须配 usePlatformDefaultWidth=false。
  *  P1-4：基准从原密度 cfg dp 改画布 dp——4K 投影档 cfg=3840dp 而画布 914dp，旧式溢屏 3 倍） */
@@ -77,6 +81,9 @@ fun TmBtn(
             .background(container, shape)
             .then(if (focused) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, shape) else Modifier)
             .clickable(interactionSource = btnSrc, enabled = enabled, onClick = onClick)
+            // C30（审计 2026-11-12）：行内控件统一基准 32dp（TmChip/PillButton 同档；原 auto≈28dp
+            // 与 YearSortBtn 36/行内其它控件混排；heightIn 非强约束，与外层 requiredHeight(输入行56) 无冲突）
+            .heightIn(min = 32.dp)
             .padding(contentPadding),
         contentAlignment = Alignment.Center,
     ) {

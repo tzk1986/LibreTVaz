@@ -371,7 +371,10 @@ private fun YearSortBtn(order: YearOrder, onClick: () -> Unit) {
             .clip(RoundedCornerShape(8.dp))
             .background(if (sortF) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else if (order == YearOrder.NONE) Color(0x33FFFFFF) else Color(0x66FFFFFF))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            // C30（审计 2026-11-12）：与同排 TmBtn 32dp 基准等高（原 36dp 混排行高跳档；
+            // 18sp 箭头行 24+内衬 6=36，压内衬至 3 再 heightIn 兜底 32）
+            .heightIn(min = 32.dp)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {

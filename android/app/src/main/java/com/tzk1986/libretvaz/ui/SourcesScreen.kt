@@ -164,8 +164,9 @@ fun SourcesScreen(
                 singleLine = true,
                 modifier = Modifier.weight(1f).height(TmFieldHeight), // 用户 2026-11-05：输入框与按钮同高
             )
-            TmBtn(enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
-            TmBtn(onClick = { showQr = true }) { Text("📱 扫码导入") }
+            // C29+C30（审计 2026-11-12）：输入框恢复固有高 56 止裁切；同排钮标同高守行内等高规范
+            TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), enabled = !busy, onClick = { doImport(importUrl) }) { Text(if (busy) "导入中…" else "导入") }
+            TmBtn(modifier = Modifier.requiredHeight(TmFieldHeight), onClick = { showQr = true }) { Text("📱 扫码导入") }
         }
         // 订阅仓库预设（复用 SourceGuard.PRESETS 单一事实源）：点击即填入并导入，免手输长 URL
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
