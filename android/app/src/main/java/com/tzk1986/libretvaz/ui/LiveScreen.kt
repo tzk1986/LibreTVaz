@@ -332,11 +332,12 @@ private fun ChannelRow(
             if (fav) "★" else "☆",
             style = MaterialTheme.typography.titleMedium,
             color = if (fav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            // 走查 #14：TV 点★难命中——glyph 触控面撑到 ~42dp（foundation 1.12.1 无
-            // minimumInteractiveTouchArea，按简报用内层 padding 等效；padding 须在 clickable 内侧才计入手势界）
+            // 走查 #14：TV 点★难命中——内层 padding 计入手势界撑触控面；
+            // C33（审计 2026-11-11 #33）：横向 8→16 使命中宽 ~48dp（竖已 24 行高+28=52 达标；
+            // foundation 1.12.1 无热区扩展 API，padding 实撑为唯一正解，整行 Row 高由本项撑住不破坏等高）
             modifier = Modifier.clickable(onClick = onFav)
                 .tmFocusBorder(focusedBg = com.tzk1986.libretvaz.ui.theme.TvColors.Red40)
-                .padding(horizontal = 8.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
         )
         onEpg?.let {
             TmBtn(onClick = it) { Text("节目单") }

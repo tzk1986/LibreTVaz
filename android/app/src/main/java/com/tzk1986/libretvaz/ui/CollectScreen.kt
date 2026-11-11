@@ -396,7 +396,9 @@ private fun SourceColRow(label: String, selected: Boolean, onClick: () -> Unit) 
             .clip(RoundedCornerShape(8.dp))
             .background(if (rowF || selected) com.tzk1986.libretvaz.ui.theme.TvColors.Red40 else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            // C33（审计 2026-11-11 #33）：左源栏整宽单控件行（非行内混排，不受 32dp 等高约束），
+            // vertical 9→14 使命中 20 行高+28=48dp
+            .padding(horizontal = 10.dp, vertical = 14.dp),
     ) {
         Text(
             text = label,

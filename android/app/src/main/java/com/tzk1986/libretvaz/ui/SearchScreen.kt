@@ -74,9 +74,11 @@ private fun HomeBtn(label: String, modifier: Modifier = Modifier, tight: Boolean
         modifier = modifier.onFocusEvent { btnFocused = it.isFocused },
     ) {
         Box(
+            // C33（审计 2026-11-11 #33）：tight=键盘独立区块（非行内混排，不受 32dp 等高规范约束），
+            // vertical 2→16 把键实高撑到 ~48dp（labelSmall 行 16+32），触屏可及；行距 8 不变、列可滚
             modifier = (if (fill) Modifier.fillMaxWidth() else Modifier).padding(
                 horizontal = if (tight) 2.dp else 10.dp,
-                vertical = if (tight) 2.dp else 5.dp,
+                vertical = if (tight) 16.dp else 5.dp,
             ),
             contentAlignment = Alignment.Center,
         ) {
