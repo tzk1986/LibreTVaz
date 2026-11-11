@@ -33,6 +33,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // P2（审计 2026-11-11）：locale 过滤——app 自身仅默认 values（中文硬编码），其余几十语系
+    // 全来自 compose/material3/media3/work 等 AAR 传递资源；只保留中英，砍掉翻译字符串与复数规则
+    androidResources {
+        localeFilters += listOf("zh", "en")
+    }
+
     buildFeatures {
         compose = true
     }
@@ -50,9 +56,9 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
+    // P2（审计 2026-11-11）：ui-tooling-preview 死依赖——全项目无 @Preview，预览注解不进运行时也无引用
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.tv.material)
+    // P2：androidx.tv:tv-material 死依赖——0 引用（TV 走焦全走 Compose 原生 focusRequester）
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
