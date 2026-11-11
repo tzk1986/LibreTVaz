@@ -510,7 +510,8 @@ fun ZoneScreen(
                     }
                 }
             }
-            items(view, key = { "${it.sourceUrl}|${it.vodId}" }, contentType = { "poster" }) { it ->
+            // 4K 投影崩溃修复（用户 2026-11-11）：撤 key=sourceUrl|vodId（池内重复，大 dp 全挂载即崩）
+            items(view, contentType = { "poster" }) { it ->
                 ZonePoster(
                     item = it,
                     tag = tags[zspKey(it)],

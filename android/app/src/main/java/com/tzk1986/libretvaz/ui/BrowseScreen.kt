@@ -816,7 +816,9 @@ fun BrowseScreen(
             if (aggMode) {
                 // 聚合墙卡片（用户 2026-11-03 要求，偏离 web 点卡直达详情）：只显示海报+名称（数据层
                 // mergeShards 已按归一剧名去重），点击=带剧名进搜索页全源聚合，用户再选源播放
-                itemsIndexed(aggView, key = { _, it -> "${it.sourceUrl}|${it.vodId}" }, contentType = { _, _ -> "poster" }) { _, item ->
+                // 4K 投影崩溃修复（用户 2026-11-11）：撤 key=sourceUrl|vodId——池内
+                // sourceUrl|vodId 有重复，大 dp 档一次全挂载即崩（Lazy 重复键 IllegalArgument）
+                itemsIndexed(aggView, contentType = { _, _ -> "poster" }) { _, item ->
                     PosterCard(item = item, onClick = { onAggSearch(item.name) })
                 }
                 if (aggView.isNotEmpty()) {
@@ -832,8 +834,9 @@ fun BrowseScreen(
                     }
                 }
             } else {
-                // 用户 2026-11-06 走查 #10：单源墙补 key（与聚合墙同键式）+contentType
-                itemsIndexed(shown, key = { _, it -> "${it.sourceUrl}|${it.vodId}" }, contentType = { _, _ -> "poster" }) { _, item ->
+                // 用户 2026-11-06 走查 #10：单源墙补 key+contentType；2026-11-11 4K 崩溃
+                // 修复：撤 key=sourceUrl|vodId（池内重复，大 dp 全挂载即崩），保留 contentType
+                itemsIndexed(shown, contentType = { _, _ -> "poster" }) { _, item ->
                     PosterCard(item = item, onClick = { onPick(item) })
                 }
                 if (shown.isNotEmpty()) {

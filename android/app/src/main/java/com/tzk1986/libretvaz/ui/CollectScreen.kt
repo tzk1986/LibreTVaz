@@ -336,7 +336,8 @@ fun CollectScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    gridItems(shown, key = { "${it.sourceUrl}|${it.vodId}" }, contentType = { "poster" }) { it ->
+                    // 4K 投影崩溃修复（用户 2026-11-11）：撤 key=sourceUrl|vodId（池内重复，大 dp 全挂载即崩）
+                    gridItems(shown, contentType = { "poster" }) { it ->
                         PosterCard(
                             item = it, onClick = { onPick(it) },
                             // TVBox 对标 C2（2026-11-10）：源名前缀受「数据源显示」开关控制

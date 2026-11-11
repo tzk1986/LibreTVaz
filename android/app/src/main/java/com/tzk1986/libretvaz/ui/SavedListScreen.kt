@@ -64,7 +64,9 @@ private fun SavedWall(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items, key = { "${it.vod.sourceUrl}|${it.vod.vodId}" }, contentType = { "poster" }) { s ->
+            // 4K 投影崩溃修复（用户 2026-11-11）：撤 key=sourceUrl|vodId（池内有重复，
+            // 大 dp 档全挂载暴露重复键即崩）；默认位置键等价安全
+            items(items, contentType = { "poster" }) { s ->
                 Box {
                     PosterCard(item = s.vod, onClick = {
                         if (delMode) onRemove(s.vod) else onPick(s.vod)
