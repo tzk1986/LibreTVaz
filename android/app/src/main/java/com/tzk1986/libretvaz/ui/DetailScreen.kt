@@ -365,6 +365,7 @@ fun DetailScreen(
     // 进页读档、动作行「Exo/系统」胶囊当场切（settings 持久化，重建续位复用 hwResume 模板）
     var engineX by remember { mutableIntStateOf(settings.playerEngine) }
     var hwDecode by remember { mutableStateOf(true) }
+    var audioSheet by remember { mutableStateOf(false) }   // A4 音轨列表弹窗
     var hwResume by remember { mutableStateOf<Pair<Long, Boolean>?>(null) } // (位置ms, 切换前是否在播)，LaunchedEffect(hwDecode, engineX) 消费
     var fsEndTxt by remember { mutableStateOf("") }   // 右下时钟区「预计结束」HH:MM:SS（1s 循环随 fsClock 更新）
     var fsDragPos by remember { mutableLongStateOf(-1L) }
@@ -503,32 +504,48 @@ fun DetailScreen(
         settings.playerEngine = engineX
         toast(if (engineX == 1) "已切系统播放器（音轨/软硬解/码率项降级）" else "已切 Exo 播放器")
     }
-    // 用户 2026-11-10 复刻 TVBox「音轨」钮：跨音频 group 展平轮切（media3 1.11 新 API：
-    // currentTracks.groups + overrides[TrackGroup] + TrackSelectionOverride(TrackGroup, index)）
-    fun toggleAudioTrack() {
-        // T-C1：音轨切换为 Exo 独有能力，系统档按钮已置灰；防御兜底=不操作
+    // 用户 2026-11-10 复刻 TVBox「音轨」钮；A4（审计 2026-11-11）升级为列表弹窗（盲轮切保留为数据层）：
+    // media3 1.11 API：currentTracks.groups + overrides[TrackGroup] + TrackSelectionOverride(TrackGroup, index)
+    fun audioFlat(ex: androidx.media3.exoplayer.ExoPlayer) =
+        ex.currentTracks.groups
+            .filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSupported }
+            .flatMap { gr -> (0 until gr.length).filter { gr.isTrackSupported(it) }.map { idx -> gr to idx } }
+
+    fun audioCur(flat: List<Pair<androidx.media3.common.Tracks.Group, Int>>, overrides: Map<androidx.media3.common.TrackGroup, androidx.media3.common.TrackSelectionOverride>) =
+        flat.indexOfFirst { (gr, i) ->
+            val ov = overrides[gr.mediaTrackGroup]
+            if (ov != null) i in ov.trackIndices else gr.isTrackSelected(i)
+        }
+
+    // A4：弹窗直选指定轨（override 唯一音频档）；选中态行内实时算
+    fun pickAudioTrack(gr: androidx.media3.common.Tracks.Group, i: Int) {
         val ex = player.exo ?: return
-        val groups = ex.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.isSupported }
-        val flat = groups.flatMap { gr -> (0 until gr.length).filter { gr.isTrackSupported(it) }.map { idx -> gr to idx } }
-        if (flat.size <= 1) {
-            toast(if (flat.isEmpty()) "暂无可用音轨" else "该流只有 1 条音轨，无轨可切")
-            return
-        }
-        val overrides = ex.trackSelectionParameters.overrides
-        var cur = -1
-        flat.forEachIndexed { k, pair ->
-            if (cur >= 0) return@forEachIndexed
-            val ov = overrides[pair.first.mediaTrackGroup]
-            if (ov != null) { if (pair.second in ov.trackIndices) cur = k }
-            else if (pair.first.isTrackSelected(pair.second)) cur = k
-        }
-        val (gr, i) = flat[(cur + 1).mod(flat.size)]
         ex.trackSelectionParameters = ex.trackSelectionParameters.buildUpon()
             .setOverrideForType(androidx.media3.common.TrackSelectionOverride(gr.mediaTrackGroup, i))
             .build()
         val f = gr.getTrackFormat(i)
-        val lbl = f.label?.takeIf { it.isNotEmpty() } ?: f.language?.takeIf { it.isNotEmpty() }
-        toast("已切音轨 " + (lbl ?: "${i + 1}/${flat.size}"))
+        val lbl = audioTrackLabel(f.language, f.label, i)
+        toast("已切音轨 $lbl")
+    }
+
+    // A4：恢复自动选轨（清音频 override）
+    fun autoAudioTrack() {
+        val ex = player.exo ?: return
+        ex.trackSelectionParameters = ex.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+            .build()
+        toast("音轨已恢复自动")
+    }
+
+    fun toggleAudioTrack() {
+        // 数据兜底：无轨/单轨仍走 toast 不开窗（多轨才开窗选择）
+        val ex = player.exo ?: return
+        val flat = audioFlat(ex)
+        if (flat.size <= 1) {
+            toast(if (flat.isEmpty()) "暂无可用音轨" else "该流只有 1 条音轨，无轨可切")
+            return
+        }
+        audioSheet = true
     }
 
     fun toggleSubtitle() {
@@ -1673,8 +1690,8 @@ fun DetailScreen(
                         }
                         // 用户 2026-11-10：硬解/软解钮（切换=重建播放器续位重播，见 toggleHwDecode）；T-C1 系统档无 codec 选择=置灰
                         FsAct(if (hwDecode) "硬" else "软", if (hwDecode) "当前硬解，点击切软解" else "当前软解，点击切硬解", off = engineX == 1, onFocused = rowFoc) { toggleHwDecode() }
-                        // 用户 2026-11-10：音轨轮切钮（单轨流 toast 提示，见 toggleAudioTrack）；T-C1 系统档不支持音轨=置灰
-                        FsAct("音轨", "切换音轨", res = R.drawable.tvb_v_audio, off = engineX == 1, onFocused = rowFoc) { toggleAudioTrack() }
+                        // A4（审计 2026-11-11）：音轨钮开列表弹窗直选（单/零轨流仍 toast 提示）；T-C1 系统档不支持音轨=置灰
+                        FsAct("音轨", "选择音轨", res = R.drawable.tvb_v_audio, off = engineX == 1, onFocused = rowFoc) { toggleAudioTrack() }
                         // P1-6（审计 2026-11-11）：字幕轮切钮（含「关」档，toast 显轨标签）；系统档不支持=置灰（同音轨）
                         FsAct("字幕", "切换字幕轨", active = subOn, off = engineX == 1, onFocused = rowFoc) { toggleSubtitle() }
                         // TVBox 对标 F2+C6：播放器引擎胶囊钮（Exo=全功能/系统=轻量壳，切换续位重播，见 toggleEngine）
@@ -1824,6 +1841,39 @@ fun DetailScreen(
             openWith(sum, ResumeCtx(line, curEp, player.position / 1000))
         },
     )
+
+    // A4（审计 2026-11-11）音轨列表弹窗：对标 TVBox「选择音频语言」——列支持音轨（名=label→语言映射→编号），
+    // 点行 override 直选；「自动」清音频 override 回默认选轨；BACK 由 Dialog 自消费
+    if (audioSheet) {
+        val ex = player.exo
+        val flat = ex?.let { audioFlat(it) } ?: emptyList()
+        val audioOv = ex?.trackSelectionParameters?.overrides
+            ?.filterValues { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO } ?: emptyMap()
+        AlertDialog(
+            properties = tmDialogProps,
+            onDismissRequest = { audioSheet = false },
+            title = { Text("音轨") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val autoSel = audioOv.isEmpty()
+                    TmBtn(selected = autoSel, onClick = { autoAudioTrack(); audioSheet = false }) {
+                        Text("自动" + if (autoSel) " ✓" else "")
+                    }
+                    flat.forEachIndexed { k, (gr, ti) ->
+                        val f = gr.getTrackFormat(ti)
+                        val sel = audioOv[gr.mediaTrackGroup]?.trackIndices?.contains(ti) == true
+                        TmBtn(selected = sel, onClick = { pickAudioTrack(gr, ti); audioSheet = false }) {
+                            Text(audioTrackLabel(f.language, f.label, k) + if (sel) " ✓" else "")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TmBtn(onClick = { audioSheet = false }) { Text("关闭") } },
+        )
+    }
 
     // 简介全文弹窗（用户 2026-11-03）：BACK 由 Dialog 自身消费→关闭即回详情页
     if (showDesc) AlertDialog(

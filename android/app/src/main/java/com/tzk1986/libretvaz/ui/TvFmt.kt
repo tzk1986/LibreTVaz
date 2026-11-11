@@ -55,6 +55,26 @@ fun fmtClock(hour: Int, minute: Int): String = "%02d:%02d".format(hour, minute)
 /** 右下角大时钟 HH:MM:SS（用户 2026-11-10 实拍图：当前时间带秒，24h 零填充） */
 fun fmtClockHms(hour: Int, minute: Int, second: Int): String = "%02d:%02d:%02d".format(hour, minute, second)
 
+/** A4（审计 2026-11-11）音轨弹窗行名：轨道自带 name 优先→ISO 语言码映射中文名→兜底「音轨N」 */
+fun audioTrackLabel(language: String?, name: String?, idx: Int): String {
+    name?.takeIf { it.isNotBlank() }?.let { return it }
+    val lang = language?.lowercase()?.takeIf { it.isNotBlank() && it != "und" } ?: return "音轨${idx + 1}"
+    return when (lang) {
+        "chi", "zho", "zh", "cmn" -> "中文"
+        "eng", "en" -> "英文"
+        "yue", "cant" -> "粤语"
+        "jpn", "ja" -> "日语"
+        "kor", "ko" -> "韩语"
+        "tha", "th" -> "泰语"
+        "spa", "es" -> "西班牙语"
+        "fre", "fra", "fr" -> "法语"
+        "ger", "deu", "de" -> "德语"
+        "rus", "ru" -> "俄语"
+        "ita", "it" -> "意大利语"
+        else -> language
+    }
+}
+
 /** 详情页倒序展示：返回 (原始下标 to 元素)，reversed 时展示序反转、下标仍指真集 */
 fun <T> epDisplayOrder(list: List<T>, reversed: Boolean): List<Pair<Int, T>> =
     list.mapIndexed { i, v -> i to v }.let { if (reversed) it.reversed() else it }
