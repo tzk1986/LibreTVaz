@@ -45,6 +45,9 @@ fun tvu(mm: Int): Dp {
     return tvDp(mm.toFloat(), tvMinSide(minOf(c.screenWidthDp.toFloat(), c.screenHeightDp.toFloat()))).dp
 }
 
-/** 字号版：蓝本 ts_N 同为 mm 物理字号→走 tvDp 直通，不吃系统 fontScale（与蓝本一致） */
+/** 字号版：蓝本 ts_N 同为 mm 物理字号→走 tvDp 直通取数值。
+ *  C31（审计 2026-11-11）更正：sp 换算 px 仍乘系统 fontScale——旧注释「不吃」失实；
+ *  兜底在 MainActivity 根（Density(scale, fontScale≤1.15)），大字号档字体最多 +15%，
+ *  EpCell(tvu50)/FsAct(tvu40) 固定高对行高余量 ≥1.5x，裁不掉；勿在 tvSp 内再乘系数（双重放大） */
 @Composable
 fun tvSp(mm: Int): TextUnit = tvu(mm).value.sp
