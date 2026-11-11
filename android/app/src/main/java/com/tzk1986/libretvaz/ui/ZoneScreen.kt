@@ -549,8 +549,7 @@ fun ZoneScreen(
 
     // 源选择弹窗（用户 2026-11-04）：默认聚合源，可切单个专区源；切源仅重跑取数池，分类/筛选状态保留
     if (showSrc) {
-        AlertDialog(
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { showSrc = false },
             confirmButton = {},
             title = { Text("选择资源口源") },

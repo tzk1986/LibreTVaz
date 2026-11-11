@@ -120,9 +120,7 @@ private fun SavedWall(
         }
     }
     if (confirmDel) {
-        AlertDialog(
-            modifier = Modifier.width(tmDialogW()),
-            properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { confirmDel = false },
             title = { Text("确认删除所选 ${sel.size} 项？") },
             text = { Text("不可恢复。") },
@@ -137,9 +135,7 @@ private fun SavedWall(
         )
     }
     if (confirmClear) {
-        AlertDialog(
-            modifier = Modifier.width(tmDialogW()),
-            properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("确认清空$title？") },
             text = { Text("将删除全部 ${items.size} 条记录，不可恢复。") },

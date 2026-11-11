@@ -864,9 +864,7 @@ fun BrowseScreen(
 
     if (showSourcePicker) {
         val pickerSources = sources
-        AlertDialog(
-        modifier = Modifier.width(tmDialogW()),
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { showSourcePicker = false },
             confirmButton = {
                 TmBtn(onClick = { showSourcePicker = false }) { Text("关闭") }

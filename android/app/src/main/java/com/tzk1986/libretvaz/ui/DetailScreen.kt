@@ -1885,8 +1885,7 @@ fun DetailScreen(
         val flat = ex?.let { audioFlat(it) } ?: emptyList()
         val audioOv = ex?.trackSelectionParameters?.overrides
             ?.filterValues { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO } ?: emptyMap()
-        AlertDialog(
-            properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { audioSheet = false },
             title = { Text("音轨") },
             text = {
@@ -1912,8 +1911,7 @@ fun DetailScreen(
     }
 
     // 简介全文弹窗（用户 2026-11-03）：BACK 由 Dialog 自身消费→关闭即回详情页
-    if (showDesc) AlertDialog(
-    properties = tmDialogProps,
+    if (showDesc) TmDialog(
         onDismissRequest = { showDesc = false },
         title = { Text(detail?.title?.ifBlank { null } ?: itemS.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {

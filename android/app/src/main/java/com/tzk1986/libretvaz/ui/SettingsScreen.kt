@@ -240,11 +240,8 @@ fun SettingsScreen(
         onDismiss = { dlg = "" }) { i -> skipOutro = SKIP_LEVELS[i]; store.skipOutroSec = SKIP_LEVELS[i] }
 
     // 弹窗压缩（用户 2026-11-05：标题降字号+拉宽+行高收紧，手机一屏看全）
-    val dlgWide = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-    if (dlg == "lab") AlertDialog(
+    if (dlg == "lab") TmDialog(
         onDismissRequest = { dlg = "" },
-        properties = dlgWide,
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = { TmBtn(onClick = { dlg = "" }) { Text("完成") } },
         title = { Text("影视仓实验室", style = MaterialTheme.typography.titleMedium) },
         text = {
@@ -275,10 +272,8 @@ fun SettingsScreen(
     )
 
     // 报错日志查看（用户 2026-11-03）：纯内存最小日志，供拍照反馈；清空钮即 ErrLog.clear()
-    if (dlg == "errlog") AlertDialog(
+    if (dlg == "errlog") TmDialog(
         onDismissRequest = { dlg = "" },
-        properties = dlgWide,
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = {
             TmBtn(onClick = { ErrLog.clear(); errCount = 0; dlg = "" }) { Text("清空日志") }
         },
@@ -299,10 +294,8 @@ fun SettingsScreen(
         },
     )
 
-    if (dlg == "tabs") AlertDialog(
+    if (dlg == "tabs") TmDialog(
         onDismissRequest = { dlg = "" },
-        properties = dlgWide,
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = {
             TmBtn(onClick = { store.tabsJson = saveTabsJson(tabOrder); dlg = "" }) { Text("保存") }
         },
@@ -344,10 +337,8 @@ fun SettingsScreen(
         },
     )
 
-    if (dlg == "server") AlertDialog(
+    if (dlg == "server") TmDialog(
         onDismissRequest = { dlg = "" },
-        properties = dlgWide,
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = {
             TmBtn(onClick = {
                 store.serverUrl = urlDraft
@@ -392,10 +383,8 @@ fun SettingsScreen(
         },
     )
 
-    if (dlg == "proxy") AlertDialog(
+    if (dlg == "proxy") TmDialog(
         onDismissRequest = { dlg = "" },
-        properties = dlgWide,
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = {
             TmBtn(onClick = {
                 store.proxyUrl = proxyDraft
@@ -422,10 +411,8 @@ fun SettingsScreen(
 
     // C13 还原确认：展示备份概览，确认=逐库整库覆盖（仅覆盖备份中出现的库）→重启生效（各 Store 持内存快照）
     if (dlg == "restore") pendingRestore?.let { (libs, skipped) ->
-        AlertDialog(
+        TmDialog(
             onDismissRequest = { dlg = ""; pendingRestore = null },
-            properties = dlgWide,
-            modifier = Modifier.width(tmDialogW()),
             confirmButton = {
                 TmBtn(onClick = {
                     scope.launch {
@@ -507,11 +494,10 @@ private fun PickerDialog(
     onDismiss: () -> Unit,
     onPick: (Int) -> Unit,
 ) {
-    AlertDialog(
+    TmDialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         // 用户 2026-11-05：全 app 弹窗统一屏宽 70%（原 0.94×窗口可用区≈屏 63% 不一致）
-        modifier = Modifier.width(tmDialogW()),
         confirmButton = {},
         dismissButton = { TmBtn(onClick = onDismiss) { Text("取消") } },
         title = { Text(title, style = MaterialTheme.typography.titleMedium) },

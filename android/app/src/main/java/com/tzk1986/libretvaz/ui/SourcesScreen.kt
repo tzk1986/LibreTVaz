@@ -236,9 +236,7 @@ fun SourcesScreen(
 
     // 清除所有点播源（web smClear askYes 等价）：确认弹窗明示「同时关自动维护防订阅回填」
     if (confirmClear) {
-        AlertDialog(
-        modifier = Modifier.width(tmDialogW()),
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { confirmClear = false },
             confirmButton = {
                 TmBtn(onClick = {
@@ -259,9 +257,7 @@ fun SourcesScreen(
     if (showQr) RemoteQrDialog(mode = "sub", onDismiss = { showQr = false })
 
     confirmSub?.let { u ->
-        AlertDialog(
-        modifier = Modifier.width(tmDialogW()),
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { confirmSub = null },
             title = { Text("收到远程订阅链接，确认导入？") },
             text = { Text(u.take(200), style = MaterialTheme.typography.bodySmall, maxLines = 6) },

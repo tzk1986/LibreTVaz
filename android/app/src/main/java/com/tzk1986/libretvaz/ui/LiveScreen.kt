@@ -250,8 +250,7 @@ fun LiveScreen(
         val list = Epg.dayList(epgIdx, ch.name)
         val now = Epg.now(epgIdx, ch.name)
         val next = list.firstOrNull { it.t > PerfCore.nowNum() }
-        AlertDialog(
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { epgChan = null },
             confirmButton = {},
             dismissButton = { TmBtn(onClick = { epgChan = null }) { Text("关闭") } },

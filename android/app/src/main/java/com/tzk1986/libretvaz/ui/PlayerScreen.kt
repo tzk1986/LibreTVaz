@@ -462,8 +462,7 @@ fun PlayerScreen(
     }
 
     if (showSrcPicker) {
-        AlertDialog(
-        properties = tmDialogProps,
+        TmDialog(
             onDismissRequest = { showSrcPicker = false },
             confirmButton = {},
             dismissButton = { TmBtn(onClick = { showSrcPicker = false }) { Text("取消") } },
