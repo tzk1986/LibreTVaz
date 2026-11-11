@@ -202,6 +202,10 @@ fun PlayerScreen(
     var showSrcPicker by remember { mutableStateOf(false) }
     var switching by remember { mutableStateOf(false) }
     var srcGen by remember { mutableIntStateOf(0) } // 换源代数：同名 chanIdx 也强制喂新流
+    // A12（审计 2026-11-11）：同 URL 重选不重连——重选当前台时清 playedUrl 水位并 bump reloadGen
+    // 作 LaunchedEffect 键触发重 prepare（原需换台再回）。声明须先于 playChan（Kotlin 局部声明序）
+    var playedUrl by remember { mutableStateOf(url) }
+    var reloadGen by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
     val composeView = androidx.compose.ui.platform.LocalView.current
 
@@ -219,6 +223,11 @@ fun PlayerScreen(
     /** web playChan：换台写 last 并切流（读 LiveCtx.chans：换源后闭包里的旧列表不可用） */
     fun playChan(i: Int) {
         val c = LiveCtx.chans.getOrNull(i) ?: return
+        if (i == chanIdx && live) { // A12：重选当前台=强制重连（清水位+触发键）
+            playedUrl = ""
+            reloadGen++
+            Toast.makeText(context, "重新连接「${c.name}」", Toast.LENGTH_SHORT).show()
+        }
         chanIdx = i
         LiveCtx.cur = i
         store.setLast(LiveCtx.srcIdx, c.url)
@@ -280,8 +289,7 @@ fun PlayerScreen(
     }
 
     // 起播/换台后把新地址喂给复用的 player（避免重建页面）
-    var playedUrl by remember { mutableStateOf(url) }
-    LaunchedEffect(chanIdx, srcGen) {
+    LaunchedEffect(chanIdx, srcGen, reloadGen) {
         if (!live) return@LaunchedEffect
         val u = chans.getOrNull(chanIdx)?.url ?: return@LaunchedEffect
         if (u != playedUrl) {
