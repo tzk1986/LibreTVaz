@@ -379,6 +379,9 @@ fun DetailScreen(
     var fsEpPanel by remember { mutableStateOf(false) }
     // 看板遥控焦点：自持下标（根节点已占 focusReq，不依赖 Compose 焦点系统；2 列网格，上下=±2）
     var fsFocusEp by remember { mutableIntStateOf(0) }
+    // C23（审计 2026-11-12）：板内焦点二模式（epPanelKey 状态机）——railOn=焦点在顶部线路行
+    var fsRailOn by remember { mutableStateOf(false) }
+    var fsRailSel by remember { mutableIntStateOf(0) }
     val fsGrid = rememberLazyGridState()
     // 用户 2026-11-04：非全屏播放窗可聚焦，遥控 OK=进全屏；选集点选后焦点自动回窗口
     // （2026-11-09 probe6：窗焦点载体改 view 级 PlayerView，见 !fs 块内 Ruling）
@@ -410,6 +413,11 @@ fun DetailScreen(
     var fsEndTxt by remember { mutableStateOf("") }   // 右下时钟区「预计结束」HH:MM:SS（1s 循环随 fsClock 更新）
     var fsDragPos by remember { mutableLongStateOf(-1L) }
     val focusReq = remember { FocusRequester() }
+    var fsBoxHasFocus by remember { mutableStateOf(false) } // 根 Box 焦点实况（重锚竞态判据）
+    // C23 补（2026-11-12 装机实锤）：触屏开板后 Compose 无焦点属主，首枚方向键被平台
+    // fallback 焦点搜索吃掉（不进 preview）=UP 进线路行必丢一键。开板即把焦锚到当前集钮。
+    val epFr = remember { FocusRequester() }
+    var epFocused by remember { mutableStateOf(false) }
     val insetCtrl = remember {
         (context as? android.app.Activity)?.window?.let {
             androidx.core.view.WindowCompat.getInsetsController(it, it.decorView)
@@ -1003,7 +1011,17 @@ fun DetailScreen(
     // 两档返回走查（用户 2026-11-06）：控件 5s 自隐时焦点钮随 AnimatedVisibility 销毁、焦点落空，
     // DPAD 类键不再进 fsKeyMod（任意键唤出失效）→ 隐后把焦点重新锚回根
     LaunchedEffect(fs, fsBar) {
-        if (fs && !fsBar) { runCatching { focusReq.requestFocus() }; fsRowFocusN.intValue = 0 }
+        if (fs && !fsBar) {
+            fsRowFocusN.intValue = 0
+            // 重锚竞态修复（2026-11-12 装机实锤）：effect 在 fsBar 写回后、focusable=true 尚未应用的
+            // 帧执行，一次性 requestFocus 静默失败无属主→DPAD_UP 走系统焦点搜索进面板钮、不进
+            // preview=UP 唤控件/进线路行全失效（RIGHT 等面板已含焦后才可达）。等帧重试至焦点落根。
+            for (i in 0 until 5) {
+                withFrameNanos { }
+                runCatching { focusReq.requestFocus() }
+                if (fsBoxHasFocus) break
+            }
+        }
         // 呼出控件后焦点落动作行首个钮（fadeIn 进场有延迟，有限重试；触屏模式 requestFocus 失败无副作用）
         // TVBox 对标 F1 修正：speedPanel 打开期间跳过重锚——胶囊 onClick 尾 pokeFs 键不变、
         // 协程不重启，原 720ms 重试窗会 120ms 一次抢回焦点，吃掉遥控移焦到胶囊的按键（装机走查实锤）
@@ -1063,18 +1081,33 @@ fun DetailScreen(
             }
         }
         // 选集看板打开时方向键=网格走焦（2 列：左右±1/上下±2），OK=选中即播并收看板，Esc/Back=收（用户 2026-11-04 遥控要求）
+        // C23（审计 2026-11-12）：状态机 epPanelKey——网格顶行再按 ↑=焦点上移板内线路行
+        // （旧版四键全吞只做网格移位，线路行永不可达）；线路行模式 ←→选线/OK换线（面板保持）/↓回网格/Back 收
         if (fsEpPanel) {
             val nEp = lines().getOrNull(line)?.list?.size ?: 0
-            fun mvEp(d: Int) { fsFocusEp = (fsFocusEp + d).coerceIn(0, (nEp - 1).coerceAtLeast(0)) }
-            return@onPreviewKeyEvent when (ev.key) {
-                // 用户 2026-11-04：看板未选集直接按返回=只收看板回全屏播放界面（不退全屏）
-                Key.Escape, Key.Back -> { fsEpPanel = false; pokeFs(); true }
-                Key.DirectionLeft -> { mvEp(-1); true }
-                Key.DirectionRight -> { mvEp(1); true }
-                Key.DirectionUp -> { mvEp(-2); true }
-                Key.DirectionDown -> { mvEp(2); true }
-                Key.Enter, Key.DirectionCenter -> { if (nEp > 0) goEpTo(fsFocusEp); fsEpPanel = false; true }
-                else -> false
+            val k = when (ev.key) {
+                Key.DirectionLeft -> 0
+                Key.DirectionRight -> 1
+                Key.DirectionUp -> 2
+                Key.DirectionDown -> 3
+                Key.Enter, Key.DirectionCenter -> 4
+                Key.Escape, Key.Back -> 5 // 看板未选集直接按返回=只收看板回全屏播放界面（不退全屏，11-04 语义）
+                else -> -1
+            }
+            val st = epPanelKey(k, fsFocusEp, nEp, fsRailSel, lines().size, fsRailOn)
+            fsRailOn = st.railOn; fsRailSel = st.rail; fsFocusEp = st.ep
+            return@onPreviewKeyEvent when (st.nav) {
+                EpNav.Pass -> false
+                EpNav.MoveEp, EpNav.EnterRail, EpNav.ExitRail, EpNav.MoveRail -> true
+                EpNav.RailOk -> {
+                    // 换线保面板：switchLine 钳位迁移在播集后焦点对齐新集（空线路不动）
+                    if (fsRailSel != line && lines().getOrNull(fsRailSel)?.list?.isNotEmpty() == true) {
+                        switchLine(fsRailSel); fsFocusEp = curEp
+                    }
+                    true
+                }
+                EpNav.PlayEp -> { if (nEp > 0) goEpTo(fsFocusEp); fsEpPanel = false; true }
+                EpNav.Close -> { fsEpPanel = false; pokeFs(); true }
             }
         }
         when {
@@ -1168,11 +1201,16 @@ fun DetailScreen(
             // ←→ 在 FsAct 间移焦、进度 Canvas 非可聚焦永不被选中。可聚焦父节点不会向下遍历子钮，
             // 故必须让根「隐时聚焦、显时让位」而非全程聚焦（全程聚焦=焦点卡根、需求 d 失效的根因）
             .focusable(enabled = fs && !fsBar)
+            .onFocusEvent { fsBoxHasFocus = it.hasFocus }
             .focusRequester(focusReq)
             // TVBox 复刻（用户 2026-11-09）单击=呼出控件、双击=三分区（左退15s/中切播放/右进15s）；
             // detectTapGestures 自带单/双共存：有 onDoubleTap 时单击延后 ~300ms 判定，无双击才派发 onTap
-            .pointerInput(fs) {
-                if (fs) detectTapGestures(
+            // 触屏死钮修复（2026-11-12 装机实锤，新旧包同病）：检测器 awaitFirstDown 默认 Initial 趟抢吃
+            // DOWN，子层全部 clickable 到 Main 趟见 consumed 即弃跟踪=全屏钮行触控全灭（详情层 !fs 不装故活、
+            // 键盘路径 performClick 不经命中测试故走焦历来正常）。控件亮时手势层整体让位，触控归钮行；
+            // 控件隐时接管全屏（点任意处呼控件/双击分区/竖调音量亮度——竖调需控件已自隐）。
+            .pointerInput(fs, fsBar) {
+                if (fs && !fsBar) detectTapGestures(
                     onTap = { if (!locked) pokeFs() },
                     onDoubleTap = { off ->
                         if (!locked) when (tapZone(off.x, size.width.toFloat())) {
@@ -1183,8 +1221,9 @@ fun DetailScreen(
                     },
                 )
             }
-            .pointerInput(fs, locked) {
-                if (!fs || locked) return@pointerInput
+            .pointerInput(fs, locked, fsBar) {
+                // 同上修复：竖拖检测器同样 Initial 抢 DOWN，控件亮时一并让位（音量亮度滑动待控件自隐后进行）
+                if (!fs || locked || fsBar) return@pointerInput
                 var z = EdgeZone.Volume
                 var start = 0f
                 var acc = 0f
@@ -1806,9 +1845,17 @@ fun DetailScreen(
                     modifier = Modifier.width(tvu(411)).fillMaxHeight().background(Color(0xB3000000)).padding(horizontal = tvu(14), vertical = tvu(11)),
                     verticalArrangement = Arrangement.spacedBy(tvu(6)),
                 ) {
+                    // C23（审计 2026-11-12）：焦点在板内线路行时（fsRailOn）=白描边+40%红底可视高亮，
+                    // 与网格焦点（红底描边框）互斥呈现；黄字=在播线（焦点位）语义照旧
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(tvu(6))) {
                         lines().forEachIndexed { i, lg ->
-                            TextButton(onClick = { if (i != line) switchLine(i) }, contentPadding = PaddingValues(horizontal = tvu(11), vertical = 0.dp)) {
+                            val railFoc = fsRailOn && i == fsRailSel
+                            TextButton(onClick = { if (i != line) switchLine(i) },
+                                modifier = if (railFoc) Modifier
+                                    .background(TvColors.Red40, RoundedCornerShape(TvColors.RadiusDetail))
+                                    .border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(TvColors.RadiusDetail))
+                                else Modifier,
+                                contentPadding = PaddingValues(horizontal = tvu(11), vertical = 0.dp)) {
                                 Text("${lg.flag}(${lg.list.size})", color = if (i == line) Color(0xFFFFEB3B) else Color.White, style = MaterialTheme.typography.labelMedium)
                             }
                         }
@@ -1825,11 +1872,12 @@ fun DetailScreen(
                             Button(
                                 onClick = { goEpTo(i); fsEpPanel = false },
                                 // TVBox 统一（用户 2026-11-09 遗留清理）：焦点=40%红底+白描边、当前集=红字（tvEpTextColor），撤旧黄框蓝底
-                                modifier = if (i == fsFocusEp) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(tvu(11))) else Modifier,
+                                // C23：焦点上移到线路行时网格让出高亮（互斥）
+                                modifier = if (i == fsFocusEp && !fsRailOn) Modifier.border(TvColors.StrokeW, TvColors.FocusStroke, RoundedCornerShape(tvu(11))).onFocusEvent { epFocused = it.hasFocus }.focusRequester(epFr) else Modifier,
                                 shape = RoundedCornerShape(tvu(11)),
                                 contentPadding = PaddingValues(horizontal = tvu(8), vertical = 0.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (i == fsFocusEp) TvColors.Red40 else TvColors.SeriesBg,
+                                    containerColor = if (i == fsFocusEp && !fsRailOn) TvColors.Red40 else TvColors.SeriesBg,
                                     contentColor = tvEpTextColor(i == curEp),
                                 ),
                             ) { Text(e.name, maxLines = 1, style = MaterialTheme.typography.labelSmall) }
@@ -1837,11 +1885,19 @@ fun DetailScreen(
                     }
                 }
             }
-            // 看板遥控焦点维护：打开=对齐当前集；移动=滚动保证可见
+            // 看板遥控焦点维护：打开=对齐当前集；移动=滚动保证可见；C23 焦点模式复位回网格
             LaunchedEffect(fsEpPanel) {
                 if (fsEpPanel) {
                     fsFocusEp = curEp
+                    fsRailOn = false; fsRailSel = line
                     runCatching { fsGrid.scrollToItem(curEp) }
+                    // 锚焦到当前集钮（等 fadeIn+滚动落位的有限重试窗，判据=钮自报得焦；
+                    // 模拟器渲染慢，帧数窗不够——对齐钮行 :1015 循环的时间窗模式）
+                    for (i in 0 until 12) {
+                        delay(150)
+                        runCatching { epFr.requestFocus() }
+                        if (epFocused) break
+                    }
                 }
             }
             LaunchedEffect(fsFocusEp) { // 仅当焦点跑出可视区才滚动，避免每按一次都整屏跳动
