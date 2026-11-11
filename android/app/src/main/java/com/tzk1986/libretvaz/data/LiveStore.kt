@@ -106,11 +106,16 @@ object LiveCtx {
         return chans.indices.filter { chans[it].name == n }
     }
 
-    /** web chanStep：池内相对 cur 前进/后退，环绕 */
+    /** web chanStep：池内相对 cur 前进/后退，环绕；
+     *  A11（审计 2026-11-11）：播同名备用线时 cur 不在合并池——先按台名锚定池内首线条目再步进，
+     *  否则 pos=-1 环绕跳错台（step(1) 原地=看着卡死）+列表高亮丢；名不在池仍按 web 原式进池首 */
     fun step(d: Int): Int? {
         val vis = visible()
         if (vis.isEmpty()) return null
-        val pos = vis.indexOf(cur)
+        var pos = vis.indexOf(cur)
+        if (pos < 0) chans.getOrNull(cur)?.name?.let { n ->
+            pos = vis.indexOfFirst { chans[it].name == n }
+        }
         return vis[(pos + d + vis.size) % vis.size]
     }
 }

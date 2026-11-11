@@ -65,6 +65,16 @@ class LiveCtxTest {
     }
 
     @Test
+    fun `step from backup line anchors same station then advances`() {
+        // A11（审计 2026-11-11）：池同名合并留首线，播备用线时 cur 不在池（indexOf=-1）——
+        // 应按台名锚定后步进，否则跳错台（step(1) 原地=看着卡死）+列表高亮丢
+        LiveCtx.chans = listOf(ch("a"), ch("a"), ch("b"), ch("a"))
+        LiveCtx.cur = 1 // 「a」的第二条线路
+        assertEquals(2, LiveCtx.step(1))  // 锚 a(0) 前进 → b(2)
+        assertEquals(2, LiveCtx.step(-1)) // 锚 a(0) 后退 → 环绕池末位 b(2)
+    }
+
+    @Test
     fun `step null when pool empty`() {
         LiveCtx.chans = listOf(ch("a", "央"))
         LiveCtx.group = "不存在"
