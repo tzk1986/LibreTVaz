@@ -95,11 +95,6 @@ class VocabStore(context: Context) {
 
     fun clearKw(zone: Boolean) { prefs.edit().remove(kwKey(zone)).apply() }
 
-    /** A8（审计 2026-11-11）：搜索历史单条删除（其余词保序） */
-    fun dropKw(kw: String, zone: Boolean) {
-        prefs.edit().putString(kwKey(zone), JSONArray(kws(zone).filter { it != kw }).toString()).apply()
-    }
-
     // ---- 词库种子节流 ----
 
     fun seedAt(zone: Boolean): Long = prefs.getLong(seedKey(zone), 0L)

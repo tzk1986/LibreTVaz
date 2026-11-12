@@ -3,6 +3,8 @@ package com.tzk1986.libretvaz.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -47,6 +49,7 @@ import com.tzk1986.libretvaz.data.*
 import com.tzk1986.libretvaz.data.perf.PerfCore
 import com.tzk1986.libretvaz.ui.theme.TvColors
 import com.tzk1986.libretvaz.data.perf.VocabSeed
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 六列矩阵键盘：A-Z+0-9 共 36 键 6×6（web renderSearch KEYS 等价） */
@@ -215,6 +218,12 @@ fun SearchScreen(
     // 遥控无键可输）：36 键改「⌨键盘」钮手动开合，默认=非触屏开/触屏关；系统 IME 真弹出时自动收起我方键盘防双键盘
     val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var kbShow by remember { mutableStateOf(!hasTouch) }
+    // TVBox 对标（用户 2026-11-12 裁决 A）：展开键盘自动把 36 键滚入视口（钮行滚出、6 行全显）；
+    // 滚动只发生在左列内层（输入行固定在外=用户 2026-11-12 反馈「键盘全显输入框看不见」修复）；180ms 等布局落位再滚
+    val kbReq = remember { BringIntoViewRequester() }
+    LaunchedEffect(kbShow, imeUp) {
+        if (kbShow && !imeUp) { delay(180); kbReq.bringIntoView() }
+    }
     val swDp = canvasWdp() // P1-4：断点用画布逻辑宽（投影档 cfg dp 与画布错配 4 倍）
     val leftW = if (swDp >= 820) 300.dp else 260.dp
     val rightW = if (swDp >= 820) 200.dp else 170.dp
@@ -236,8 +245,10 @@ fun SearchScreen(
         // 参考图样式定稿（用户 2026-11-04）：左=操作栏（全局搜索条+输入+选源钮+2×2 大按钮+36 键大键盘）｜中=热门搜索词流｜右=搜索历史（🗑清空）
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             // 左列 400→300dp（用户 2026-11-04：键盘占比对齐手机截图+让宽热门词全称）；矮屏/大字号可滚兜底
+            // 用户 2026-11-12 反馈键盘全显时输入框被滚出屏 → 两段式（TVBox 搜索框置顶常驻同构）：
+            // 标题行+输入行固定在滚动区外，钮行/36 键进内层 verticalScroll，bringIntoView 只滚内层
             Column(
-                modifier = Modifier.width(leftW).verticalScroll(rememberScrollState()),
+                modifier = Modifier.width(leftW),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -316,6 +327,10 @@ fun SearchScreen(
                     HomeBtn(if (kbShow) "⌨隐藏" else "⌨键盘", fill = false, onClick = { kbShow = !kbShow })
                     HomeBtn(srcSel?.let { "📌${it.name.take(4)}" } ?: "⚙", fill = false, onClick = { showSrcPick = true })
                 }
+                Column(
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                 // 首页同款小方块钮（用户 2026-11-04 统一样式）：搜索/清空/远程/删除 + 36 键键盘全走 HomeBtn
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     HomeBtn("搜索", modifier = Modifier.weight(1f)) { search(query) }
@@ -326,15 +341,20 @@ fun SearchScreen(
                     HomeBtn("⌫ 删除", modifier = Modifier.weight(1f)) { pressKey("⌫") }
                 }
                 // 「⌨键盘」开且系统 IME 未弹出时显示 36 键矩阵（web KEYS 等价）；投影仪默认触屏=true 也可手动开键后用遥控输入
-                if (kbShow && !imeUp) KB_ROWS.forEach { row ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 行距 8→3dp（用户 2026-11-12 反馈）：输入行常驻后内层视口差 ~6dp 装不下 6 行，压行距使全显
+                if (kbShow && !imeUp) Column(
+                    modifier = Modifier.bringIntoViewRequester(kbReq),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) { KB_ROWS.forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                         row.forEach { c ->
                             HomeBtn(c.toString(), modifier = Modifier.weight(1f), tight = true) { pressKey(c.toString()) }
                         }
                         repeat(6 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
-                }
+                } }
                 hint?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
             }
             // 中列：热门榜/关联词（参考图「热门搜索」居中占主宽）
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -366,14 +386,9 @@ fun SearchScreen(
                 }
                 if (kws.isEmpty()) Text("暂无本池搜索历史", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f, fill = false)) {
-                    // A8（审计 2026-11-11）：行尾 ✕ 单条删除（chip 本体点=搜索不变）
+                    // A8 单条 ✕ 撤销（用户 2026-11-12 裁决）：只留右上「🗑 清空」整池清，逐条删钮撤除；chip 点=搜索不变
                     items(kws) { k ->
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(Modifier.weight(1f, fill = false)) { WordChip(k) { search(k) } }
-                            TmBtn(contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp), onClick = {
-                                vocab.dropKw(k, zone); kws = vocab.kws(zone)
-                            }) { Text("✕") }
-                        }
+                        WordChip(k) { search(k) }
                     }
                 }
             }
