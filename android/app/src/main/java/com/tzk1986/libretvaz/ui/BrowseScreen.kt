@@ -193,6 +193,26 @@ fun BrowseScreen(
         subId = null; areaSel = null; yearSel = null; langSel = null; filters = null
     }
 
+    // TVBox 对齐（用户 2026-11-12 裁决）：tab 行走焦=焦点移到即切换（免 OK），250ms 防抖——
+    // 焦点停稳才拉墙；横滚过档/退回当前档即取消，不连发请求。触屏点选时 focus 与 click 同点，
+    // 排程到期 apply 见 sel==key 自然空转，无重复拉取。-1=最新/更新推荐哨兵档
+    val tabSwitcher = remember {
+        FocusTabSwitcher(250L, { ms, task -> val j = scope.launch { delay(ms); task() }; { j.cancel() } }) { key ->
+            if (aggMode) {
+                if (aggCat != key) { aggCat = key; showFilters = false }
+            } else {
+                val list = types
+                val sel = if (type == null) -1 else list.indexOfFirst { it.id == type?.id }
+                if (sel != key) {
+                    type = if (key < 0) null else list.getOrNull(key)
+                    if (key < 0) resetFilterVals() else resetTypeFilterVals()
+                    showFilters = false
+                    targetPage = 1
+                }
+            }
+        }
+    }
+
     // web buildFilters：子类=pid 指向当前分类；扩展值=分类 extend 与 videolist meta 合并（meta 优先）
     fun buildFiltersOf(t: VodType, meta: Map<String, String>?): VodFilters {
         val e = t.extend + (meta ?: emptyMap())
@@ -761,7 +781,8 @@ fun BrowseScreen(
                     // 切「最新」只收起面板；预设值保留（再点分类 tab 显上次选中，用户 2026-11-05）
                     WallChip(selected = aggCat == -1, onClick = {
                         if (aggCat != -1) { aggCat = -1; showFilters = false }
-                    }, label = "最新", fr = tabFrs[0])
+                    }, label = "最新", fr = tabFrs[0],
+                        onFocusGain = { tabSwitcher.onFocus(-1) { aggCat } })
                 }
                 items(Agg.AGG_CATS) { c ->
                     val i = Agg.AGG_CATS.indexOf(c)
@@ -776,6 +797,7 @@ fun BrowseScreen(
                             } else if (aggIdx != i) { aggCat = i; showFilters = false }
                         },
                         label = c.key,
+                        onFocusGain = { tabSwitcher.onFocus(i) { aggCat } },
                     )
                 }
             }
@@ -785,15 +807,18 @@ fun BrowseScreen(
                 val typeList = types
                 val currentType = type
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // TVBox 对齐（用户 2026-11-12）：走焦即切的选中位=动态读 type（快照 currentType 只作 selected 样式）
+                    val selKey: () -> Int = { if (type == null) -1 else typeList.indexOfFirst { it.id == type?.id } }
                     item {
                         // web：id=='' 分支恒重拉最新（非 toggle），并收起筛选行
                         WallChip(
                             selected = currentType == null,
                             onClick = { type = null; resetFilterVals(); showFilters = false; targetPage = 1 },
                             label = "更新推荐",
+                            onFocusGain = { tabSwitcher.onFocus(-1, selKey) },
                         )
                     }
-                    items(typeList) { t ->
+                    itemsIndexed(typeList) { ti, t ->
                         WallChip(
                             selected = t.id == currentType?.id,
                             onClick = {
@@ -805,6 +830,7 @@ fun BrowseScreen(
                                 }
                             },
                             label = t.name,
+                            onFocusGain = { tabSwitcher.onFocus(ti, selKey) },
                         )
                     }
                 }
@@ -1045,6 +1071,8 @@ internal fun WallChip(
     label: String,
     labelColor: Color = Color.Unspecified,
     fr: FocusRequester? = null,
+    // TVBox 对齐（用户 2026-11-12）：焦点落入回调=「走焦即切」防抖入口（触屏点击不触发新档排程）
+    onFocusGain: (() -> Unit)? = null,
 ) {
     // 未选中字加淡投影（用户 2026-11-04：镂空后文字压在亮海报上易失读，阴影兜底）
     val base = LocalTextStyle.current
@@ -1054,7 +1082,10 @@ internal fun WallChip(
     FilterChip(
         selected = selected,
         onClick = onClick,
-        modifier = Modifier.onFocusEvent { focused = it.isFocused }
+        modifier = Modifier.onFocusEvent {
+            focused = it.isFocused
+            if (it.isFocused) onFocusGain?.invoke()
+        }
             .then(if (fr != null) Modifier.focusRequester(fr) else Modifier),
         leadingIcon = {},
         label = {
