@@ -35,6 +35,7 @@ import com.tzk1986.libretvaz.data.LiveCtx
 import com.tzk1986.libretvaz.data.LiveRepository
 import com.tzk1986.libretvaz.data.LiveSource
 import com.tzk1986.libretvaz.data.LiveStore
+import com.tzk1986.libretvaz.data.RefererRetry403
 import com.tzk1986.libretvaz.data.SourceStore
 import com.tzk1986.libretvaz.data.VideoCache
 import com.tzk1986.libretvaz.ui.theme.TvColors
@@ -127,6 +128,8 @@ private object PlayerHttp {
             .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .addInterceptor(retry)
+            // 防盗链重试（用户 2026-11-12 建议1）：401/403 自动带同域 Referer 重试一次再交失败兜底
+            .addInterceptor(RefererRetry403)
             // 用户 2026-11-06 走查 #1：与 Http 普通 GET 共享连接池（同 CDN 起播/元数据互享 keep-alive 连接）
             .connectionPool(Http.sharedPool)
             .protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
