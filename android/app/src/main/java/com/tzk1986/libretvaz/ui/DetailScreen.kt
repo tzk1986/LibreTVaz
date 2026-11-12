@@ -325,6 +325,7 @@ fun DetailScreen(
     val settings = remember { SettingsStore(context) }
     val prog = remember { ProgStore(context) }
     val health = remember { HealthStore(context) }
+    com.tzk1986.libretvaz.data.ManualLine.init(context) // 方案1（用户 2026-11-12）：手动换线跨会话记录
 
     var itemS by remember { mutableStateOf(item) }
     val source = remember(itemS) { VodSource(itemS.sourceName, itemS.sourceUrl, isAdult = itemS.isAdult) }
@@ -771,6 +772,8 @@ fun DetailScreen(
         line = i; curEp = keep
         tried = setOf(i)
         userPickedLine = true
+        // 方案1（用户 2026-11-12 裁决）：手动换线即写跨会话记录（不等 5s 进度落盘）
+        ManualLine.put(itemS.vodId, itemS.sourceKey, lines()[i].flag)
         toast("正在切换线路至「${lines()[i].flag}」")
         probeSpeeds(keep)
         playAt(i, keep)
@@ -804,10 +807,15 @@ fun DetailScreen(
                 }
             }
             sec = r.sec
-        } else if (settings.resumePlay && ph != null) {
-            val fi = if (ph.flag.isNotEmpty()) d.lines.indexOfFirst { g -> g.flag == ph.flag } else -1
-            l = if (fi >= 0) fi else ph.line.coerceIn(0, d.lines.size - 1)
-            d.lines.getOrNull(l)?.list?.let { if (it.isNotEmpty()) { e = ph.ep.coerceIn(0, it.size - 1); sec = if (ph.sec >= 5) ph.sec else 0; fromProg = true } }
+        } else {
+            // 方案1：重进选线优先级 manual（最后一次手动点线）> 进度 ph（线名→序数）> best（测速最优）
+            val mf = ManualLine.get(itemS.vodId, itemS.sourceKey)
+            l = resolveEntryLine(d.lines.map { g -> g.flag }, l, mf, if (settings.resumePlay) ph?.flag else null, ph?.line ?: -1)
+            // 方案1 补丁：manual 命中=用户已表态，置 userPickedLine 抑制随后测速回调自动跳最快线抢回
+            if (!mf.isNullOrEmpty() && d.lines.getOrNull(l)?.flag == mf) userPickedLine = true
+            if (settings.resumePlay && ph != null) {
+                d.lines.getOrNull(l)?.list?.let { if (it.isNotEmpty()) { e = ph.ep.coerceIn(0, it.size - 1); sec = if (ph.sec >= 5) ph.sec else 0; fromProg = true } }
+            }
         }
         line = l; curEp = e
         tried = setOf(l)
@@ -1493,6 +1501,8 @@ fun DetailScreen(
                             TmBtn(contentPadding = actPad, onClick = { epRev = !epRev }) { Text(if (epRev) "正序" else "倒序", fontSize = tvSp(20)) }
                             TmBtn(contentPadding = actPad, onClick = {
                                 LineSpeed.delete(LineSpeed.key(itemS.sourceKey, itemS.vodId, curEp))
+                                // 方案1：「测速」=交回最优线决策，清掉手动线记录
+                                ManualLine.delete(itemS.vodId, itemS.sourceKey)
                                 userPickedLine = false
                                 speeds = null
                                 probeSpeeds(curEp)
