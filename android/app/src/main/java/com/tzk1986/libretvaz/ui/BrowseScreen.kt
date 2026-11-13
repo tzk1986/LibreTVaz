@@ -148,6 +148,24 @@ fun BrowseScreen(
     var showFilters by remember { mutableStateOf(false) } // web Vod.showFilters：再点当前分类=展开/收起筛选行
     // 用户 2026-11-05：面板打开即把按键焦点移入，遥控器方向键可直接选筛选项；BACK 收面板
     val panelFocus = remember { FocusRequester() }
+    // 2026-11-13 bug 修：筛选面板 BACK 收起时焦点节点被移除，Compose 自动落焦行首「最新」chip，
+    // 且 lastKey 仍是行内值→「行外进入不即切」护栏失效→250ms 后 aggCat 被切回 -1、页面跳回最新墙。
+    // 收面板 tick++ 令还原 effect 再跑，显式把焦点落回当前选中 tab；tabFrs 提升至此供两处共享
+    var tabFrTick by remember { mutableIntStateOf(0) }
+    val tabFrs = remember { List(Agg.AGG_CATS.size + 1) { FocusRequester() } }
+    // 单源（换源模式）同款（用户 2026-11-13 追问对齐）：收起面板/进场焦点落回当前分类 chip，
+    // 防自动落焦行首「更新推荐」触发走焦即切把 type 打回 null
+    val typeFrs = remember(types) { List(types.size + 1) { FocusRequester() } }
+    LaunchedEffect(tabFrTick, types, aggMode) {
+        if (!aggMode && types.isNotEmpty()) {
+            for (i in 0 until 8) {
+                delay(150)
+                val sel = if (type == null) -1 else types.indexOfFirst { it.id == type?.id }
+                val ok = runCatching { typeFrs[tabFrIndexFor(sel)].requestFocus() }.getOrDefault(false)
+                if (ok) break
+            }
+        }
+    }
     var aggPage by remember { mutableIntStateOf(1) }
     var aggMore by remember { mutableStateOf(false) }
     var aggLoadingMore by remember { mutableStateOf(false) }
@@ -545,8 +563,9 @@ fun BrowseScreen(
     BackHandler {
         when {
             showSourcePicker -> showSourcePicker = false
-            // 用户 2026-11-05：底部筛选面板打开时返回键只收面板（不清筛选值，重开显上次选中）
-            showFilters -> showFilters = false
+            // 用户 2026-11-05：底部筛选面板打开时返回键只收面板（不清筛选值，重开显上次选中）；
+            // 2026-11-13：tick++ 令还原 effect 把焦点显式落回当前选中 tab（防自动落焦行首「最新」触发走焦即切）
+            showFilters -> { showFilters = false; tabFrTick++ }
             !atTop -> scope.launch { gridState.animateScrollToItem(0) }
             else -> {
                 val now = System.currentTimeMillis()
@@ -767,12 +786,13 @@ fun BrowseScreen(
             // 聚合墙分类标签（web AGG_CATS：最新+固定四大类，不依赖单源分类树）
             val aggIdx = aggCat
             // TVBox 复刻（用户 2026-11-09 需求 b）：进墙页焦点直达当前选中 tab 而非「最新」；
-            // 触屏模式 requestFocus 自然失败无副作用；仿 panelFocus 有限重试（LazyRow 进场+恢复焦点时序）
-            val tabFrs = remember { List(Agg.AGG_CATS.size + 1) { FocusRequester() } }
-            LaunchedEffect(Unit) {
+            // 触屏模式 requestFocus 自然失败无副作用；仿 panelFocus 有限重试（LazyRow 进场+恢复焦点时序）。
+            // 2026-11-13：key 由 Unit 改 tabFrTick——进场(tick=0)照旧，筛选面板 BACK 收起后重跑，
+            // 把焦点显式落回当前选中 tab，防 Compose 自动落焦行首「最新」chip 触发走焦即切打回最新墙
+            LaunchedEffect(tabFrTick) {
                 for (i in 0 until 8) {
                     delay(150)
-                    val ok = runCatching { tabFrs[(aggCat + 1).coerceAtLeast(0)].requestFocus() }.getOrDefault(false)
+                    val ok = runCatching { tabFrs[tabFrIndexFor(aggCat)].requestFocus() }.getOrDefault(false)
                     if (ok) break
                 }
             }
@@ -815,6 +835,7 @@ fun BrowseScreen(
                             selected = currentType == null,
                             onClick = { type = null; resetFilterVals(); showFilters = false; targetPage = 1 },
                             label = "更新推荐",
+                            fr = typeFrs[0],
                             onFocusGain = { tabSwitcher.onFocus(-1, selKey) },
                         )
                     }
@@ -830,6 +851,7 @@ fun BrowseScreen(
                                 }
                             },
                             label = t.name,
+                            fr = typeFrs[ti + 1],
                             onFocusGain = { tabSwitcher.onFocus(ti, selKey) },
                         )
                     }

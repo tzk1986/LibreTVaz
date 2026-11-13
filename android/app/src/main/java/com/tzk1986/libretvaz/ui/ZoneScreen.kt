@@ -85,6 +85,9 @@ fun ZoneScreen(
     var cat by WallMem.zoneCat  // -1=最新；0..2=Zone.ZONE_CATS（客户端过滤，不重拉）
     var flt by WallMem.zoneFlt  // -1=全部；0..n=Zone.ZONE_FILTERS（与一级分类取交集）
     var showSub by remember { mutableStateOf(false) } // 二级筛选行折叠（对齐首页 showFilters：再点当前一级=展开/收起，选中筛选即收起）
+    // 2026-11-13 对齐点播焦点修复：二级行收起（选中筛选项）时焦点节点被移除，Compose 自动落焦行首
+    // 「最新」chip；资源口无走焦即切、不致跳内容，但仍显式把焦点落回当前一级选中 chip——tick++ 令还原 effect 重跑
+    var subTick by remember { mutableIntStateOf(0) }
     var selUrl by remember { mutableStateOf(settings.zoneSrc) } // 空=聚合源；非空=单专区源
     var showSrc by remember { mutableStateOf(false) } // 源选择弹窗
     // 用户 2026-11-09 #130：返回重建首帧直接种回 keep 墙（同 browseKeep 走查 #11——若等 effect 播种，
@@ -455,10 +458,10 @@ fun ZoneScreen(
         // TVBox 复刻（用户 2026-11-09 需求 b）：进资源口焦点直达当前选中一级 tab 而非「最新」；
         // 触屏模式 requestFocus 自然失败无副作用；有限重试同 Browse panelFocus 模式
         val catFrs = remember { List(Zone.ZONE_CATS.size + 1) { FocusRequester() } }
-        LaunchedEffect(Unit) {
+        LaunchedEffect(subTick) {
             for (i in 0 until 8) {
                 delay(150)
-                val ok = runCatching { catFrs[(cat + 1).coerceAtLeast(0)].requestFocus() }.getOrDefault(false)
+                val ok = runCatching { catFrs[tabFrIndexFor(cat)].requestFocus() }.getOrDefault(false)
                 if (ok) break
             }
         }
@@ -506,7 +509,7 @@ fun ZoneScreen(
                                 itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
                                     WallChip(
                                         selected = flt == i,
-                                        onClick = { if (flt == i) flt = -1 else { flt = i; showSub = false } },
+                                        onClick = { if (flt == i) flt = -1 else { flt = i; showSub = false; subTick++ } },
                                         label = f.key,
                                     )
                                 }

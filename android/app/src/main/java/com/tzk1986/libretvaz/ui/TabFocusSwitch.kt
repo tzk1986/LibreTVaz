@@ -7,6 +7,10 @@ package com.tzk1986.libretvaz.ui
  */
 fun tabSwitchPlan(key: Int, selected: Int?): Int? = if (key != selected) key else null
 
+/** 筛选面板 BACK 收起后焦点还原目标（2026-11-13 bug 修）：不收焦=Compose 把焦点还给行首
+ *  「最新」chip 且行内 lastKey 护栏失效→走焦即切把内容打回最新墙。-1=最新→0，分类 i→i+1（同 tabFrs 排位） */
+fun tabFrIndexFor(aggCat: Int): Int = (aggCat + 1).coerceAtLeast(0)
+
 /** 防抖调度壳：scheduler 注入延迟执行并返回取消句柄（生产=协程 delay；单测=假时钟） */
 class FocusTabSwitcher(
     private val delayMs: Long,

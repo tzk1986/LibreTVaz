@@ -157,6 +157,21 @@ class TabFocusSwitchTest {
         assertEquals(emptyList<Int>(), applied)
     }
 
+    // ---- tabFrIndexFor：筛选面板 BACK 收起后焦点须显式落回当前选中 tab ----
+    // （修复 2026-11-13 bug：不收焦=Compose 把焦点还给行首「最新」chip，且 lastKey 仍为行内值、
+    //   「行外进入不即切」护栏失效 → 250ms 后 aggCat 被切回 -1，页面跳回首页最新墙）
+
+    @Test
+    fun tabFrIndexFor_latestSentinel_isFirstChip() {
+        assertEquals(0, tabFrIndexFor(-1))
+    }
+
+    @Test
+    fun tabFrIndexFor_categoryUsesPlusOneLayout() {
+        assertEquals(1, tabFrIndexFor(0))
+        assertEquals(4, tabFrIndexFor(3))
+    }
+
     @Test
     fun reenterRow_focusRestoredToLastChip_noSchedule() {
         // 从综艺(2) DOWN 进墙、UP 回综艺：回档=上次行内焦点 → 不切（保守，无惊喜）
