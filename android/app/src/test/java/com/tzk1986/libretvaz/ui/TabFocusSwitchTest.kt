@@ -184,4 +184,46 @@ class TabFocusSwitchTest {
         assertNull(f.task)
         assertEquals(emptyList<Int>(), applied)
     }
+
+    // ---- browseBackStage：分层返回（用户 2026-11-13 裁决流程）----
+    // 海报墙焦点 BACK=回焦 tab 行；tab 行焦点 BACK=切回首页 tab；其余沿用旧层级
+
+    @Test
+    fun back_dialogFirst() {
+        assertEquals(BrowseBack.CloseDialog, browseBackStage(dialogOpen = true, panelOpen = true, wallFocused = true, tabFocused = true, atTop = false))
+    }
+
+    @Test
+    fun back_panelFirst() {
+        assertEquals(BrowseBack.ClosePanel, browseBackStage(dialogOpen = false, panelOpen = true, wallFocused = true, tabFocused = true, atTop = false))
+    }
+
+    @Test
+    fun back_wallFocus_refocusTab() {
+        assertEquals(BrowseBack.RefocusTab, browseBackStage(false, false, wallFocused = true, tabFocused = false, atTop = true))
+    }
+
+    @Test
+    fun back_tabFocus_goHome() {
+        assertEquals(BrowseBack.GoHome, browseBackStage(false, false, wallFocused = false, tabFocused = true, atTop = false, homeSelected = false))
+    }
+
+    @Test
+    fun back_tabFocusAtTop_stillGoHome() {
+        // tab 行常驻吸顶，回不回顶不优先于「tab 焦点回首页档」
+        assertEquals(BrowseBack.GoHome, browseBackStage(false, false, wallFocused = false, tabFocused = true, atTop = true, homeSelected = false))
+    }
+
+    @Test
+    fun back_tabFocusAlreadyHome_fallsThrough() {
+        // 已在「最新/更新推荐」档：再按 BACK 下潜（回顶/退出），不空转 GoHome
+        assertEquals(BrowseBack.ScrollTop, browseBackStage(false, false, wallFocused = false, tabFocused = true, atTop = false, homeSelected = true))
+        assertEquals(BrowseBack.Exit, browseBackStage(false, false, wallFocused = false, tabFocused = true, atTop = true, homeSelected = true))
+    }
+
+    @Test
+    fun back_noFocus_scrollTopThenExit() {
+        assertEquals(BrowseBack.ScrollTop, browseBackStage(false, false, wallFocused = false, tabFocused = false, atTop = false, homeSelected = true))
+        assertEquals(BrowseBack.Exit, browseBackStage(false, false, wallFocused = false, tabFocused = false, atTop = true, homeSelected = true))
+    }
 }

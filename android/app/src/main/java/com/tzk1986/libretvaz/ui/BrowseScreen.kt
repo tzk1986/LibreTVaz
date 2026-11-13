@@ -153,16 +153,38 @@ fun BrowseScreen(
     // 收面板 tick++ 令还原 effect 再跑，显式把焦点落回当前选中 tab；tabFrs 提升至此供两处共享
     var tabFrTick by remember { mutableIntStateOf(0) }
     val tabFrs = remember { List(Agg.AGG_CATS.size + 1) { FocusRequester() } }
+    // 2026-11-13 用户裁决流程：分层 BACK（墙焦点→回焦 tab 行；tab 行焦点→切回首页档）+ 焦点锁
+    // （区分「重建夺焦」与「用户主动走焦/下墙」）所需的焦点区实时追踪。
+    // 行焦点只记 gain、loss 仅当失焦者=当前记录者才清（跨 chip 转移 gain/loss 到达顺序不定）
+    var aggRowFocus by remember { mutableStateOf<Int?>(null) }
+    var typeRowFocus by remember { mutableStateOf<Int?>(null) }
+    // 墙内焦点=海报卡+哨兵共享进出计数（out 钳位防漏平衡漂移）
+    var wallFocusN by remember { mutableIntStateOf(0) }
+    fun wallIn() { wallFocusN++ }
+    fun wallOut() { if (wallFocusN > 0) wallFocusN-- }
+    // gain 即记、loss 自检的 chip 回调工厂（-1=最新/更新推荐哨兵档）
+    fun rowFocusTracker(cur: () -> Int?, set: (Int?) -> Unit): (Boolean, Int) -> Unit = { f, key ->
+        if (f) set(key) else if (cur() == key) set(null)
+    }
+    val aggFocusCb = rowFocusTracker({ aggRowFocus }) { aggRowFocus = it }
+    val typeFocusCb = rowFocusTracker({ typeRowFocus }) { typeRowFocus = it }
     // 单源（换源模式）同款（用户 2026-11-13 追问对齐）：收起面板/进场焦点落回当前分类 chip，
     // 防自动落焦行首「更新推荐」触发走焦即切把 type 打回 null
     val typeFrs = remember(types) { List(types.size + 1) { FocusRequester() } }
     LaunchedEffect(tabFrTick, types, aggMode) {
         if (!aggMode && types.isNotEmpty()) {
-            for (i in 0 until 8) {
-                delay(150)
+            // 焦点锁（用户 2026-11-13 方案B 裁决）：切档/收面板后墙数据多波增量、结构重建反复把焦点
+            // 夺出 chip 行（实锤：requestFocus 成功后 1~3s 内被夺 1~2 次，单发还原与双发看门狗均按不住）
+            // →7s 保护窗内 250ms 轮询：焦点既不在行也未进墙（=夺焦落点）且面板未开 → 回焦当前选中档
+            var refocuses = 0
+            for (g in 0 until 28) {
+                delay(250)
+                if (typeRowFocus != null || wallFocusN > 0 || showFilters) continue
+                if (refocuses >= 12) break
                 val sel = if (type == null) -1 else types.indexOfFirst { it.id == type?.id }
+                // 失败=节点未就绪（进场/重建窗口），不占额度；成功落焦后又被夺才计次
                 val ok = runCatching { typeFrs[tabFrIndexFor(sel)].requestFocus() }.getOrDefault(false)
-                if (ok) break
+                if (ok) refocuses++
             }
         }
     }
@@ -216,8 +238,11 @@ fun BrowseScreen(
     // 排程到期 apply 见 sel==key 自然空转，无重复拉取。-1=最新/更新推荐哨兵档
     val tabSwitcher = remember {
         FocusTabSwitcher(250L, { ms, task -> val j = scope.launch { delay(ms); task() }; { j.cancel() } }) { key ->
+            // 走焦即切换档时旧档墙/筛选结构重建可致 chip 焦点节点被拆，Compose 自动落焦跑到顶栏/海报
+            // （2026-11-13 实锤：agg 与单源 RIGHT 切档后焦点均离开 chip 行）；apply 后 bump tick，
+            // 让还原 effect（焦点锁）把焦点显式拉回当前选中 chip
             if (aggMode) {
-                if (aggCat != key) { aggCat = key; showFilters = false }
+                if (aggCat != key) { aggCat = key; showFilters = false; tabFrTick++ }
             } else {
                 val list = types
                 val sel = if (type == null) -1 else list.indexOfFirst { it.id == type?.id }
@@ -226,6 +251,7 @@ fun BrowseScreen(
                     if (key < 0) resetFilterVals() else resetTypeFilterVals()
                     showFilters = false
                     targetPage = 1
+                    tabFrTick++
                 }
             }
         }
@@ -535,10 +561,12 @@ fun BrowseScreen(
     val aggExpandable = aggShown.size > aggWin
     val aggView = if (aggExpandable) aggShown.take(aggWin) else aggShown
     fun aggMoreOrExpand() { if (aggExpandable) aggWin += 240 else aggLoadMore() }
-    // 顶栏收缩（用户 2026-11-04 复刻资源口方案）：顶栏=墙 item0（仅首页在）、分类 tab=stickyHeader 吸顶，
-    // AutoLoadMore 绝对索引偏移=墙前 header 数（atHomeNow 时 +2=顶栏+吸顶，否则 +1=吸顶）；空墙传 0 保持零触发
+    // 顶栏收缩（用户 2026-11-04 复刻资源口方案）：顶栏=墙 item0、分类 tab=stickyHeader 吸顶。
+    // 2026-11-13 实锤改常驻：item0 随首页档增删会拆散 stickyHeader chip 焦点节点，Compose 自动落焦
+    // 行首「最新」再经走焦即切把新档打回首页墙（tick++ 锁窗救不回）——非首页仅渲染零高占位，
+    // item 数恒定=chip 节点不再被拆。AutoLoadMore 偏移恒 +2（顶栏+吸顶）；空墙传 0 保持零触发
     val atHomeNow = if (aggMode) aggCat == -1 else type == null
-    val hdrOff = if (atHomeNow) 2 else 1
+    val hdrOff = 2
     AutoLoadMore(
         gridState,
         if (aggMode) { if (aggView.isEmpty()) 0 else aggView.size + hdrOff } else { if (shown.isEmpty()) 0 else shown.size + hdrOff },
@@ -558,16 +586,56 @@ fun BrowseScreen(
         nonce++
     }
 
-    // 分层返回（web 顶栏式）：弹窗开→关窗；未滚到顶→回顶；到顶且无弹窗→双击返回退出 app
+    // 分层返回（用户 2026-11-13 裁决流程）：弹窗→面板→墙焦点回焦 tab 行→tab 行焦点切回首页档→回顶→双击退
     val atTop by remember { derivedStateOf { gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0 } }
     BackHandler {
-        when {
-            showSourcePicker -> showSourcePicker = false
-            // 用户 2026-11-05：底部筛选面板打开时返回键只收面板（不清筛选值，重开显上次选中）；
-            // 2026-11-13：tick++ 令还原 effect 把焦点显式落回当前选中 tab（防自动落焦行首「最新」触发走焦即切）
-            showFilters -> { showFilters = false; tabFrTick++ }
-            !atTop -> scope.launch { gridState.animateScrollToItem(0) }
-            else -> {
+        val bbTabFocused = aggRowFocus != null || typeRowFocus != null
+        val bbStage = browseBackStage(
+            dialogOpen = showSourcePicker,
+            panelOpen = showFilters,
+            // 焦点在行=墙计数不可信（N 可能因焦点卡被回收未回放 false 上漂），互斥保护防 GoHome 饿死
+            wallFocused = wallFocusN > 0 && !bbTabFocused,
+            tabFocused = bbTabFocused,
+            atTop = atTop,
+            homeSelected = atHomeNow,
+        )
+        when (bbStage) {
+            BrowseBack.CloseDialog -> showSourcePicker = false
+            // 面板打开时返回只收面板（不清筛选值，重开显上次选中）；tick++ 令焦点锁落回当前选中 tab
+            BrowseBack.ClosePanel -> { showFilters = false; tabFrTick++ }
+            // 焦点在海报墙/哨兵：返回=回焦当前选中 tab 档。不走 tick++——锁窗把「焦点在墙」视为
+            // 用户合法下墙而豁免抢焦（防走查误拉回），本场景恰需无视豁免，故直接有限重试抢焦
+            BrowseBack.RefocusTab -> scope.launch {
+                for (i in 0 until 8) {
+                    delay(120)
+                    val ok = runCatching {
+                        if (aggMode) tabFrs[tabFrIndexFor(aggCat)].requestFocus()
+                        else {
+                            val sel = if (type == null) -1 else types.indexOfFirst { it.id == type?.id }
+                            typeFrs[tabFrIndexFor(sel)].requestFocus()
+                        }
+                    }.getOrDefault(false)
+                    if (ok) break
+                }
+            }
+            // 焦点在 tab 行：返回=切回首页档（聚合「最新」/单源「更新推荐」）。焦点所站档=锁的合法落点
+            // 不会自动移焦到 -1 档，故另发抢焦重试（ZoneScreen subFrs 同法，装机验证）
+            BrowseBack.GoHome -> {
+                if (aggMode) aggCat = -1 else { type = null; resetFilterVals(); targetPage = 1 }
+                showFilters = false
+                tabFrTick++
+                scope.launch {
+                    for (i in 0 until 8) {
+                        delay(120)
+                        val ok = runCatching {
+                            if (aggMode) tabFrs[0].requestFocus() else typeFrs[0].requestFocus()
+                        }.getOrDefault(false)
+                        if (ok) break
+                    }
+                }
+            }
+            BrowseBack.ScrollTop -> scope.launch { gridState.animateScrollToItem(0) }
+            BrowseBack.Exit -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt <= 2000) {
                     (context as? android.app.Activity)?.finish()
@@ -773,7 +841,10 @@ fun BrowseScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (atHomeNow) item(span = { GridItemSpan(maxLineSpan) }) { browseTopBar() }
+            // item0 常驻（2026-11-13 焦点夺还修，见 hdrOff 注释）：非首页档零高占位，不删 item 防 chip 节点被拆
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = { "topbar" }) {
+                if (atHomeNow) browseTopBar()
+            }
             // 分类 tab 改 stickyHeader 吸顶常驻（用户 2026-11-04 复刻资源口方案；参考图定稿：吸顶行不留底带，
             // chip 自身镂空透明、选中实心，其余全透海报墙）；error 提示并入吸顶列常驻可见
             stickyHeader {
@@ -786,14 +857,21 @@ fun BrowseScreen(
             // 聚合墙分类标签（web AGG_CATS：最新+固定四大类，不依赖单源分类树）
             val aggIdx = aggCat
             // TVBox 复刻（用户 2026-11-09 需求 b）：进墙页焦点直达当前选中 tab 而非「最新」；
-            // 触屏模式 requestFocus 自然失败无副作用；仿 panelFocus 有限重试（LazyRow 进场+恢复焦点时序）。
-            // 2026-11-13：key 由 Unit 改 tabFrTick——进场(tick=0)照旧，筛选面板 BACK 收起后重跑，
-            // 把焦点显式落回当前选中 tab，防 Compose 自动落焦行首「最新」chip 触发走焦即切打回最新墙
+            // 触屏模式 requestFocus 自然失败无副作用。
+            // 2026-11-13 焦点锁（用户方案B 裁决）：进场(tick=0)落焦照旧；切档/收面板后墙数据多波增量、
+            // 结构重建反复把焦点夺出 chip 行（实锤：requestFocus 成功后 1~3s 内被夺 1~2 次，
+            // 单发还原与双发看门狗均按不住）→7s 保护窗内 250ms 轮询：焦点既不在行也未进墙
+            // （=夺焦落点）且面板未开 → 回焦当前选中档；成功落焦后再被夺计次，≤12 次即休战；
+            // 用户主动在行内走焦/下墙/开面板=焦点有合法去处，锁不干涉
             LaunchedEffect(tabFrTick) {
-                for (i in 0 until 8) {
-                    delay(150)
+                var refocuses = 0
+                for (g in 0 until 28) {
+                    delay(250)
+                    if (aggRowFocus != null || wallFocusN > 0 || showFilters) continue
+                    if (refocuses >= 12) break
+                    // 失败=节点未就绪（进场/重建窗口），不占额度
                     val ok = runCatching { tabFrs[tabFrIndexFor(aggCat)].requestFocus() }.getOrDefault(false)
-                    if (ok) break
+                    if (ok) refocuses++
                 }
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -802,7 +880,8 @@ fun BrowseScreen(
                     WallChip(selected = aggCat == -1, onClick = {
                         if (aggCat != -1) { aggCat = -1; showFilters = false }
                     }, label = "最新", fr = tabFrs[0],
-                        onFocusGain = { tabSwitcher.onFocus(-1) { aggCat } })
+                        onFocusGain = { tabSwitcher.onFocus(-1) { aggCat } },
+                        onFocusBool = { f -> aggFocusCb(f, -1) })
                 }
                 items(Agg.AGG_CATS) { c ->
                     val i = Agg.AGG_CATS.indexOf(c)
@@ -818,6 +897,7 @@ fun BrowseScreen(
                         },
                         label = c.key,
                         onFocusGain = { tabSwitcher.onFocus(i) { aggCat } },
+                        onFocusBool = { f -> aggFocusCb(f, i) },
                     )
                 }
             }
@@ -837,6 +917,7 @@ fun BrowseScreen(
                             label = "更新推荐",
                             fr = typeFrs[0],
                             onFocusGain = { tabSwitcher.onFocus(-1, selKey) },
+                            onFocusBool = { f -> typeFocusCb(f, -1) },
                         )
                     }
                     itemsIndexed(typeList) { ti, t ->
@@ -853,6 +934,7 @@ fun BrowseScreen(
                             label = t.name,
                             fr = typeFrs[ti + 1],
                             onFocusGain = { tabSwitcher.onFocus(ti, selKey) },
+                            onFocusBool = { f -> typeFocusCb(f, ti) },
                         )
                     }
                 }
@@ -872,7 +954,12 @@ fun BrowseScreen(
                 // 4K 投影崩溃修复（用户 2026-11-11）：撤 key=sourceUrl|vodId——池内
                 // sourceUrl|vodId 有重复，大 dp 档一次全挂载即崩（Lazy 重复键 IllegalArgument）
                 itemsIndexed(aggView, contentType = { _, _ -> "poster" }) { _, item ->
-                    PosterCard(item = item, onClick = { onAggSearch(item.name) })
+                    PosterCard(
+                        item = item,
+                        onClick = { onAggSearch(item.name) },
+                        onFocusIn = { wallIn() },
+                        onFocusOut = { wallOut() },
+                    )
                 }
                 if (aggView.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -881,7 +968,7 @@ fun BrowseScreen(
                             canMore = aggExpandable || aggMore,
                             label = if (aggExpandable) "⌄ 展开更多（本墙还有 ${aggShown.size - aggWin} 部）" else null,
                             fr = sentinelFr,
-                            onFocus = { sentinelFocused = it },
+                            onFocus = { f -> sentinelFocused = f; if (f) wallIn() else wallOut() },
                             onMore = { aggMoreOrExpand() },
                         )
                     }
@@ -890,11 +977,16 @@ fun BrowseScreen(
                 // 用户 2026-11-06 走查 #10：单源墙补 key+contentType；2026-11-11 4K 崩溃
                 // 修复：撤 key=sourceUrl|vodId（池内重复，大 dp 全挂载即崩），保留 contentType
                 itemsIndexed(shown, contentType = { _, _ -> "poster" }) { _, item ->
-                    PosterCard(item = item, onClick = { onPick(item) })
+                    PosterCard(
+                        item = item,
+                        onClick = { onPick(item) },
+                        onFocusIn = { wallIn() },
+                        onFocusOut = { wallOut() },
+                    )
                 }
                 if (shown.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
-                        WallSentinel(loading, canLoadMore, sentinelFr, { sentinelFocused = it }) {
+                        WallSentinel(loading, canLoadMore, sentinelFr, { f -> sentinelFocused = f; if (f) wallIn() else wallOut() }) {
                             pendingRefocus = sentinelFocused
                             targetPage++
                         }
@@ -1095,6 +1187,8 @@ internal fun WallChip(
     fr: FocusRequester? = null,
     // TVBox 对齐（用户 2026-11-12）：焦点落入回调=「走焦即切」防抖入口（触屏点击不触发新档排程）
     onFocusGain: (() -> Unit)? = null,
+    // 2026-11-13 分层返回/焦点锁：行级焦点进出去向回调（区分「用户走焦」vs「重建夺焦」）
+    onFocusBool: ((Boolean) -> Unit)? = null,
 ) {
     // 未选中字加淡投影（用户 2026-11-04：镂空后文字压在亮海报上易失读，阴影兜底）
     val base = LocalTextStyle.current
@@ -1107,6 +1201,7 @@ internal fun WallChip(
         modifier = Modifier.onFocusEvent {
             focused = it.isFocused
             if (it.isFocused) onFocusGain?.invoke()
+            onFocusBool?.invoke(it.isFocused)
         }
             .then(if (fr != null) Modifier.focusRequester(fr) else Modifier),
         leadingIcon = {},
@@ -1221,12 +1316,29 @@ internal fun NetClockPair() {
 }
 
 @Composable
-internal fun PosterCard(item: VodSummary, onClick: () -> Unit, siteLabel: String? = null, codeBadge: Boolean = false) {
+internal fun PosterCard(
+    item: VodSummary,
+    onClick: () -> Unit,
+    siteLabel: String? = null,
+    codeBadge: Boolean = false,
+    // 2026-11-13 分层返回：墙内焦点计数回调。边沿触发（装机实锤：Lazy 节点复用/销毁会重放
+    // isFocused=false 事件，直映射 in/out 致计数负漂 -17，回焦档误判 ScrollTop）
+    onFocusIn: (() -> Unit)? = null,
+    onFocusOut: (() -> Unit)? = null,
+) {
     // 用户 2026-11-10 修订 #133：焦点=仅白描边（去红罩）+整卡 1.08 放大抽屉外推，移焦还原
     var cardFocused by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     Column(
         modifier = Modifier
-            .onFocusEvent { cardFocused = it.isFocused }
+            .onFocusEvent { e ->
+                if (e.isFocused && !cardFocused) {
+                    cardFocused = true
+                    onFocusIn?.invoke()
+                } else if (!e.isFocused && cardFocused) {
+                    cardFocused = false
+                    onFocusOut?.invoke()
+                }
+            }
             .zIndex(if (cardFocused) 1f else 0f)
             .graphicsLayer {
                 scaleX = if (cardFocused) 1.08f else 1f

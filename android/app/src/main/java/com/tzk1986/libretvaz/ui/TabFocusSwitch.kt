@@ -11,6 +11,29 @@ fun tabSwitchPlan(key: Int, selected: Int?): Int? = if (key != selected) key els
  *  「最新」chip 且行内 lastKey 护栏失效→走焦即切把内容打回最新墙。-1=最新→0，分类 i→i+1（同 tabFrs 排位） */
 fun tabFrIndexFor(aggCat: Int): Int = (aggCat + 1).coerceAtLeast(0)
 
+/** 点播浏览页分层返回档位（用户 2026-11-13 裁决流程） */
+enum class BrowseBack { CloseDialog, ClosePanel, RefocusTab, GoHome, ScrollTop, Exit }
+
+/**
+ * 分层 BACK 决策：弹窗→面板→墙焦点回焦 tab 行→tab 行焦点切回首页档（已在家则下潜）→回顶→双击退。
+ * wallFocused=焦点在海报卡/墙尾哨兵；tabFocused=焦点在分类 chip 行（聚合或单源任一行）。
+ */
+fun browseBackStage(
+    dialogOpen: Boolean,
+    panelOpen: Boolean,
+    wallFocused: Boolean,
+    tabFocused: Boolean,
+    atTop: Boolean,
+    homeSelected: Boolean = false,
+): BrowseBack = when {
+    dialogOpen -> BrowseBack.CloseDialog
+    panelOpen -> BrowseBack.ClosePanel
+    wallFocused -> BrowseBack.RefocusTab
+    tabFocused && !homeSelected -> BrowseBack.GoHome
+    !atTop -> BrowseBack.ScrollTop
+    else -> BrowseBack.Exit
+}
+
 /** 防抖调度壳：scheduler 注入延迟执行并返回取消句柄（生产=协程 delay；单测=假时钟） */
 class FocusTabSwitcher(
     private val delayMs: Long,
