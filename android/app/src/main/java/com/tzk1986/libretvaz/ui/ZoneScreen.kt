@@ -458,6 +458,19 @@ fun ZoneScreen(
         // TVBox 复刻（用户 2026-11-09 需求 b）：进资源口焦点直达当前选中一级 tab 而非「最新」；
         // 触屏模式 requestFocus 自然失败无副作用；有限重试同 Browse panelFocus 模式
         val catFrs = remember { List(Zone.ZONE_CATS.size + 1) { FocusRequester() } }
+        // 2026-11-13 实测定位：二级行 chip 节点 focusable=true，但跨两个 LazyRow 的几何方向搜索
+        // 双向跳过二级行（一级 DOWN/海报 UP 都直达对方）——与 agg 面板同法破局：展开即把焦点显式送进
+        // 二级行当前 flt 位（flt=-1→「全部」首位），行内 LEFT/RIGHT 横向走焦正常，选完 OK 即收起还原
+        val subFrs = remember { List(Zone.ZONE_FILTERS.size + 1) { FocusRequester() } }
+        LaunchedEffect(showSub) {
+            if (showSub) {
+                for (i in 0 until 8) {
+                    delay(120)
+                    val ok = runCatching { subFrs[(flt + 1).coerceAtLeast(0)].requestFocus() }.getOrDefault(false)
+                    if (ok) break
+                }
+            }
+        }
         LaunchedEffect(subTick) {
             for (i in 0 until 8) {
                 delay(150)
@@ -504,13 +517,14 @@ fun ZoneScreen(
                         if (showSub) {
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 item {
-                                    WallChip(selected = flt == -1, onClick = { flt = -1 }, label = "全部")
+                                    WallChip(selected = flt == -1, onClick = { flt = -1 }, label = "全部", fr = subFrs[0])
                                 }
                                 itemsIndexed(Zone.ZONE_FILTERS) { i, f ->
                                     WallChip(
                                         selected = flt == i,
                                         onClick = { if (flt == i) flt = -1 else { flt = i; showSub = false; subTick++ } },
                                         label = f.key,
+                                        fr = subFrs[i + 1],
                                     )
                                 }
                             }
